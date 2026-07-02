@@ -133,11 +133,13 @@ export async function getAuthorizedClient(): Promise<{ client: OAuth2Client; ema
   const raw = await store.get(email);
   if (!raw) return null;
   const client = newOAuthClient();
-  client.setCredentials(JSON.parse(raw) as Credentials);
+  let current = JSON.parse(raw) as Credentials;
+  client.setCredentials(current);
   client.on('tokens', (tokens) => {
-    // persist refreshed access tokens
-    const merged = { ...(JSON.parse(raw) as Credentials), ...tokens };
-    void store.set(email, JSON.stringify(merged));
+    // persist refreshed tokens, accumulating across consecutive refreshes
+    // so a rotated refresh_token is never overwritten by a stale one
+    current = { ...current, ...tokens };
+    void store.set(email, JSON.stringify(current));
   });
   return { client, email };
 }

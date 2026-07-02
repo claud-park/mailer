@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { openCache } from './cache';
 import { registerIpc, getProvider } from './ipc';
@@ -24,6 +24,20 @@ const createWindow = () => {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  // mail links open in the default browser, never in-app
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (url !== mainWindow?.webContents.getURL()) {
+      e.preventDefault();
+      if (url.startsWith('http')) void shell.openExternal(url);
+    }
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
