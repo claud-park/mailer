@@ -1,0 +1,150 @@
+import crypto from 'node:crypto';
+import { ipcMain, type BrowserWindow } from 'electron';
+import type {
+  AccountInfo,
+  FetchThreadsRequest,
+  ModifyLabelsRequest,
+  SendReceipt,
+  SendRequest,
+  SnoozeRequest,
+} from '../shared/types';
+import * as auth from './auth';
+import * as cache from './cache';
+import { MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
+
+const UNDO_WINDOW_MS = 10_000;
+
+let provider: GmailProvider | null = null;
+const pendingSends = new Map<string, NodeJS.Timeout>();
+
+export function getProvider(): GmailProvider | null {
+  return provider;
+}
+
+async function restoreSession(): Promise<AccountInfo | null> {
+  const session = await auth.getAuthorizedClient();
+  if (session) {
+    provider = new RealGmailProvider(session.client, session.email);
+    return { email: session.email, demo: false };
+  }
+  return null;
+}
+
+function requireProvider(): GmailProvider {
+  if (!provider) throw new Error('Not signed in');
+  return provider;
+}
+
+export function registerIpc(getWindow: () => BrowserWindow | null): void {
+  const notifyThreadsUpdated = () =>
+    getWindow()?.webContents.send('mail:threads-updated');
+
+  ipcMain.handle('auth:get-account', async (): Promise<AccountInfo | null> => {
+    if (provider) return { email: provider.email, demo: provider.demo };
+    return restoreSession();
+  });
+
+  ipcMain.handle('auth:sign-in', async (): Promise<AccountInfo> => {
+    const email = await auth.signIn();
+    const session = await auth.getAuthorizedClient();
+    if (!session) throw new Error('Sign-in did not persist a session');
+    provider = new RealGmailProvider(session.client, email);
+    return { email, demo: false };
+  });
+
+  ipcMain.handle('auth:sign-in-demo', async (): Promise<AccountInfo> => {
+    provider = new MockGmailProvider();
+    return { email: provider.email, demo: true };
+  });
+
+  ipcMain.handle('auth:sign-out', async () => {
+    await auth.signOut();
+    provider = null;
+  });
+
+  ipcMain.handle('mail:fetch-threads', async (_e, req: FetchThreadsRequest) => {
+    const res = await requireProvider().listThreads(req);
+    cache.upsertThreads(res.threads);
+    return res;
+  });
+
+  ipcMain.handle('mail:fetch-thread', async (_e, threadId: string) => {
+    const detail = await requireProvider().getThread(threadId);
+    cache.cacheThreadDetail(detail);
+    return detail;
+  });
+
+  ipcMain.handle('mail:fetch-labels', async () => {
+    return requireProvider().listLabels();
+  });
+
+  ipcMain.handle('mail:send', async (_e, req: SendRequest): Promise<SendReceipt> => {
+    const p = requireProvider();
+    const sendId = crypto.randomUUID();
+
+    if (req.sendAt) {
+      // schedule send: persist and let the daemon fire it
+      const sendAt = new Date(req.sendAt).getTime();
+      cache.addScheduledSend(sendId, req, sendAt);
+      return { sendId, sendAt };
+    }
+
+    // undo window: hold the send for 10s, cancellable via mail:cancel-send
+    const sendAt = Date.now() + UNDO_WINDOW_MS;
+    const timer = setTimeout(async () => {
+      pendingSends.delete(sendId);
+      try {
+        await p.send(req);
+        if (req.archive && req.threadId) {
+          await p.modifyThread({
+            threadId: req.threadId,
+            addLabelIds: [],
+            removeLabelIds: ['INBOX'],
+          });
+        }
+        notifyThreadsUpdated();
+      } catch (err) {
+        console.error('[send] failed', err);
+      }
+    }, UNDO_WINDOW_MS);
+    pendingSends.set(sendId, timer);
+    return { sendId, sendAt };
+  });
+
+  ipcMain.handle('mail:cancel-send', async (_e, sendId: string): Promise<boolean> => {
+    const timer = pendingSends.get(sendId);
+    if (timer) {
+      clearTimeout(timer);
+      pendingSends.delete(sendId);
+      return true;
+    }
+    // scheduled send?
+    cache.removeScheduledSend(sendId);
+    return true;
+  });
+
+  ipcMain.handle('mail:modify-labels', async (_e, req: ModifyLabelsRequest) => {
+    await requireProvider().modifyThread(req);
+    notifyThreadsUpdated();
+  });
+
+  ipcMain.handle('mail:snooze', async (_e, req: SnoozeRequest) => {
+    const p = requireProvider();
+    const snoozeLabel = await p.snoozeLabelId();
+    await p.modifyThread({
+      threadId: req.threadId,
+      addLabelIds: [snoozeLabel],
+      removeLabelIds: ['INBOX'],
+    });
+    cache.addSnooze(req.threadId, new Date(req.until).getTime());
+    notifyThreadsUpdated();
+  });
+
+  ipcMain.handle('mail:search-local', async (_e, q: string) => {
+    return cache.searchLocal(q);
+  });
+
+  ipcMain.handle('mail:contacts', async (_e, prefix: string) => {
+    return cache.listContacts(prefix);
+  });
+}

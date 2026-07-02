@@ -1,0 +1,38 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  FetchThreadsRequest,
+  ModifyLabelsRequest,
+  SendRequest,
+  SnoozeRequest,
+  ZenmailApi,
+} from '../shared/types';
+
+const api: ZenmailApi = {
+  getAccount: () => ipcRenderer.invoke('auth:get-account'),
+  signIn: () => ipcRenderer.invoke('auth:sign-in'),
+  signInDemo: () => ipcRenderer.invoke('auth:sign-in-demo'),
+  signOut: () => ipcRenderer.invoke('auth:sign-out'),
+
+  fetchThreads: (req: FetchThreadsRequest) => ipcRenderer.invoke('mail:fetch-threads', req),
+  fetchThread: (threadId: string) => ipcRenderer.invoke('mail:fetch-thread', threadId),
+  fetchLabels: () => ipcRenderer.invoke('mail:fetch-labels'),
+  send: (req: SendRequest) => ipcRenderer.invoke('mail:send', req),
+  cancelSend: (sendId: string) => ipcRenderer.invoke('mail:cancel-send', sendId),
+  modifyLabels: (req: ModifyLabelsRequest) => ipcRenderer.invoke('mail:modify-labels', req),
+  snooze: (req: SnoozeRequest) => ipcRenderer.invoke('mail:snooze', req),
+  searchLocal: (q: string) => ipcRenderer.invoke('mail:search-local', q),
+  listContacts: (prefix: string) => ipcRenderer.invoke('mail:contacts', prefix),
+
+  onThreadsUpdated: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('mail:threads-updated', listener);
+    return () => ipcRenderer.removeListener('mail:threads-updated', listener);
+  },
+  onSnoozeFired: (cb: (threadId: string) => void) => {
+    const listener = (_e: unknown, threadId: string) => cb(threadId);
+    ipcRenderer.on('mail:snooze-fired', listener);
+    return () => ipcRenderer.removeListener('mail:snooze-fired', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('zenmail', api);
