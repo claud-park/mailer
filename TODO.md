@@ -88,7 +88,7 @@ Last updated: 2026-07-03
 > 각 feature는 DEV_WORKFLOW.md의 Goal 0~8 프로세스(superpowers plan → PRD → TODO → TC → DECISIONS → react-best-practices → impeccable audit → E2E → Obsidian)를 따른다.
 
 - [x] F1 `split-inbox-plus` — Split Inbox 고도화 (wow #3) — 2026-07-03 완료, TC 35 PASS·3 SKIP·0 FAIL (docs/features/split-inbox-plus/)
-- [ ] F2 `follow-up-reminders` — remind-if-no-reply / send & remind (wow #4)
+- [x] F2 `follow-up-reminders` — remind-if-no-reply / send & remind (wow #4) — 2026-07-03 완료, 58 PASS·0 FAIL (docs/features/follow-up-reminders/)
 - [ ] F3 `keyboard-mastery` — 인터랙티브 튜토리얼·단축키 힌트 (wow #2)
 - [ ] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1)
 - [ ] F5 `detail-density` — Snippets 등 마이크로 기능 (wow #5)
