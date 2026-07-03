@@ -48,12 +48,12 @@
 - [x] tsc 통과
 
 ## CP6. E2E + 감사 (Goal 5~7)
-- [ ] run-tc.mjs 확장: 첫 시나리오 "튜토리얼 자동시작+Esc 스킵"(D12) + TC.md A~G 전체
-- [ ] 기존 F1+F2 58 시나리오 그린 유지 확인
-- [ ] /react-best-practices 리뷰 반영
-- [ ] web-design-guidelines 감사(/impeccable 대체 — D14) 반영
-- [ ] /code-review low
-- [ ] TC.md 전 항목 체크 갱신
+- [x] run-tc.mjs 확장: 첫 시나리오 "튜토리얼 자동시작+Esc 스킵"(D12) + TC.md A~G 전체
+- [x] 기존 F1+F2 58 시나리오 그린 유지 확인
+- [x] /react-best-practices 리뷰 반영
+- [x] web-design-guidelines 감사(/impeccable 대체 — D14) 반영
+- [x] /code-review low
+- [x] TC.md 전 항목 체크 갱신
 
 ## CP7. 마무리 (Goal 8)
 - [ ] TODO.md(루트)·DEV_WORKFLOW.md 스냅샷 갱신

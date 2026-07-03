@@ -142,7 +142,11 @@ export function Tutorial() {
   const current = TUTORIAL_STEPS[tutorialStep];
 
   return (
-    <div className="pointer-events-auto absolute bottom-32 left-1/2 z-50 -translate-x-1/2">
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-auto absolute bottom-32 left-1/2 z-50 -translate-x-1/2"
+    >
       {current ? (
         <div className="zen-fade-in flex w-80 flex-col gap-2 rounded-lg border border-bg-border bg-bg-subtle px-4 py-3 shadow-2xl">
           <div className="flex items-center justify-between">

@@ -35,7 +35,7 @@ export function StatsPanel() {
         role="dialog"
         aria-modal="true"
         aria-label="Your stats"
-        className="zen-fade-in max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
+        className="zen-fade-in max-h-[80vh] w-full max-w-md overflow-y-auto overscroll-contain rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') close();

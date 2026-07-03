@@ -419,6 +419,12 @@ async function run() {
   }
 
   try {
+    // --- F3 keyboard-mastery: D12 — first scenario after login confirms the tutorial's
+    // auto-start and skips it via Esc (persisting tutorialSeen), unblocking every F1/F2
+    // scenario below that depends on 'e'/Escape not being intercepted by the tutorial.
+    await demoLogin(page);
+    await scenario_km_intro(page);
+
     await scenario_login_and_F3(page);
     await scenario_A(page);
     await scenario_B(page);
@@ -440,6 +446,20 @@ async function run() {
     await tryFollowupScenario(page, 'C', () => scenario_followup_C(page));
     await tryFollowupScenario(page, 'D', () => scenario_followup_D(page));
     await tryFollowupScenario(page, 'D2', () => scenario_followup_D2(page));
+
+    // --- F3 keyboard-mastery: remainder — runs after F1+F2 per DECISIONS/brief ordering.
+    // A fresh reload resets session-scoped hint state (hintsShownSession/coachToasts) that
+    // F1/F2's own mouse clicks (clickTab/clickRowContaining/etc.) already consumed this
+    // session, without touching persisted counters/milestones/tutorialSeen (D6).
+    await reloadApp(page);
+    await tryKmScenario(page, 'Cheatsheet', () => scenario_km_cheatsheet(page));
+    // Hints runs before Instrumentation: TC-KM-C1 needs the 'compose' hint to be genuinely
+    // unshown-this-session, but TC-KM-B2 also mouse-clicks Compose (for mouseCount/ratio only,
+    // indifferent to hint visibility) — doing Hints first keeps C1's "first-ever" premise true.
+    await tryKmScenario(page, 'Hints', () => scenario_km_hints(page));
+    await tryKmScenario(page, 'Instrumentation', () => scenario_km_instrumentation(page));
+    await tryKmScenario(page, 'MilestoneSnooze', () => scenario_km_milestone_snooze(page));
+    await tryKmScenario(page, 'TutorialDetail', () => scenario_km_tutorial_detail(page));
 
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
@@ -467,6 +487,26 @@ async function run() {
   await killApp();
   rmSync(USERDATA, { recursive: true, force: true });
 
+  // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
+  const nonKmFails = results.filter((r) => !r.id.startsWith('TC-KM') && r.status === 'FAIL');
+  if (nonKmFails.length === 0) {
+    record('TC-KM-G1', 'PASS', `all ${results.filter((r) => !r.id.startsWith('TC-KM')).length} pre-existing F1/F2 assertions are green`);
+  } else {
+    record('TC-KM-G1', 'FAIL', `${nonKmFails.length} pre-existing assertions failed: ${nonKmFails.map((r) => r.id).join(', ')}`);
+  }
+  try {
+    execSync('npm test', { cwd: PROJECT_DIR, stdio: 'pipe' });
+    record('TC-KM-G2', 'PASS', 'vitest (all suites) exits 0');
+  } catch (err) {
+    record('TC-KM-G2', 'FAIL', String(err.stdout || err.message).slice(0, 300));
+  }
+  try {
+    execSync('npx tsc --noEmit', { cwd: PROJECT_DIR, stdio: 'pipe' });
+    record('TC-KM-G3', 'PASS', 'npx tsc --noEmit exits 0');
+  } catch (err) {
+    record('TC-KM-G3', 'FAIL', String(err.stdout || err.message).slice(0, 300));
+  }
+
   console.log('\n=== TC Results ===');
   for (const r of results) {
     console.log(`${r.id.padEnd(10)} ${r.status.padEnd(5)} ${r.note}`);
@@ -478,7 +518,7 @@ async function run() {
 // --- login / F3 --------------------------------------------------------
 
 async function scenario_login_and_F3(page) {
-  await demoLogin(page);
+  // demoLogin() + the F3 tutorial auto-start/skip gate already ran in scenario_km_intro (D12).
   // fresh isolated userData -> splits table empty -> mail:get-splits seeds defaults
   await openSplitSettings(page);
   const rows = await splitSettingsRows(page);
@@ -1635,10 +1675,598 @@ async function scenario_followup_D2(page) {
   if (d2ThreadId) await dismissFollowup(page, d2ThreadId); // tidy up
 }
 
+// ===========================================================================
+// F3 keyboard-mastery (docs/features/keyboard-mastery/TC.md)
+// ===========================================================================
+
+/** ground truth for coach telemetry — zustand persist's on-disk shape is `{state, version}`
+ *  (confirmed by launching the app and reading localStorage directly — see DECISIONS D6). */
+async function coachState(page) {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('zenmail-coach');
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw).state;
+    } catch {
+      return null;
+    }
+  });
+}
+
+/** merges `patch` into the persisted coach state directly in localStorage — used only for
+ *  TC-KM-C3's lifetime-cap setup, which needs a pre-seeded count no in-app action can reach
+ *  quickly. Requires a reloadApp() afterwards for the store to rehydrate the new values. */
+async function mutateCoachStorage(page, patch) {
+  await page.evaluate((p) => {
+    const raw = localStorage.getItem('zenmail-coach');
+    const parsed = raw ? JSON.parse(raw) : { state: {}, version: 1 };
+    parsed.state = { ...parsed.state, ...p };
+    localStorage.setItem('zenmail-coach', JSON.stringify(parsed));
+  }, patch);
+}
+
+/** mirrors lib/coach.ts's keyboardRatio() — duplicated instead of imported since run-tc.mjs is
+ *  a standalone .mjs harness (no TS build step) and this is a one-line pure formula. */
+function keyboardRatioLocal(state) {
+  if (!state) return null;
+  const total = (state.keyboardCount ?? 0) + (state.mouseCount ?? 0);
+  if (total === 0) return null;
+  return state.keyboardCount / total;
+}
+
+/** reads the Stats panel's "label -> displayed value" rows (StatsPanel.tsx's `justify-between`
+ *  rows), scoped to the dialog so it can never pick up CheatSheet's rows of the same class. */
+async function statsRowValues(page) {
+  return page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('[aria-label="Your stats"] div.justify-between'));
+    const result = {};
+    for (const row of rows) {
+      const spans = row.querySelectorAll('span');
+      if (spans.length === 2) result[spans[0].textContent.trim()] = spans[1].textContent.trim();
+    }
+    return result;
+  });
+}
+
+/** reloads the SPA in place. Unlike a full app restart, the main-process account/provider
+ *  singleton survives a renderer reload, so no re-login is needed (see probe validation in the
+ *  build notes) — only volatile renderer state resets, including coach's session-scoped
+ *  hintsShownSession/coachToasts/seq (DECISIONS D6), while persisted counters/milestones/
+ *  tutorialSeen/hintsShown/hintsMuted survive (same localStorage partition). */
+async function reloadApp(page) {
+  await page.reload();
+  await waitFor(async () => (await bodyText(page)).includes('Compose'), {
+    timeout: 20000,
+    desc: 'shell reloaded',
+  });
+  await sleep(500);
+}
+
+/** simulates a trackpad swipe-to-archive (via a real Chromium wheel event — playwright-core's
+ *  mouse.wheel dispatches one, exercising ThreadRow's actual onWheel/deltaX handler, not a
+ *  synthetic bypass) on the row whose text contains `textSubstr`. Returns the archived thread's
+ *  id. Callers MUST target a thread never referenced by name elsewhere in this suite (e.g. NOT
+ *  "Q3 roadmap review" / demo_1, which F1's own TC-A2-baseline/TC-D1/TC-D2 depend on) — this
+ *  runs in scenario_km_intro, before F2's sign-out/relogin resets demo data to pristine. Also
+ *  prefer a row comfortably inside the first ~8-10 rows: mouse.wheel dispatched at rows very
+ *  close to the bottom edge of the (unscrolled) viewport were empirically observed to land on
+ *  the DOM (confirmed via a raw capture-phase 'wheel' listener) without ever reaching
+ *  ThreadRow's onWheel — a CDP/Chromium hit-testing quirk, not a product bug. */
+async function swipeArchiveRow(page, textSubstr) {
+  const handle = await page.evaluateHandle((want) => {
+    const dots = Array.from(document.querySelectorAll('main span.rounded-full')).filter(
+      (el) => el.classList.contains('h-2') && el.classList.contains('w-2') && !el.classList.contains('inline-block')
+    );
+    return (
+      dots
+        .map((dot) => dot.closest('button'))
+        .filter(Boolean)
+        .find((btn) => btn.textContent.includes(want)) ?? null
+    );
+  }, textSubstr);
+  const el = handle.asElement();
+  if (!el) throw new Error(`row not found to swipe-archive: ${textSubstr}`);
+  const threadId = await el.getAttribute('data-thread-id');
+  // the row is virtualized (react-virtual) — it can exist in the DOM (rendered via overscan)
+  // while still being scrolled below the visible viewport, at which point mouse.move/wheel
+  // coordinates land outside the window and silently no-op. Scroll it into view first.
+  await el.scrollIntoViewIfNeeded();
+  const box = await el.boundingBox();
+  if (!box) throw new Error('swipe row has no bounding box');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(-150, 0); // deltaX<0 -> ThreadRow.onWheel's st.total goes positive (swipe-right = archive)
+  await sleep(400);
+  return threadId;
+}
+
+/** swipeArchiveRow(), retried: a CDP-dispatched wheel event occasionally fails to reach
+ *  ThreadRow's onWheel at all (observed empirically — a raw capture-phase 'wheel' listener still
+ *  sees the event with the right coordinates/deltaX, but the row's `offset` state never moves),
+ *  so this re-attempts the swipe until `counters.archive` actually bumps past `prevCount`. */
+async function swipeArchiveRowUntilCounted(page, textSubstr, prevCount, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await swipeArchiveRow(page, textSubstr);
+    } catch (err) {
+      // the row can legitimately be gone already if a previous attempt's effect landed late
+      // (just past this loop's own timeout) — treat "not found" as a success signal too.
+      if ((await coachState(page))?.counters?.archive === prevCount + 1) return;
+      throw err;
+    }
+    const bumped = await waitFor(async () => (await coachState(page))?.counters?.archive === prevCount + 1, {
+      timeout: 3000,
+      desc: `counters.archive to bump after swipe-archive attempt ${i + 1}`,
+    }).then(
+      () => true,
+      () => false
+    );
+    if (bumped) return;
+  }
+}
+
+/** mirrors tryFollowupScenario's best-effort recovery (F2 pattern), but records a
+ *  TC-KM-<label>-error id on failure so a thrown scenario never masquerades as a pre-existing
+ *  (non-KM) failure in the TC-KM-G1 regression tally at the end of run(). */
+async function tryKmScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] KM scenario "${label}" failed:`, err);
+    record(`TC-KM-${label}-error`, 'FAIL', String(err));
+    try {
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => document.querySelector('.absolute.inset-0.z-40')?.click());
+      await sleep(200);
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+// --- intro: D12 gate (autostart+skip) + the only-ever-virgin first-archive milestone -------
+
+async function scenario_km_intro(page) {
+  // TC-KM-E1: a fresh profile auto-starts the tutorial at step 1 ("Move down" / j)
+  const autoStarted = await waitFor(async () => (await bodyText(page)).includes('Move down'), {
+    timeout: 10000,
+    desc: 'tutorial auto-start',
+  }).then(
+    () => true,
+    () => false
+  );
+  if (autoStarted) {
+    record('TC-KM-E1', 'PASS', 'tutorial auto-starts on first load with a coach bubble at step 1 (j)');
+  } else {
+    record('TC-KM-E1', 'FAIL', 'tutorial did not auto-start on a fresh profile');
+  }
+
+  // TC-KM-E6: Esc skips immediately; tutorialSeen persists so it never auto-starts again (D12
+  // unblocks every F1/F2 scenario below, which rely on e/Escape not being intercepted)
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const btAfterSkip = await bodyText(page);
+  const skipped = !btAfterSkip.includes('Move down') && !btAfterSkip.includes('Skip tour');
+  const stateAfterSkip = await coachState(page);
+  if (skipped && stateAfterSkip?.tutorialSeen === true) {
+    record('TC-KM-E6', 'PASS', 'Esc skips the tutorial immediately; tutorialSeen persists (D12 gate)');
+  } else {
+    record('TC-KM-E6', 'FAIL', `skipped=${skipped} tutorialSeen=${stateAfterSkip?.tutorialSeen}`);
+  }
+
+  // TC-KM-B4 / TC-KM-C6 / TC-KM-D1 / TC-KM-D3: this is the very first archive of the whole
+  // suite (runs before any F1 scenario ever presses 'e'), so firsts.archive is still virgin —
+  // the only point in the run where the one-time "first archive" milestone can be observed.
+  await clickTab(page, 'Inbox');
+  const before1 = await coachState(page);
+  await swipeArchiveRowUntilCounted(page, 'You appeared in 12 searches this week', before1?.counters?.archive ?? 0);
+  const bt1 = await bodyText(page);
+  const after1 = await coachState(page);
+
+  const countsOk =
+    (after1?.counters?.archive ?? 0) === (before1?.counters?.archive ?? 0) + 1 &&
+    (after1?.mouseCount ?? 0) === (before1?.mouseCount ?? 0) + 1;
+  if (countsOk) {
+    record('TC-KM-B4', 'PASS', 'swipe-archive (mouse.wheel deltaX) bumps counters.archive (total) and mouseCount (modality) — D5/D10');
+  } else {
+    record('TC-KM-B4', 'FAIL', `before=${JSON.stringify(before1)} after=${JSON.stringify(after1)}`);
+  }
+
+  const hintShown1 = bt1.includes('Press E to archive');
+  if (hintShown1) record('TC-KM-C6', 'PASS', 'swipe-archive shows the "Press E to archive" hint toast');
+  else record('TC-KM-C6', 'FAIL', 'archive hint toast not shown after swipe-archive');
+
+  const milestoneShown1 = bt1.includes('First archive');
+  const actionToastShown1 = bt1.includes('Archived');
+  if (milestoneShown1 && actionToastShown1) {
+    record('TC-KM-D3', 'PASS', 'action toast ("Archived") and milestone toast co-exist — independent channels (D9)');
+  } else {
+    record('TC-KM-D3', 'FAIL', `milestoneShown=${milestoneShown1} actionToastShown=${actionToastShown1}`);
+  }
+
+  // let the first archive's milestone/action toasts (both auto-dismiss within 4s) fully clear
+  // first — otherwise a still-lingering OLD "First archive" toast would be indistinguishable
+  // from a genuine (bug) refire in the bodyText check below.
+  await waitFor(async () => !(await bodyText(page)).includes('First archive'), {
+    timeout: 5000,
+    desc: 'first milestone toast to auto-dismiss before the second archive',
+  }).catch(() => {});
+
+  // second archive -> the one-time milestone must not re-fire
+  await swipeArchiveRowUntilCounted(page, '😸 Today: a calmer email client', after1?.counters?.archive ?? 0);
+  const bt2 = await bodyText(page);
+  const noRefire = !bt2.includes('First archive') && bt2.includes('Archived');
+  const d1ok =
+    milestoneShown1 && (after1?.milestonesShown ?? []).includes('firstArchive') && noRefire;
+  if (d1ok) {
+    record('TC-KM-D1', 'PASS', 'first archive fires the milestone toast once; a second archive does not re-fire it');
+  } else {
+    record('TC-KM-D1', 'FAIL', `firstFired=${milestoneShown1} milestonesShown=${JSON.stringify(after1?.milestonesShown)} noRefireOnSecond=${noRefire}`);
+  }
+}
+
+// --- A: cheat sheet (`?`) -----------------------------------------------
+
+async function scenario_km_cheatsheet(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-KM-A1
+  await page.keyboard.press('?');
+  await sleep(300);
+  let bt = await bodyText(page);
+  const a1 = bt.includes('Keyboard shortcuts') && bt.includes('Archive') && bt.includes('Compose');
+  record('TC-KM-A1', a1 ? 'PASS' : 'FAIL', `bodyHasDialog=${bt.includes('Keyboard shortcuts')}`);
+
+  // TC-KM-A5: j/k while the cheat sheet is open must not move list selection (modal keydown gate)
+  const rowsBefore = await rowsInfo(page);
+  const selBefore = rowsBefore.findIndex((r) => r.selected);
+  await page.keyboard.press('j');
+  await page.keyboard.press('k');
+  await sleep(150);
+  const stillOpenDuringNav = (await bodyText(page)).includes('Keyboard shortcuts');
+
+  // TC-KM-A2: Esc closes it, and global shortcuts are restored immediately
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  bt = await bodyText(page);
+  const closed = !bt.includes('Keyboard shortcuts');
+  const rowsDuring = await rowsInfo(page);
+  const selDuring = rowsDuring.findIndex((r) => r.selected);
+  await page.keyboard.press('j');
+  await sleep(150);
+  const rowsRestored = await rowsInfo(page);
+  const selRestored = rowsRestored.findIndex((r) => r.selected);
+  const shortcutsRestored = selRestored !== selDuring || rowsRestored.length <= 1;
+
+  if (stillOpenDuringNav && selDuring === selBefore) {
+    record('TC-KM-A5', 'PASS', 'j/k are no-ops on the underlying list while the cheat sheet is open');
+  } else {
+    record('TC-KM-A5', 'FAIL', `stillOpenDuringNav=${stillOpenDuringNav} selBefore=${selBefore} selDuring=${selDuring}`);
+  }
+  if (closed && shortcutsRestored) {
+    record('TC-KM-A2', 'PASS', 'Esc closes the cheat sheet and global shortcuts (j) work again immediately');
+  } else {
+    record('TC-KM-A2', 'FAIL', `closed=${closed} selDuring=${selDuring} selRestored=${selRestored}`);
+  }
+
+  // TC-KM-A3: typing '?' while the search input is focused must not open it (isTyping guard)
+  await page.click('input[placeholder^="Search mail"]');
+  await page.keyboard.press('?');
+  await sleep(200);
+  const btA3 = await bodyText(page);
+  const notOpenedA3 = !btA3.includes('Keyboard shortcuts');
+  const searchVal = await page.$eval('input[placeholder^="Search mail"]', (el) => el.value);
+  const charTypedA3 = searchVal.includes('?');
+  if (notOpenedA3 && charTypedA3) {
+    record('TC-KM-A3', 'PASS', `'?' typed into search ("${searchVal}") instead of opening the cheat sheet`);
+  } else {
+    record('TC-KM-A3', 'FAIL', `notOpenedA3=${notOpenedA3} searchVal=${JSON.stringify(searchVal)}`);
+  }
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  await focusBody(page);
+
+  // TC-KM-A4: ⌘K "shortcuts" runs the palette action, opening the cheat sheet
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('shortcuts');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const btA4 = await bodyText(page);
+  const openedA4 = btA4.includes('Keyboard shortcuts');
+  record('TC-KM-A4', openedA4 ? 'PASS' : 'FAIL', `paletteOpened=${openedA4}`);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  await clickTab(page, 'Inbox');
+}
+
+// --- B: instrumentation (B4/C6 already covered in scenario_km_intro) -----
+
+async function scenario_km_instrumentation(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-KM-B1: two keyboard archives bump the Stats "Archived" row by exactly 2. Targets two
+  // threads never referenced by name in any other scenario (including the post-restart
+  // TC-FUP-E1 check on "Design tokens v2"), so this can't collide with anything downstream.
+  const beforeB1 = await coachState(page);
+  await clickRowContaining(page, '😸 Today: a calmer email client');
+  await sleep(200);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('e');
+  await sleep(300);
+  await clickRowContaining(page, 'You appeared in 12 searches this week');
+  await sleep(200);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('e');
+  // archiveThread() is fire-and-forget from the caller's perspective — bumpStat only runs once
+  // the mail:archive IPC round-trip resolves, so poll rather than trust a fixed sleep.
+  await waitFor(async () => (await coachState(page))?.counters?.archive === (beforeB1?.counters?.archive ?? 0) + 2, {
+    timeout: 5000,
+    desc: 'counters.archive to bump twice for TC-KM-B1',
+  }).catch(() => {});
+  await focusBody(page);
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('stats');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const rowValuesB1 = await statsRowValues(page);
+  const expectedArchived = (beforeB1?.counters?.archive ?? 0) + 2;
+  const archivedDisplayed = Number(rowValuesB1['Archived']);
+  if (archivedDisplayed === expectedArchived) {
+    record('TC-KM-B1', 'PASS', `Stats "Archived" = ${archivedDisplayed} after 2 keyboard archives (baseline ${beforeB1?.counters?.archive ?? 0})`);
+  } else {
+    record('TC-KM-B1', 'FAIL', `expected ${expectedArchived}, displayed ${rowValuesB1['Archived']}`);
+  }
+
+  // TC-KM-B6: Esc closes the Stats modal
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  const closedB6 = !(await bodyText(page)).includes('Your stats');
+  record('TC-KM-B6', closedB6 ? 'PASS' : 'FAIL', `closed=${closedB6}`);
+
+  // TC-KM-B2: opening Compose via mouse increases mouseCount and never raises the keyboard ratio
+  const beforeB2 = await coachState(page);
+  await page.click('button[title="Compose (c)"]');
+  await sleep(200);
+  await closeComposeViaButton(page);
+  const afterB2 = await coachState(page);
+  const mouseUpB2 = (afterB2?.mouseCount ?? 0) === (beforeB2?.mouseCount ?? 0) + 1;
+  const ratioBeforeB2 = keyboardRatioLocal(beforeB2);
+  const ratioAfterB2 = keyboardRatioLocal(afterB2);
+  const ratioDownB2 = ratioBeforeB2 === null || ratioAfterB2 === null ? true : ratioAfterB2 <= ratioBeforeB2;
+  if (mouseUpB2 && ratioDownB2) {
+    record('TC-KM-B2', 'PASS', `mouseCount ${beforeB2?.mouseCount}->${afterB2?.mouseCount}; ratio ${ratioBeforeB2}->${ratioAfterB2}`);
+  } else {
+    record('TC-KM-B2', 'FAIL', `mouseUpB2=${mouseUpB2} ratioBefore=${ratioBeforeB2} ratioAfter=${ratioAfterB2}`);
+  }
+
+  // TC-KM-B3: opening Compose via keyboard 'c' increases keyboardCount
+  const beforeB3 = await coachState(page);
+  await openNewCompose(page);
+  await closeComposeViaButton(page);
+  const afterB3 = await coachState(page);
+  const kbUpB3 = (afterB3?.keyboardCount ?? 0) === (beforeB3?.keyboardCount ?? 0) + 1;
+  record('TC-KM-B3', kbUpB3 ? 'PASS' : 'FAIL', `keyboardCount ${beforeB3?.keyboardCount}->${afterB3?.keyboardCount}`);
+
+  // TC-KM-B5: an action with no mouse equivalent (snooze, 'b') must not move the ratio's denominator
+  const beforeB5 = await coachState(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('b');
+  await page.waitForSelector('input[type="datetime-local"]', { timeout: 5000 });
+  await page.keyboard.press('Escape'); // close without picking a preset
+  await sleep(200);
+  const afterB5 = await coachState(page);
+  const denomBefore = (beforeB5?.keyboardCount ?? 0) + (beforeB5?.mouseCount ?? 0);
+  const denomAfter = (afterB5?.keyboardCount ?? 0) + (afterB5?.mouseCount ?? 0);
+  record('TC-KM-B5', denomBefore === denomAfter ? 'PASS' : 'FAIL', `denominator ${denomBefore}->${denomAfter}`);
+}
+
+// --- C: hints ------------------------------------------------------------
+
+async function scenario_km_hints(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-KM-C1: first-ever mouse click on Compose shows its hint toast (independent slot from
+  // the action toast). Ground truth is hintsShown.compose (localStorage) rather than raw
+  // bodyText visibility alone — a still-fading earlier toast (4s auto-dismiss) could otherwise
+  // be misread by a later check as evidence of a fresh re-fire.
+  const beforeC1 = await coachState(page);
+  await page.click('button[title="Compose (c)"]');
+  await sleep(300);
+  const c1Shown = (await bodyText(page)).includes('Press C to compose');
+  const afterC1 = await coachState(page);
+  const c1CountUp = (afterC1?.hintsShown?.compose ?? 0) === (beforeC1?.hintsShown?.compose ?? 0) + 1;
+  record('TC-KM-C1', c1Shown && c1CountUp ? 'PASS' : 'FAIL', `shown=${c1Shown} hintsShown.compose ${beforeC1?.hintsShown?.compose ?? 0}->${afterC1?.hintsShown?.compose}`);
+  // dismiss explicitly so this toast can't linger into TC-KM-C2's bodyText check below
+  await page.locator('[aria-live="polite"]').getByText('Got it').first().click().catch(() => {});
+  await closeComposeViaButton(page);
+
+  // TC-KM-C2: the same hint does not re-show (or re-count) within the same session
+  await page.click('button[title="Compose (c)"]');
+  await sleep(300);
+  const afterC2 = await coachState(page);
+  const c2CountUnchanged = (afterC2?.hintsShown?.compose ?? 0) === (afterC1?.hintsShown?.compose ?? 0);
+  record('TC-KM-C2', c2CountUnchanged ? 'PASS' : 'FAIL', `hintsShown.compose stayed ${afterC1?.hintsShown?.compose} -> ${afterC2?.hintsShown?.compose}`);
+  await closeComposeViaButton(page);
+
+  // TC-KM-C3: pre-seed the lifetime cap (3) directly in localStorage, reload (fresh session),
+  // and confirm the cap still blocks it even though the session itself is brand new
+  const csBeforeC3 = await coachState(page);
+  await mutateCoachStorage(page, { hintsShown: { ...(csBeforeC3?.hintsShown ?? {}), compose: 3 } });
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  await page.click('button[title="Compose (c)"]');
+  await sleep(300);
+  const afterC3 = await coachState(page);
+  const c3CountUnchanged = (afterC3?.hintsShown?.compose ?? 0) === 3;
+  record('TC-KM-C3', c3CountUnchanged ? 'PASS' : 'FAIL', `hintsShown.compose stayed at cap: ${afterC3?.hintsShown?.compose}`);
+  await closeComposeViaButton(page);
+
+  // TC-KM-C5: clicking a thread row (mouse) shows the j/k/Enter hint (fresh session post-reload)
+  const beforeC5 = await coachState(page);
+  await focusBody(page);
+  const rowEl = await page.$('main button[data-thread-id]');
+  await rowEl.click();
+  await sleep(300);
+  const c5Shown = (await bodyText(page)).includes('Use j / k to move, Enter to open');
+  const afterC5 = await coachState(page);
+  const c5CountUp = (afterC5?.hintsShown?.openThread ?? 0) === (beforeC5?.hintsShown?.openThread ?? 0) + 1;
+  record('TC-KM-C5', c5Shown && c5CountUp ? 'PASS' : 'FAIL', `shown=${c5Shown} hintsShown.openThread ${beforeC5?.hintsShown?.openThread ?? 0}->${afterC5?.hintsShown?.openThread}`);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+
+  // TC-KM-C4: "Stop tips" globally mutes hints, even for an affordance shown for the first time
+  await page.click('button[title="Toggle split inbox (⌘⇧I)"]');
+  await sleep(300);
+  const toggleHintShown = (await bodyText(page)).includes('Press ⌘⇧I to toggle split inbox');
+  // multiple hint toasts can be stacked (each auto-dismisses after 4s, independently) — any
+  // "Stop tips" button mutes the same global hintsMuted flag, so .first() is unambiguous.
+  await page.locator('[aria-live="polite"]').getByText('Stop tips').first().click();
+  await sleep(200);
+  await page.click('button[title="Toggle split inbox (⌘⇧I)"]'); // toggle back off (state hygiene)
+  await sleep(300);
+  const mutedNow = (await coachState(page))?.hintsMuted === true;
+  await page.click('aside button:has-text("Inbox")');
+  await sleep(300);
+  const noHintAfterMute = !(await bodyText(page)).includes('Try g then i');
+  if (toggleHintShown && mutedNow && noHintAfterMute) {
+    record('TC-KM-C4', 'PASS', 'Stop tips mutes hintsMuted globally; a brand-new affordance shows nothing afterward');
+  } else {
+    record('TC-KM-C4', 'FAIL', `toggleHintShown=${toggleHintShown} mutedNow=${mutedNow} noHintAfterMute=${noHintAfterMute}`);
+  }
+  await clickTab(page, 'Inbox');
+}
+
+// --- D2: first snooze milestone ------------------------------------------
+
+async function scenario_km_milestone_snooze(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  const before = await coachState(page);
+  // targets a thread never referenced by name elsewhere in this suite, so snoozing it away
+  // can't collide with any later assertion (including the post-restart TC-FUP-E1 check).
+  await clickRowContaining(page, 'Re: interview loop for the design role');
+  await sleep(200);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('b');
+  await page.waitForSelector('button:has-text("Later today")', { timeout: 5000 });
+  await page.click('button:has-text("Later today")');
+  // snoozeThread() resolves the IPC round-trip before bumpStat('snooze') runs — poll rather
+  // than trust a fixed sleep (mirrors the same race fixed for swipe-archive above).
+  await waitFor(async () => (await coachState(page))?.counters?.snooze === (before?.counters?.snooze ?? 0) + 1, {
+    timeout: 5000,
+    desc: 'counters.snooze to bump for TC-KM-D2',
+  }).catch(() => {});
+  const bt = await bodyText(page);
+  const after = await coachState(page);
+  const fired =
+    bt.includes('First snooze') &&
+    (after?.milestonesShown ?? []).includes('firstSnooze') &&
+    !(before?.milestonesShown ?? []).includes('firstSnooze');
+  record('TC-KM-D2', fired ? 'PASS' : 'FAIL', `bodyHasMilestone=${bt.includes('First snooze')} milestonesShown=${JSON.stringify(after?.milestonesShown)}`);
+}
+
+// --- E: tutorial detail (re-entry via palette) ----------------------------
+
+async function scenario_km_tutorial_detail(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-KM-E7: re-enter via the command palette after having skipped once (TC-KM-E6)
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('tutorial');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const reentered = (await bodyText(page)).includes('Move down');
+  record('TC-KM-E7', reentered ? 'PASS' : 'FAIL', `reentered=${reentered}`);
+
+  // TC-KM-E5: 'e' is swallowed on ANY step (not just the archive step) — try it here at step 1
+  // ("Move down"), which does not list 'e' among its keys, so this also proves it doesn't
+  // spuriously advance the step either.
+  const rowsBeforeE5 = await rowsInfo(page);
+  await page.keyboard.press('e');
+  await sleep(200);
+  const stillStep1 = (await bodyText(page)).includes('Move down');
+  const rowsAfterE5 = await rowsInfo(page);
+  const noArchiveE5 = rowsAfterE5.length === rowsBeforeE5.length;
+  record('TC-KM-E5', stillStep1 && noArchiveE5 ? 'PASS' : 'FAIL', `stillStep1=${stillStep1} rowsBefore=${rowsBeforeE5.length} rowsAfter=${rowsAfterE5.length}`);
+
+  // TC-KM-E2: the designated key (j) both advances the step and performs the real navigation
+  const rowsBeforeJ = await rowsInfo(page);
+  const selBeforeJ = rowsBeforeJ.findIndex((r) => r.selected);
+  await page.keyboard.press('j');
+  await sleep(200);
+  const advancedE2 = (await bodyText(page)).includes('Move up');
+  const rowsAfterJ = await rowsInfo(page);
+  const selAfterJ = rowsAfterJ.findIndex((r) => r.selected);
+  const movedE2 = selAfterJ === selBeforeJ + 1;
+  record('TC-KM-E2', advancedE2 && movedE2 ? 'PASS' : 'FAIL', `advancedE2=${advancedE2} selBeforeJ=${selBeforeJ} selAfterJ=${selAfterJ}`);
+
+  // TC-KM-E3: an unrelated key does not advance the step
+  await page.keyboard.press('q');
+  await sleep(150);
+  const stillMoveUp = (await bodyText(page)).includes('Move up');
+  record('TC-KM-E3', stillMoveUp ? 'PASS' : 'FAIL', `stillMoveUp=${stillMoveUp}`);
+
+  // advance to the archive step: k (open step) -> Enter (close step, real open) -> Escape (real close)
+  await page.keyboard.press('k');
+  await sleep(150);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const openedReal = await page.evaluate(() => !!document.querySelector('iframe'));
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const closedReal = await page.evaluate(() => !document.querySelector('iframe'));
+  const onArchiveStep = (await bodyText(page)).includes('the fastest way through your inbox');
+
+  // TC-KM-E4: e on the archive step advances but performs no real archive (D7 intercept)
+  const rowsBeforeE4 = await rowsInfo(page);
+  await page.keyboard.press('e');
+  await sleep(300);
+  const advancedToCompose = (await bodyText(page)).includes('Press c to start a new message');
+  const rowsAfterE4 = await rowsInfo(page);
+  const noArchiveE4 = rowsAfterE4.length === rowsBeforeE4.length;
+  if (onArchiveStep && advancedToCompose && noArchiveE4) {
+    record('TC-KM-E4', 'PASS', `real open/close worked (openedReal=${openedReal} closedReal=${closedReal}); e advanced without archiving (${rowsBeforeE4.length}->${rowsAfterE4.length})`);
+  } else {
+    record('TC-KM-E4', 'FAIL', `onArchiveStep=${onArchiveStep} advancedToCompose=${advancedToCompose} rowsBefore=${rowsBeforeE4.length} rowsAfter=${rowsAfterE4.length}`);
+  }
+
+  // TC-KM-E8: complete the tour — c (compose really opens) -> Esc (composeInit subscription
+  // path, D7's step-7 exception) -> completion card -> Done restores normal shortcuts
+  await page.keyboard.press('c');
+  await sleep(300);
+  const composeOpenedReal = (await bodyText(page)).includes('New message');
+  const onDiscardStep = (await bodyText(page)).includes('Discard');
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const btDone = await bodyText(page);
+  const completionShown = btDone.includes("You're ready");
+  const composeClosedReal = !btDone.includes('New message');
+  await page.locator('div.bottom-32 button:has-text("Done")').click();
+  await sleep(300);
+  const uiGone = !(await bodyText(page)).includes("You're ready");
+  if (composeOpenedReal && onDiscardStep && completionShown && composeClosedReal && uiGone) {
+    record('TC-KM-E8', 'PASS', 'full run (j,k,Enter,Esc,e,c,Esc) reaches the completion card; Done restores normal shortcuts');
+  } else {
+    record('TC-KM-E8', 'FAIL', `composeOpenedReal=${composeOpenedReal} onDiscardStep=${onDiscardStep} completionShown=${completionShown} composeClosedReal=${composeClosedReal} uiGone=${uiGone}`);
+  }
+  await clickTab(page, 'Inbox');
+}
+
 // --- F1/F2/F4 restart persistence --------------------------------------
 
 let f1ExpectedFirstName;
 let f1ExpectedOrder;
+/** F3 keyboard-mastery coach snapshot captured just before the restart (TC-KM-F1) */
+let kmBeforeRestart = null;
 
 async function scenario_prepare_restart_state(page) {
   await clickTab(page, 'Inbox');
@@ -1656,11 +2284,39 @@ async function scenario_prepare_restart_state(page) {
   await sleep(200);
   await page.click('[title="Toggle split inbox (⌘⇧I)"]');
   await sleep(300);
+
+  // F3 keyboard-mastery: snapshot the coach telemetry accumulated so far (counters, mute,
+  // milestones, tutorialSeen, hintsShown cap) for TC-KM-F1's post-restart comparison.
+  kmBeforeRestart = await coachState(page);
 }
 
 async function scenario_verify_restart_state(page) {
   await demoLogin(page); // F4: app restarted -> effectively logged out -> demo relogin
   await sleep(500);
+
+  // TC-KM-E6(2nd half)/TC-KM-F1: tutorial must not auto-start again after a genuine app
+  // restart, and all coach telemetry (counters/mute/milestones/hintsShown cap/tutorialSeen)
+  // must survive it — same --user-data-dir localStorage partition, fresh main+renderer process.
+  const btFreshRestart = await bodyText(page);
+  const noAutoStart = !btFreshRestart.includes('Move down') && !btFreshRestart.includes('Skip tour');
+  const kmAfterRestart = await coachState(page);
+  const km = kmBeforeRestart;
+  const persistOk =
+    !!km &&
+    !!kmAfterRestart &&
+    kmAfterRestart.tutorialSeen === true &&
+    kmAfterRestart.hintsMuted === km.hintsMuted &&
+    kmAfterRestart.counters?.archive === km.counters?.archive &&
+    (kmAfterRestart.milestonesShown ?? []).includes('firstArchive') &&
+    (kmAfterRestart.milestonesShown ?? []).includes('firstSnooze') &&
+    (kmAfterRestart.hintsShown?.compose ?? 0) >= 3 &&
+    kmAfterRestart.keyboardCount === km.keyboardCount &&
+    kmAfterRestart.mouseCount === km.mouseCount;
+  if (noAutoStart && persistOk) {
+    record('TC-KM-F1', 'PASS', 'counters/mute/milestones/hintsShown-cap/tutorialSeen all survive a full app restart; tutorial does not auto-start again');
+  } else {
+    record('TC-KM-F1', 'FAIL', `noAutoStart=${noAutoStart} before=${JSON.stringify(km)} after=${JSON.stringify(kmAfterRestart)}`);
+  }
 
   await openSplitSettings(page);
   const rows = await splitSettingsRows(page);
@@ -1717,6 +2373,43 @@ async function scenario_verify_restart_state(page) {
     }
   } catch (err) {
     record('TC-FUP-E1', 'FAIL', String(err));
+  }
+
+  // TC-KM-D4: milestonesShown persisted through the restart -> archiving again post-restart
+  // must not resurface the toast. NOTE: a plain restart (unlike F2's sign-out) does NOT reset
+  // the on-disk cache — every earlier scenario's archives/trashes are still applied — so this
+  // targets "Design tokens v2" specifically (just confirmed present by the TC-FUP-E1 check
+  // immediately above) rather than an arbitrary/possibly-already-archived top row.
+  try {
+    await clickTab(page, 'Inbox');
+    const rowsBeforeD4 = await rowsInfo(page);
+    await clickRowContaining(page, 'Design tokens v2');
+    await sleep(200);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('e');
+    await waitFor(async () => (await rowsInfo(page)).length === rowsBeforeD4.length - 1, {
+      timeout: 5000,
+      desc: 'archive to complete for TC-KM-D4',
+    }).catch(() => {});
+    // store.toast ("Archived") has a short (~2.5s) auto-clear window — poll for it rather than
+    // risk a single read landing just after it already cleared.
+    const btD4 = await waitFor(
+      async () => {
+        const t = await bodyText(page);
+        return t.includes('Archived') ? t : null;
+      },
+      { timeout: 3000, desc: 'Archived toast for TC-KM-D4' }
+    ).catch(() => bodyText(page));
+    const rowsAfterD4 = await rowsInfo(page);
+    const archivedOnceD4 = rowsAfterD4.length === rowsBeforeD4.length - 1;
+    const noRefireD4 = !btD4.includes('First archive') && btD4.includes('Archived');
+    if (archivedOnceD4 && noRefireD4) {
+      record('TC-KM-D4', 'PASS', 'milestonesShown persisted through the restart — archiving again does not resurface "First archive"');
+    } else {
+      record('TC-KM-D4', 'FAIL', `archivedOnceD4=${archivedOnceD4} noRefireD4=${noRefireD4}`);
+    }
+  } catch (err) {
+    record('TC-KM-D4', 'FAIL', String(err));
   }
 }
 

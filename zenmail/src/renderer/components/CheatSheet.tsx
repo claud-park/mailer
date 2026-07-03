@@ -23,7 +23,7 @@ export function CheatSheet() {
         role="dialog"
         aria-modal="true"
         aria-label="Keyboard shortcuts"
-        className="zen-fade-in max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
+        className="zen-fade-in max-h-[80vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // keep global single-key shortcuts (kbar) from firing behind the modal
