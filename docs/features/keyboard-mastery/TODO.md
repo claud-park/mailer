@@ -56,6 +56,6 @@
 - [x] TC.md 전 항목 체크 갱신
 
 ## CP7. 마무리 (Goal 8)
-- [ ] TODO.md(루트)·DEV_WORKFLOW.md 스냅샷 갱신
-- [ ] Obsidian ZenMail.md 체크포인트 + vault index 날짜 갱신
-- [ ] main push 최종 확인
+- [x] TODO.md(루트)·DEV_WORKFLOW.md 스냅샷 갱신
+- [x] Obsidian ZenMail.md 체크포인트 + vault index 날짜 갱신
+- [x] main push 최종 확인
