@@ -23,10 +23,14 @@ function ChipInput({
 }) {
   const [input, setInput] = useState('');
 
-  function commit(raw: string) {
-    const v = raw.trim().toLowerCase();
-    if (!v) return;
-    if (!values.includes(v)) onChange([...values, v]);
+  function commitAll(raws: string[]) {
+    // 한 이벤트에서 여러 개를 커밋할 수 있으므로 누적 후 onChange 1회 — stale values로 덮어쓰기 방지
+    const next = [...values];
+    for (const raw of raws) {
+      const v = raw.trim().toLowerCase();
+      if (v && !next.includes(v)) next.push(v);
+    }
+    if (next.length !== values.length) onChange(next);
   }
 
   return (
@@ -52,7 +56,7 @@ function ChipInput({
           if (v.includes(',')) {
             const parts = v.split(',');
             const remainder = parts.pop() ?? '';
-            parts.forEach(commit);
+            commitAll(parts);
             setInput(remainder);
           } else {
             setInput(v);
@@ -61,14 +65,14 @@ function ChipInput({
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            commit(input);
+            commitAll([input]);
             setInput('');
           } else if (e.key === 'Backspace' && input === '' && values.length > 0) {
             onChange(values.slice(0, -1));
           }
         }}
         onBlur={() => {
-          commit(input);
+          commitAll([input]);
           setInput('');
         }}
         placeholder={values.length === 0 ? placeholder : ''}
@@ -153,16 +157,16 @@ export function SplitSettings() {
 
   function move(id: string, dir: -1 | 1) {
     setDraft((ds) => {
+      // 순수 업데이터 유지 — 이전 state 객체를 변경하면 StrictMode 이중 호출에서 스왑이 상쇄된다
       const sorted = ds.slice().sort((a, b) => a.position - b.position);
       const idx = sorted.findIndex((d) => d.id === id);
       const swapIdx = idx + dir;
       if (idx < 0 || swapIdx < 0 || swapIdx >= sorted.length) return ds;
-      const a = sorted[idx];
-      const b = sorted[swapIdx];
-      const aPos = a.position;
-      a.position = b.position;
-      b.position = aPos;
-      return sorted.map((d) => ({ ...d }));
+      return sorted.map((d, i) => {
+        if (i === idx) return { ...d, position: sorted[swapIdx].position };
+        if (i === swapIdx) return { ...d, position: sorted[idx].position };
+        return d;
+      });
     });
   }
 

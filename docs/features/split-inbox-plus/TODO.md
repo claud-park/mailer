@@ -41,10 +41,10 @@
 - [x] 활성 탭 삭제 시 폴백(saveSplits에서 order에 없으면 INBOX_TAB 폴백)
 - [ ] tsc 통과
 
-## CP6. 영속화 마무리 + 폴리시
-- [ ] `splitInbox`/`activeSplitTab` settings 저장·복원 (init 로드)
-- [ ] selectedIndex 클램프(탭 마지막 스레드 archive 시)
-- [ ] tsc 통과
+## CP6. 영속화 마무리 + 폴리시 (CP2+3에서 선반영 완료)
+- [x] `splitInbox`/`activeSplitTab` settings 저장·복원 (loadSplitState — init/signIn/signInDemo)
+- [x] selectedIndex 클램프(archive/trash/snooze/applyLabel + loadThreads)
+- [x] tsc 통과
 
 ## 게이트 (Goal 5~8)
 - [ ] /react-best-practices 리뷰 반영
