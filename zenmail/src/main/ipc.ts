@@ -113,15 +113,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       pendingSends.delete(sendId);
       try {
         const result = await p.send(req);
+        // 등록은 send 성공 직후 — 뒤따르는 archive가 실패해도 리마인더는 유실되지 않아야 한다
+        if (req.remindDays) {
+          cache.addFollowup(result.threadId, Date.now(), Date.now() + req.remindDays * DAY_MS);
+        }
         if (req.archive && req.threadId) {
           await p.modifyThread({
             threadId: req.threadId,
             addLabelIds: [],
             removeLabelIds: ['INBOX'],
           });
-        }
-        if (req.remindDays) {
-          cache.addFollowup(result.threadId, Date.now(), Date.now() + req.remindDays * DAY_MS);
         }
         notifyThreadsUpdated();
       } catch (err) {
@@ -244,6 +245,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     ipcMain.handle('mail:debug-tick', async () => {
       await runDaemonTickNow();
+    });
+
+    ipcMain.handle('mail:debug-add-followup-due-now', async (_e, threadId: string) => {
+      const now = Date.now();
+      cache.addFollowup(threadId, now, now);
     });
   }
 }

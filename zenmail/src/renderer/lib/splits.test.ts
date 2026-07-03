@@ -160,4 +160,51 @@ describe('computeSplits', () => {
     const visible = selectVisibleThreads(threads, [vip, team], 'team');
     expect(visible.map((t) => t.id)).toEqual(['t3', 't2']);
   });
+
+  // --- pinnedIds (follow-up reminders CP4 — see docs/features/follow-up-reminders/DECISIONS.md D8) ---
+
+  it('pinnedIds moves matching threads to the front of the (filtered) result', () => {
+    const threads = [
+      thread({ id: 't1' }),
+      thread({ id: 't2' }),
+      thread({ id: 't3' }),
+      thread({ id: 't4' }),
+    ];
+    const visible = selectVisibleThreads(threads, [], INBOX_TAB, new Set(['t3']));
+    expect(visible.map((t) => t.id)).toEqual(['t3', 't1', 't2', 't4']);
+  });
+
+  it('pinnedIds preserves relative order among the pinned threads themselves', () => {
+    const threads = [
+      thread({ id: 't1' }),
+      thread({ id: 't2' }),
+      thread({ id: 't3' }),
+      thread({ id: 't4' }),
+    ];
+    // t4 appears before t2 in the source array's pin membership order (t2, t4 pinned) —
+    // pins should come out in their original relative order: t2 then t4.
+    const visible = selectVisibleThreads(threads, [], INBOX_TAB, new Set(['t2', 't4']));
+    expect(visible.map((t) => t.id)).toEqual(['t2', 't4', 't1', 't3']);
+  });
+
+  it('pinnedIds does not leak into a tab it does not belong to (filtered before pinned)', () => {
+    // t1 (VIP) is pinned, but we're viewing the Team tab — filtering happens first, so t1 is
+    // simply absent from the result, not force-injected into an unrelated tab.
+    const threads = [
+      thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' } }), // -> vip
+      thread({ id: 't2', from: { name: 'Dev', email: 'dev@acme.com' } }), // -> team
+    ];
+    const visible = selectVisibleThreads(threads, [vip, team], 'team', new Set(['t1']));
+    expect(visible.map((t) => t.id)).toEqual(['t2']);
+  });
+
+  it('omitting pinnedIds (or passing an empty set) leaves ordering unchanged', () => {
+    const threads = [thread({ id: 't1' }), thread({ id: 't2' }), thread({ id: 't3' })];
+    const withoutArg = selectVisibleThreads(threads, [], INBOX_TAB);
+    const withUndefined = selectVisibleThreads(threads, [], INBOX_TAB, undefined);
+    const withEmptySet = selectVisibleThreads(threads, [], INBOX_TAB, new Set());
+    expect(withoutArg.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+    expect(withUndefined.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+    expect(withEmptySet.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+  });
 });

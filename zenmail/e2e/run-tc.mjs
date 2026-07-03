@@ -243,6 +243,101 @@ async function focusBody(page) {
 }
 
 // ---------------------------------------------------------------------------
+// F2 follow-up-reminders helpers
+// ---------------------------------------------------------------------------
+
+/** ground truth straight from the main-process cache — listFollowups() is a regular (non-debug) IPC */
+async function listFollowups(page) {
+  return page.evaluate(() => window.zenmail.listFollowups());
+}
+
+async function debugTick(page) {
+  await page.evaluate(() => window.zenmail.__debugTick());
+}
+
+async function debugSimulateReply(page, threadId) {
+  await page.evaluate((id) => window.zenmail.__debugSimulateReply(id), threadId);
+}
+
+/** E2E-only debug IPC (env-gated, added for CP5): force baseline=due=now so a tick fires it immediately */
+async function debugAddFollowupDueNow(page, threadId) {
+  await page.evaluate((id) => window.zenmail.__debugAddFollowupDueNow(id), threadId);
+}
+
+async function dismissFollowup(page, threadId) {
+  await page.evaluate((id) => window.zenmail.dismissFollowup(id), threadId);
+}
+
+/** reads the `data-thread-id` attribute (added to ThreadRow for CP5) off the row matching the text */
+async function threadIdOfRowContaining(page, textSubstr) {
+  return page.evaluate((want) => {
+    const dots = Array.from(document.querySelectorAll('main span.rounded-full')).filter(
+      (el) => el.classList.contains('h-2') && el.classList.contains('w-2') && !el.classList.contains('inline-block')
+    );
+    const btn = dots
+      .map((dot) => dot.closest('button'))
+      .filter(Boolean)
+      .find((b) => b.textContent.includes(want));
+    return btn ? btn.getAttribute('data-thread-id') : null;
+  }, textSubstr);
+}
+
+/** whether the unread dot for a given thread id is "on" (accent color) */
+async function isThreadRowUnread(page, threadId) {
+  return page.evaluate((id) => {
+    const btn = document.querySelector(`[data-thread-id="${id}"]`);
+    const dot = btn?.querySelector('span.rounded-full');
+    return !!dot && dot.classList.contains('bg-accent');
+  }, threadId);
+}
+
+async function openNewCompose(page) {
+  await focusBody(page);
+  await page.keyboard.press('c');
+  await waitFor(async () => (await bodyText(page)).includes('New message'), { desc: 'compose open' });
+}
+
+/** locates the input inside a labeled Compose row (`<span>{label}</span>` sibling) — works for both
+ *  RecipientField ("To"/"Cc"/"Bcc") and the plain Subject input regardless of DOM nesting depth. */
+async function composeFieldHandle(page, labelText) {
+  const handle = await page.evaluateHandle((label) => {
+    const spans = Array.from(document.querySelectorAll('span'));
+    const span = spans.find((s) => s.textContent.trim() === label);
+    return span ? span.parentElement.querySelector('input') : null;
+  }, labelText);
+  const el = handle.asElement();
+  if (!el) throw new Error(`compose field not found: ${labelText}`);
+  return el;
+}
+
+async function fillComposeSubject(page, subject) {
+  const el = await composeFieldHandle(page, 'Subject');
+  await el.click();
+  await page.keyboard.type(subject);
+}
+
+/** types an email into a RecipientField and commits it with Enter (a brand-new, non-contact email
+ *  avoids the autocomplete dropdown intercepting Enter and committing a different suggestion). */
+async function addComposeRecipient(page, label, email) {
+  const el = await composeFieldHandle(page, label);
+  await el.click();
+  await page.keyboard.type(email);
+  await sleep(250); // let any in-flight contact-suggestion fetch resolve before Enter
+  await page.keyboard.press('Enter');
+}
+
+async function setComposeRemind(page, presetLabel) {
+  await page.click('[aria-label="Remind me if no reply"]');
+  await sleep(150);
+  await page.click(`button:has-text("${presetLabel}")`);
+  await sleep(150);
+}
+
+async function clickComposeSend(page) {
+  await page.locator('button:has-text("Send")').first().click();
+}
+
+// ---------------------------------------------------------------------------
 // SplitSettings modal helpers
 // ---------------------------------------------------------------------------
 
@@ -334,6 +429,18 @@ async function run() {
     await scenario_H1(page);
     record('TC-G1', 'PASS', 'validated inline during TC-A section (VIP/Team/Newsletter each >=1 thread)');
 
+    // --- F2 follow-up-reminders --------------------------------------------
+    // E2 runs first: it signs out/back in, which re-constructs a fresh MockGmailProvider
+    // (pristine demo data), so the A/B/C/D scenarios below all get untouched seed threads
+    // regardless of what F1's scenarios above archived/trashed/relabeled.
+    await tryFollowupScenario(page, 'E2', () => scenario_followup_E2(page));
+    await tryFollowupScenario(page, 'A', () => scenario_followup_A(page));
+    await tryFollowupScenario(page, 'A4', () => scenario_followup_A4(page));
+    await tryFollowupScenario(page, 'B', () => scenario_followup_B(page));
+    await tryFollowupScenario(page, 'C', () => scenario_followup_C(page));
+    await tryFollowupScenario(page, 'D', () => scenario_followup_D(page));
+    await tryFollowupScenario(page, 'D2', () => scenario_followup_D2(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -353,6 +460,7 @@ async function run() {
     record('TC-F1', 'FAIL', String(err));
     record('TC-F2', 'FAIL', String(err));
     record('TC-F4', 'FAIL', String(err));
+    record('TC-FUP-E1', 'FAIL', String(err));
   }
 
   await browser?.close().catch(() => {});
@@ -1047,6 +1155,486 @@ async function scenario_H1(page) {
   }
 }
 
+// ===========================================================================
+// F2 follow-up-reminders (docs/features/follow-up-reminders/TC.md)
+// ===========================================================================
+
+/** cross-scenario state handed off to scenario_verify_restart_state (TC-FUP-E1) */
+const followupState = { designThreadId: null };
+
+async function tryFollowupScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] followup scenario "${label}" failed:`, err);
+    record(`TC-FUP-${label}`, 'FAIL', String(err));
+    // best-effort recovery: a failure mid-scenario can leave a modal backdrop open, which would
+    // block every click in the rest of the run — clear it so later scenarios aren't cascade-failed.
+    try {
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => document.querySelector('.absolute.inset-0.z-40')?.click());
+      await sleep(200);
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+// --- E2: sign-out clears followups (run first — also resets demo data to pristine) -------
+
+async function scenario_followup_E2(page) {
+  await clickTab(page, 'Inbox');
+  await clickRowContaining(page, 'Q3 roadmap review');
+  await sleep(300);
+  const tmpThreadId = await threadIdOfRowContaining(page, 'Q3 roadmap review');
+  await page.keyboard.press('h');
+  // NOTE: FollowupPicker's own "Remind me…" heading has Tailwind's `uppercase` class, which
+  // CSS-transforms it to "REMIND ME…" in `innerText` (same gotcha noted for SnoozePicker in
+  // scenario_H1) — wait on a preset button instead, whose text is not CSS-transformed.
+  await page.waitForSelector('button:has-text("2 days")', { timeout: 5000 });
+  await page.click('button:has-text("2 days")');
+  await sleep(300);
+  const beforeSignOut = await listFollowups(page);
+  const hadOne = tmpThreadId != null && beforeSignOut.some((f) => f.threadId === tmpThreadId);
+  await page.keyboard.press('Escape');
+
+  await page.click('text=Sign out');
+  await sleep(500);
+  await demoLogin(page); // fresh MockGmailProvider instance (pristine demo data) + same cache DB
+
+  const afterRelogin = await listFollowups(page);
+  if (hadOne && afterRelogin.length === 0) {
+    record('TC-FUP-E2', 'PASS', 'signing out clears all followups (stale thread_id hygiene across accounts)');
+  } else {
+    record('TC-FUP-E2', 'FAIL', `hadOne=${hadOne} afterReloginCount=${afterRelogin.length}`);
+  }
+  await clickTab(page, 'Inbox');
+}
+
+// --- A: Compose remind-if-no-reply ----------------------------------------
+
+async function scenario_followup_A(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-FUP-A1: preset pill appears + clears via ✕
+  await openNewCompose(page);
+  await setComposeRemind(page, '3 days');
+  const pillShown = (await bodyText(page)).includes('Remind in 3d');
+  await page.click('[aria-label="Remove reminder"]');
+  await sleep(150);
+  const pillGone = !(await bodyText(page)).includes('Remind in 3d');
+  if (pillShown && pillGone) {
+    record('TC-FUP-A1', 'PASS', 'Remind pill appears for the 3 days preset and clears via ✕');
+  } else {
+    record('TC-FUP-A1', 'FAIL', `pillShown=${pillShown} pillGone=${pillGone}`);
+  }
+  await closeComposeViaButton(page);
+
+  // TC-FUP-A2 / TC-FUP-A5: new compose + remind, send, wait out the 10s undo window,
+  // then confirm the followup landed on the freshly created thread's id.
+  const beforeA2 = await listFollowups(page);
+  const subjectA2 = `ZenMail E2E remind ${Date.now()}`;
+  await openNewCompose(page);
+  await addComposeRecipient(page, 'To', 'followup-e2e-a2@example.com');
+  await fillComposeSubject(page, subjectA2);
+  await setComposeRemind(page, '2 days');
+  await clickComposeSend(page);
+  await sleep(11000); // 10s undo window + registration margin
+  const afterA2 = await listFollowups(page);
+  const beforeIdsA2 = new Set(beforeA2.map((f) => f.threadId));
+  const newEntriesA2 = afterA2.filter((f) => !beforeIdsA2.has(f.threadId));
+  const registeredA2 = newEntriesA2.length === 1 && newEntriesA2[0].status === 'pending';
+
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('s');
+  await sleep(400);
+  const sentThreadId = await threadIdOfRowContaining(page, subjectA2);
+  const idMatchesA5 = registeredA2 && sentThreadId != null && sentThreadId === newEntriesA2[0].threadId;
+  let bannerShownA2 = false;
+  if (sentThreadId) {
+    await clickRowContaining(page, subjectA2);
+    await sleep(300);
+    bannerShownA2 = (await bodyText(page)).includes('Reminder set — no reply by');
+    await page.keyboard.press('Escape');
+  }
+  if (registeredA2 && bannerShownA2) {
+    record('TC-FUP-A2', 'PASS', 'followup registered once the 10s undo window elapses (listFollowups + pending banner)');
+  } else {
+    record('TC-FUP-A2', 'FAIL', `registeredA2=${registeredA2} newEntriesA2=${JSON.stringify(newEntriesA2)} bannerShownA2=${bannerShownA2}`);
+  }
+  if (idMatchesA5) {
+    record('TC-FUP-A5', 'PASS', `new compose thread id (${sentThreadId}) correctly carries the followup — send() returns the real threadId`);
+  } else {
+    record('TC-FUP-A5', 'FAIL', `sentThreadId=${sentThreadId} newEntriesA2=${JSON.stringify(newEntriesA2)}`);
+  }
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+
+  // TC-FUP-A3: undo within the window -> nothing is ever registered (nor even sent)
+  const beforeA3 = await listFollowups(page);
+  const subjectA3 = `ZenMail E2E undo ${Date.now()}`;
+  await clickTab(page, 'Inbox');
+  await openNewCompose(page);
+  await addComposeRecipient(page, 'To', 'followup-e2e-a3@example.com');
+  await fillComposeSubject(page, subjectA3);
+  await setComposeRemind(page, '3 days');
+  await clickComposeSend(page);
+  await waitFor(async () => (await bodyText(page)).includes('Sending in'), { timeout: 3000, desc: 'undo toast appears' });
+  await page.click('button:has-text("Undo")');
+  await sleep(11000); // long enough that a would-be registration bug would have already fired
+  const afterA3 = await listFollowups(page);
+  const beforeIdsA3 = new Set(beforeA3.map((f) => f.threadId));
+  const leakedA3 = afterA3.some((f) => !beforeIdsA3.has(f.threadId));
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('s');
+  await sleep(400);
+  const threadCreatedA3 = await threadIdOfRowContaining(page, subjectA3);
+  if (!leakedA3 && !threadCreatedA3) {
+    record('TC-FUP-A3', 'PASS', 'undo within the window cancels the send entirely — no thread, no followup');
+  } else {
+    record('TC-FUP-A3', 'FAIL', `leakedA3=${leakedA3} threadCreatedA3=${threadCreatedA3}`);
+  }
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+}
+
+// --- A4: Remind + Schedule combo — countdown starts from the real send time ---
+
+async function scenario_followup_A4(page) {
+  await clickTab(page, 'Inbox');
+  const subjectA4 = `ZenMail E2E scheduled remind ${Date.now()}`;
+  const beforeA4 = await listFollowups(page);
+  const beforeIdsA4 = new Set(beforeA4.map((f) => f.threadId));
+
+  await openNewCompose(page);
+  await addComposeRecipient(page, 'To', 'followup-e2e-a4@example.com');
+  await fillComposeSubject(page, subjectA4);
+  await setComposeRemind(page, '2 days');
+
+  // datetime-local is minute-granularity — schedule ~65s out so it's reliably due by the time
+  // we tick after the accepted 70s real-time wait below.
+  const scheduledLocal = await page.evaluate(() => {
+    const d = new Date(Date.now() + 65_000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+
+  await page.getByRole('button', { name: 'Schedule…', exact: true }).click();
+  await sleep(150);
+  await page.locator('input[type="datetime-local"]').fill(scheduledLocal);
+  await page.getByRole('button', { name: 'Schedule', exact: true }).click(); // the popover's own submit button
+  await sleep(300);
+
+  const rightAfterSchedule = await listFollowups(page);
+  const notYetRegistered = !rightAfterSchedule.some((f) => !beforeIdsA4.has(f.threadId));
+
+  await sleep(70_000); // accepted one-time real-time wait so the scheduled send becomes due
+  const tickInvokedAt = Date.now();
+  await debugTick(page); // force the daemon to process the now-due scheduled send
+
+  const afterA4 = await listFollowups(page);
+  const newEntryA4 = afterA4.find((f) => !beforeIdsA4.has(f.threadId));
+  const expectedDueAt = tickInvokedAt + 2 * 86_400_000; // 2 days, approximating the real send time
+  const dueAtOk = !!newEntryA4 && Math.abs(newEntryA4.dueAt - expectedDueAt) <= 2 * 60_000; // ±2min tolerance
+
+  if (notYetRegistered && newEntryA4 && newEntryA4.status === 'pending' && dueAtOk) {
+    record(
+      'TC-FUP-A4',
+      'PASS',
+      `not registered before the scheduled send fires; registered after with dueAt≈send-time+2d (dueAt=${new Date(newEntryA4.dueAt).toISOString()})`
+    );
+  } else {
+    record(
+      'TC-FUP-A4',
+      'FAIL',
+      `notYetRegistered=${notYetRegistered} newEntryA4=${JSON.stringify(newEntryA4)} expectedDueAt=${new Date(expectedDueAt).toISOString()}`
+    );
+  }
+}
+
+// --- B: existing-thread `h` follow-up --------------------------------------
+
+async function scenario_followup_B(page) {
+  await clickTab(page, 'Inbox');
+  await clickRowContaining(page, 'Design tokens v2');
+  await sleep(300);
+
+  // TC-FUP-B1
+  const beforeB1 = await listFollowups(page);
+  await page.keyboard.press('h');
+  await page.waitForSelector('button:has-text("2 days")', { timeout: 5000 }); // picker open (see uppercase-innerText note above)
+  await page.click('button:has-text("2 days")');
+  await sleep(300);
+  const afterB1 = await listFollowups(page);
+  const beforeIdsB1 = new Set(beforeB1.map((f) => f.threadId));
+  const createdB1 = afterB1.find((f) => !beforeIdsB1.has(f.threadId));
+  const bannerB1 = (await bodyText(page)).includes('Reminder set — no reply by');
+  if (createdB1 && createdB1.status === 'pending' && bannerB1) {
+    record('TC-FUP-B1', 'PASS', 'h opens FollowupPicker on an existing thread; a preset sets a pending reminder + banner');
+  } else {
+    record('TC-FUP-B1', 'FAIL', `createdB1=${JSON.stringify(createdB1)} bannerB1=${bannerB1}`);
+  }
+  const designThreadId = createdB1?.threadId ?? (await threadIdOfRowContaining(page, 'Design tokens v2'));
+  followupState.designThreadId = designThreadId;
+
+  // TC-FUP-B3: re-setting on the same thread replaces (thread_id PK upsert), no duplicate row
+  await page.keyboard.press('h');
+  await waitFor(async () => (await bodyText(page)).includes('Cancel reminder'), { desc: 'picker shows Cancel reminder for a pending thread' });
+  await page.click('button:has-text("1 week")');
+  await sleep(300);
+  const afterB3 = await listFollowups(page);
+  const matchesB3 = designThreadId ? afterB3.filter((f) => f.threadId === designThreadId) : [];
+  const dueChangedB3 = matchesB3.length === 1 && createdB1 && matchesB3[0].dueAt !== createdB1.dueAt;
+  if (matchesB3.length === 1 && dueChangedB3) {
+    record('TC-FUP-B3', 'PASS', 're-setting a reminder on an already-pending thread replaces it — no duplicate row');
+  } else {
+    record('TC-FUP-B3', 'FAIL', `matchesB3=${JSON.stringify(matchesB3)}`);
+  }
+
+  // TC-FUP-B2: Cancel reminder removes it
+  await page.keyboard.press('h');
+  const cancelVisibleB2 = await waitFor(
+    async () => (await bodyText(page)).includes('Cancel reminder'),
+    { desc: 'Cancel reminder visible (B2)' }
+  ).then(() => true, () => false);
+  await page.click('text=Cancel reminder');
+  await sleep(300);
+  const afterB2 = await listFollowups(page);
+  const stillThereB2 = designThreadId ? afterB2.some((f) => f.threadId === designThreadId) : true;
+  const bannerGoneB2 = !(await bodyText(page)).includes('Reminder set — no reply by');
+  if (cancelVisibleB2 && !stillThereB2 && bannerGoneB2) {
+    record('TC-FUP-B2', 'PASS', 'Cancel reminder in the picker removes the followup and its banner');
+  } else {
+    record('TC-FUP-B2', 'FAIL', `cancelVisibleB2=${cancelVisibleB2} stillThereB2=${stillThereB2} bannerGoneB2=${bannerGoneB2}`);
+  }
+
+  // TC-FUP-B4: ⌘K "remind" finds and runs the action, opening the picker
+  await focusBody(page);
+  await page.keyboard.press('Meta+k');
+  await sleep(300);
+  await page.keyboard.type('remind');
+  await sleep(300);
+  const paletteHasAction = (await bodyText(page)).includes('Remind me…');
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const pickerBt = await bodyText(page);
+  const pickerOpenViaPalette = pickerBt.includes('2 days') && pickerBt.includes('3 days') && pickerBt.includes('1 week');
+  if (paletteHasAction && pickerOpenViaPalette) {
+    record('TC-FUP-B4', 'PASS', '⌘K "remind" search finds and runs the Remind me… action, opening FollowupPicker');
+  } else {
+    record('TC-FUP-B4', 'FAIL', `paletteHasAction=${paletteHasAction} pickerOpenViaPalette=${pickerOpenViaPalette}`);
+  }
+
+  // leave a pending reminder on this thread on purpose — TC-FUP-E1 checks it survives a restart
+  await page.click('button:has-text("2 days")');
+  await sleep(300);
+  const finalList = await listFollowups(page);
+  followupState.designPendingConfirmed = designThreadId
+    ? finalList.some((f) => f.threadId === designThreadId && f.status === 'pending')
+    : false;
+
+  await page.keyboard.press('Escape');
+}
+
+// --- C: reply detection / opportunistic + due-time resolution --------------
+
+async function scenario_followup_C(page) {
+  await clickTab(page, 'Inbox');
+
+  // TC-FUP-C1: reply arrives before the due tick -> quiet removal, no resurface/toast
+  const c1ThreadId = await threadIdOfRowContaining(page, 'Sent you the empty-state illustrations');
+  await debugAddFollowupDueNow(page, c1ThreadId);
+  await debugSimulateReply(page, c1ThreadId);
+  await debugTick(page);
+  await sleep(300);
+  const afterC1 = await listFollowups(page);
+  const c1Gone = !afterC1.some((f) => f.threadId === c1ThreadId);
+  const noToastC1 = !(await bodyText(page)).includes('No reply yet');
+  if (c1Gone && noToastC1) {
+    record('TC-FUP-C1', 'PASS', 'a reply present at due-tick time removes the followup quietly — no resurfacing, no toast');
+  } else {
+    record('TC-FUP-C1', 'FAIL', `c1Gone=${c1Gone} noToastC1=${noToastC1}`);
+  }
+
+  // TC-FUP-C2: opportunistic clear on open, before due
+  await clickRowContaining(page, 'Your receipt from Stripe');
+  await sleep(300);
+  const c2ThreadId = await threadIdOfRowContaining(page, 'Your receipt from Stripe');
+  await page.keyboard.press('h');
+  await page.waitForSelector('button:has-text("1 week")', { timeout: 5000 }); // picker open (see uppercase-innerText note above)
+  await page.click('button:has-text("1 week")'); // due far in the future — only opening the thread should clear it
+  await sleep(300);
+  await debugSimulateReply(page, c2ThreadId);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  await clickRowContaining(page, 'Your receipt from Stripe'); // re-open -> mail:fetch-thread runs the opportunistic check
+  await sleep(400);
+  const bannerGoneC2 = !(await bodyText(page)).includes('Reminder set — no reply by');
+  const listAfterC2 = await listFollowups(page);
+  const clearedInDbC2 = !listAfterC2.some((f) => f.threadId === c2ThreadId);
+  if (bannerGoneC2 && clearedInDbC2) {
+    record('TC-FUP-C2', 'PASS', 'opening a thread opportunistically clears a pending followup once a reply exists, even before due');
+  } else {
+    record('TC-FUP-C2', 'FAIL', `bannerGoneC2=${bannerGoneC2} clearedInDbC2=${clearedInDbC2}`);
+  }
+  await page.keyboard.press('Escape');
+
+  // TC-FUP-C3: an additional outbound-only message (from me) must not be mistaken for a reply
+  await clickRowContaining(page, 'E-ticket: ICN');
+  await sleep(300);
+  const c3ThreadId = await threadIdOfRowContaining(page, 'E-ticket: ICN');
+  await page.locator('[data-placeholder^="Reply to"]').click();
+  await page.keyboard.type('Thanks, following up on this.');
+  await page.click('button:has-text("Send")'); // InlineReply's own Send button (Compose modal is closed)
+  await sleep(11000); // let the outbound reply actually land (10s undo window)
+  await debugAddFollowupDueNow(page, c3ThreadId); // baseline=due=now, i.e. after our own outbound message
+  await debugTick(page);
+  await sleep(300);
+  const afterC3 = await listFollowups(page);
+  const firedC3 = afterC3.find((f) => f.threadId === c3ThreadId);
+  if (firedC3?.status === 'fired') {
+    record('TC-FUP-C3', 'PASS', 'an outbound-only additional message is not mistaken for a reply — the followup still resurfaces');
+  } else {
+    record('TC-FUP-C3', 'FAIL', `firedC3=${JSON.stringify(firedC3)}`);
+  }
+  if (firedC3) await dismissFollowup(page, c3ThreadId); // tidy up so it doesn't linger pinned into later checks
+  await page.keyboard.press('Escape');
+}
+
+// --- D: resurfacing (fired) — pin, nav integrity, trash, dismiss ------------
+
+async function scenario_followup_D(page) {
+  await clickTab(page, 'Inbox');
+
+  // TC-FUP-D1 / TC-FUP-D3: due + no reply -> UNREAD + "No reply" chip + toast + top pin
+  const d1ThreadId = await threadIdOfRowContaining(page, 'Re: keyboard shortcut audit');
+  const wasUnreadBefore = await isThreadRowUnread(page, d1ThreadId);
+  await debugAddFollowupDueNow(page, d1ThreadId);
+  await debugTick(page);
+  await sleep(400);
+
+  const bt = await bodyText(page);
+  const toastShownD1 = bt.includes('No reply yet') && bt.includes('keyboard shortcut audit');
+  const rowsNow = await rowsInfo(page);
+  const rowIdxD1 = rowsNow.findIndex((r) => r.text.includes('keyboard shortcut audit'));
+  const isTopPinned = rowIdxD1 === 0;
+  const chipShownD1 = rowIdxD1 >= 0 && rowsNow[rowIdxD1].text.includes('No reply');
+  const isUnreadAfter = await isThreadRowUnread(page, d1ThreadId);
+
+  if (!wasUnreadBefore && isUnreadAfter && toastShownD1 && chipShownD1) {
+    record('TC-FUP-D1', 'PASS', 'a due+no-reply thread becomes UNREAD, gets the "No reply" chip, and shows the resurfacing toast');
+  } else {
+    record('TC-FUP-D1', 'FAIL', `wasUnreadBefore=${wasUnreadBefore} isUnreadAfter=${isUnreadAfter} toastShownD1=${toastShownD1} chipShownD1=${chipShownD1}`);
+  }
+  if (isTopPinned) {
+    record('TC-FUP-D3', 'PASS', 'the fired thread is pinned to the top of the INBOX list regardless of date order');
+  } else {
+    record('TC-FUP-D3', 'FAIL', `rowIdxD1=${rowIdxD1}`);
+  }
+
+  // TC-FUP-D4: j/k/Enter/archive act on the pinned row itself (F1 re-anchoring invariant holds)
+  await focusBody(page);
+  for (let i = 0; i < 5; i++) await page.keyboard.press('k'); // clamped at index 0 == the pinned row
+  await sleep(150);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const openedPinned = (await bodyText(page)).includes('keyboard shortcut audit');
+  await page.keyboard.press('e'); // archive the open (pinned) thread via kbar
+  await sleep(400);
+  const afterArchiveRows = await rowsInfo(page);
+  const archivedGone = !afterArchiveRows.some((r) => r.text.includes('keyboard shortcut audit'));
+  if (openedPinned && archivedGone) {
+    record('TC-FUP-D4', 'PASS', 'j/k/Enter/archive act correctly on the pinned row — selection re-anchoring holds with a pin present');
+  } else {
+    record('TC-FUP-D4', 'FAIL', `openedPinned=${openedPinned} archivedGone=${archivedGone}`);
+  }
+  await dismissFollowup(page, d1ThreadId); // tidy up
+
+  // TC-FUP-D5: a due followup on a TRASHed thread is silently dropped, no resurrection
+  await clickRowContaining(page, 'Standup notes 6/30');
+  await sleep(300);
+  const d5ThreadId = await threadIdOfRowContaining(page, 'Standup notes 6/30');
+  await debugAddFollowupDueNow(page, d5ThreadId);
+  await page.keyboard.press('#'); // trash the open thread
+  await sleep(400);
+  await debugTick(page);
+  await sleep(300);
+  const afterD5 = await listFollowups(page);
+  const d5Gone = !afterD5.some((f) => f.threadId === d5ThreadId);
+  const rowsAfterD5 = await rowsInfo(page);
+  const notResurfacedD5 = !rowsAfterD5.some((r) => r.text.includes('Standup notes 6/30'));
+  if (d5Gone && notResurfacedD5) {
+    record('TC-FUP-D5', 'PASS', 'a due followup on a TRASHed thread is silently dropped — no resurrection into INBOX');
+  } else {
+    record('TC-FUP-D5', 'FAIL', `d5Gone=${d5Gone} notResurfacedD5=${notResurfacedD5}`);
+  }
+
+  // TC-FUP-D6: Dismiss on the fired ThreadView banner clears the chip + pin
+  const d6ThreadId = await threadIdOfRowContaining(page, 'Re: offsite agenda');
+  await debugAddFollowupDueNow(page, d6ThreadId);
+  await debugTick(page);
+  await sleep(400);
+  await clickRowContaining(page, 'Re: offsite agenda'); // tick may have reordered the list — re-locate and open
+  await sleep(300);
+  const bannerBeforeDismiss = (await bodyText(page)).includes('No reply since');
+  await page.click('text=Dismiss');
+  await sleep(300);
+  const bannerGoneD6 = !(await bodyText(page)).includes('No reply since');
+  const rowsAfterD6 = await rowsInfo(page);
+  const d6RowIdx = rowsAfterD6.findIndex((r) => r.text.includes('Re: offsite agenda'));
+  const chipGoneD6 = d6RowIdx < 0 || !rowsAfterD6[d6RowIdx].text.includes('No reply');
+  if (bannerBeforeDismiss && bannerGoneD6 && chipGoneD6) {
+    record('TC-FUP-D6', 'PASS', 'Dismiss on the fired banner clears the chip; the thread is no longer pinned/marked');
+  } else {
+    record('TC-FUP-D6', 'FAIL', `bannerBeforeDismiss=${bannerBeforeDismiss} bannerGoneD6=${bannerGoneD6} chipGoneD6=${chipGoneD6}`);
+  }
+  await page.keyboard.press('Escape');
+}
+
+// --- D2: send&archive resurfacing — fired always adds INBOX+UNREAD (DECISIONS D11) ---
+
+async function scenario_followup_D2(page) {
+  await clickTab(page, 'Inbox');
+  await clickRowContaining(page, 'Coffee next week?');
+  await sleep(300);
+  const d2ThreadId = await threadIdOfRowContaining(page, 'Coffee next week?');
+
+  await page.keyboard.press('r'); // reply
+  await page.waitForSelector('button:has-text("Send & archive")', { timeout: 5000 }); // reply compose has a threadId -> archive button renders
+  await setComposeRemind(page, '3 days');
+  await page.locator('button:has-text("Send & archive")').first().click();
+  await sleep(11_000); // undo window elapses -> archive applied + followup registered (main-side)
+
+  await clickTab(page, 'Inbox');
+  const rowsAfterArchive = await rowsInfo(page);
+  const archivedFromInbox = !rowsAfterArchive.some((r) => r.text.includes('Coffee next week?'));
+
+  await debugAddFollowupDueNow(page, d2ThreadId);
+  await debugTick(page);
+  await sleep(400);
+  await clickTab(page, 'Inbox');
+  const rowsAfterFire = await rowsInfo(page);
+  const backInInbox = rowsAfterFire.some((r) => r.text.includes('Coffee next week?'));
+
+  if (archivedFromInbox && backInInbox) {
+    record(
+      'TC-FUP-D2',
+      'PASS',
+      'send&archive removes the thread from INBOX; a due+no-reply followup unconditionally resurfaces it into INBOX (+UNREAD, D11)'
+    );
+  } else {
+    record('TC-FUP-D2', 'FAIL', `archivedFromInbox=${archivedFromInbox} backInInbox=${backInInbox}`);
+  }
+  if (d2ThreadId) await dismissFollowup(page, d2ThreadId); // tidy up
+}
+
 // --- F1/F2/F4 restart persistence --------------------------------------
 
 let f1ExpectedFirstName;
@@ -1100,6 +1688,35 @@ async function scenario_verify_restart_state(page) {
     record('TC-F4', 'PASS', 'split definitions survived sign-out (implicit, via restart) + demo re-login — account-independent local settings');
   } else {
     record('TC-F4', 'FAIL', 'split definitions did not survive the logout/re-login cycle');
+  }
+
+  // TC-FUP-E1: the pending followup left on "Design tokens v2" (see scenario_followup_B) should
+  // survive a full app restart — demo thread ids are deterministic (`demo_3`), and the followup
+  // row itself lives in the same on-disk cache DB (same --user-data-dir), independent of the
+  // in-memory MockGmailProvider being freshly reconstructed on relogin.
+  try {
+    const listAfterRestart = await listFollowups(page);
+    const stillPending = followupState.designThreadId
+      ? listAfterRestart.some((f) => f.threadId === followupState.designThreadId && f.status === 'pending')
+      : false;
+    // the F2 check above restored the *last active split tab* ("Team"), which doesn't contain
+    // "Design tokens v2" (dana@figma-mail.com) — switch back to Inbox (unfiltered) to find it.
+    await clickTab(page, 'Inbox');
+    await clickRowContaining(page, 'Design tokens v2');
+    await sleep(300);
+    const bannerRestored = (await bodyText(page)).includes('Reminder set — no reply by');
+    await page.keyboard.press('Escape');
+    if (stillPending && bannerRestored && followupState.designPendingConfirmed) {
+      record('TC-FUP-E1', 'PASS', 'pending followup (banner + listFollowups) survives a full app restart');
+    } else {
+      record(
+        'TC-FUP-E1',
+        'FAIL',
+        `designThreadId=${followupState.designThreadId} stillPending=${stillPending} bannerRestored=${bannerRestored} preConfirmed=${followupState.designPendingConfirmed}`
+      );
+    }
+  } catch (err) {
+    record('TC-FUP-E1', 'FAIL', String(err));
   }
 }
 

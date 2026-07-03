@@ -51,11 +51,13 @@ const api: ZenmailApi = {
   },
 };
 
-// E2E-only debug hooks — only exposed when ZENMAIL_E2E_PORT is set (see main/index.ts).
-if (process.env.ZENMAIL_E2E_PORT) {
+// E2E-only debug hooks — main이 ZENMAIL_E2E_PORT일 때 additionalArguments로 전달한 플래그로 판별.
+if (process.argv.includes('--zenmail-e2e')) {
   api.__debugSimulateReply = (threadId: string) =>
     ipcRenderer.invoke('mail:debug-simulate-reply', threadId);
   api.__debugTick = () => ipcRenderer.invoke('mail:debug-tick');
+  api.__debugAddFollowupDueNow = (threadId: string) =>
+    ipcRenderer.invoke('mail:debug-add-followup-due-now', threadId);
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);

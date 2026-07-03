@@ -28,6 +28,8 @@ const createWindow = () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // preload는 main의 env를 못 보므로 argv로 E2E 모드를 전달한다 (preload.ts에서 검사)
+      ...(process.env.ZENMAIL_E2E_PORT ? { additionalArguments: ['--zenmail-e2e'] } : {}),
     },
   });
 

@@ -158,6 +158,9 @@ export interface ZenmailApi {
   /** E2E-only debug hooks — only present when ZENMAIL_E2E_PORT is set (see preload.ts) */
   __debugSimulateReply?(threadId: string): Promise<void>;
   __debugTick?(): Promise<void>;
+  /** E2E-only: force-add/replace a followup whose baseline+due are both "now" (bypasses the
+   *  FollowupPicker's day-count-only input so tests can exercise the due-in-the-past path). */
+  __debugAddFollowupDueNow?(threadId: string): Promise<void>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';

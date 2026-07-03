@@ -8,6 +8,15 @@ import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../
 const ROW_HEIGHT = 56;
 const SWIPE_THRESHOLD = 100;
 
+/** fired follow-up thread ids — see docs/features/follow-up-reminders/DECISIONS.md D8 */
+function firedFollowupIds(followups: Map<string, FollowupInfo>): Set<string> {
+  const ids = new Set<string>();
+  for (const f of followups.values()) {
+    if (f.status === 'fired') ids.add(f.threadId);
+  }
+  return ids;
+}
+
 function formatDate(ms: number): string {
   const d = new Date(ms);
   const now = new Date();
@@ -67,10 +76,13 @@ function ThreadRow({
   // index within the currently visible (tab-filtered) list — matches selectedIndex's meaning
   const findIndexOf = (id: string) => {
     const st = useMailStore.getState();
+    const pinned =
+      st.activeLabelId === 'INBOX' && !st.searchQuery ? firedFollowupIds(st.followups) : undefined;
     const visible = selectVisibleThreads(
       st.threads,
       st.splitDefs,
-      st.splitInbox && st.activeLabelId === 'INBOX' && !st.searchQuery ? st.activeSplitTab : INBOX_TAB
+      st.splitInbox && st.activeLabelId === 'INBOX' && !st.searchQuery ? st.activeSplitTab : INBOX_TAB,
+      pinned
     );
     return visible.findIndex((t) => t.id === id);
   };
@@ -83,6 +95,7 @@ function ThreadRow({
     <button
       onClick={() => void openThread(thread.id)}
       onWheel={onWheel}
+      data-thread-id={thread.id}
       style={{ transform: offset ? `translateX(${offset}px)` : undefined }}
       className={`flex h-full w-full items-center gap-3 border-b border-bg-border/60 px-4 text-left transition-transform ${
         selected ? 'bg-bg-subtle' : 'hover:bg-bg-subtle/50'
@@ -154,10 +167,10 @@ export function ThreadList() {
 
   const labelsById = useMemo(() => new Map(labels.map((l) => [l.id, l])), [labels]);
 
-  const visibleThreads = useMemo(
-    () => selectVisibleThreads(threads, splitDefs, useSplit ? activeSplitTab : INBOX_TAB),
-    [threads, splitDefs, useSplit, activeSplitTab]
-  );
+  const visibleThreads = useMemo(() => {
+    const pinned = activeLabelId === 'INBOX' && !searchQuery ? firedFollowupIds(followups) : undefined;
+    return selectVisibleThreads(threads, splitDefs, useSplit ? activeSplitTab : INBOX_TAB, pinned);
+  }, [threads, splitDefs, useSplit, activeSplitTab, activeLabelId, searchQuery, followups]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({

@@ -120,9 +120,28 @@ function splitViewActive(s: MailState): boolean {
   return s.splitInbox && s.activeLabelId === 'INBOX' && !s.searchQuery;
 }
 
+/**
+ * fired follow-up thread ids to pin at the top of the list — only while viewing INBOX (any split
+ * tab), never during search or a non-INBOX label (see docs/features/follow-up-reminders/DECISIONS.md D8).
+ * Derived fresh each call — no store-cached derived state (F1 D6 convention).
+ */
+function pinnedFollowupIds(s: MailState): Set<string> | undefined {
+  if (s.activeLabelId !== 'INBOX' || s.searchQuery) return undefined;
+  const ids = new Set<string>();
+  for (const f of s.followups.values()) {
+    if (f.status === 'fired') ids.add(f.threadId);
+  }
+  return ids;
+}
+
 /** the thread list actually on screen right now — selectedIndex is always an index into this */
 function visibleThreads(s: MailState): ThreadSummary[] {
-  return selectVisibleThreads(s.threads, s.splitDefs, splitViewActive(s) ? s.activeSplitTab : INBOX_TAB);
+  return selectVisibleThreads(
+    s.threads,
+    s.splitDefs,
+    splitViewActive(s) ? s.activeSplitTab : INBOX_TAB,
+    pinnedFollowupIds(s)
+  );
 }
 
 /** clamp selectedIndex into range after a mutation that may have shrunk/reshuffled the visible list */

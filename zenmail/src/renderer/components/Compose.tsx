@@ -197,6 +197,7 @@ export function Compose() {
         <button
           onClick={closeCompose}
           title="Close (Esc)"
+          aria-label="Close compose"
           className="app-no-drag rounded px-2 py-1 text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
         >
           ✕

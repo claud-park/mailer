@@ -9,11 +9,21 @@ export function FollowupPicker() {
   const scheduleFollowup = useMailStore((s) => s.scheduleFollowup);
   const cancelFollowup = useMailStore((s) => s.cancelFollowup);
   const followups = useMailStore((s) => s.followups);
-  // mirrors the store's private targetThreadId() — the thread this picker's actions apply to
+  // mirrors the store's private targetThreadId() — the thread this picker's actions apply to.
+  // 핀(fired followup) 정렬까지 포함해야 store의 visibleThreads와 같은 스레드를 가리킨다.
   const targetId = useMailStore((s) => {
     if (s.activeThreadId) return s.activeThreadId;
-    const useSplit = s.splitInbox && s.activeLabelId === 'INBOX' && !s.searchQuery;
-    const visible = selectVisibleThreads(s.threads, s.splitDefs, useSplit ? s.activeSplitTab : INBOX_TAB);
+    const inInbox = s.activeLabelId === 'INBOX' && !s.searchQuery;
+    const useSplit = s.splitInbox && inInbox;
+    const pinned = inInbox
+      ? new Set([...s.followups.values()].filter((f) => f.status === 'fired').map((f) => f.threadId))
+      : undefined;
+    const visible = selectVisibleThreads(
+      s.threads,
+      s.splitDefs,
+      useSplit ? s.activeSplitTab : INBOX_TAB,
+      pinned
+    );
     return visible[s.selectedIndex]?.id ?? null;
   });
   const [custom, setCustom] = useState('');
@@ -68,6 +78,7 @@ export function FollowupPicker() {
             type="number"
             min={1}
             placeholder="Custom days"
+            aria-label="Custom days"
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             className="flex-1 rounded border border-bg-border bg-bg px-2 py-1 text-[12px] text-text-primary"

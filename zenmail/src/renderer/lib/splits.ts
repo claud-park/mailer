@@ -88,13 +88,37 @@ export function computeSplits(threads: ThreadSummary[], defs: SplitDefinition[])
   return { order, assignment, counts };
 }
 
-/** INBOX_TAB returns threads unfiltered; otherwise filters while preserving original order. */
+/**
+ * INBOX_TAB returns threads unfiltered; otherwise filters while preserving original order.
+ *
+ * `pinnedIds` (fired follow-up thread ids — see docs/features/follow-up-reminders/DECISIONS.md D8)
+ * moves matching threads from the *filtered* result to the front, preserving each group's own
+ * relative order (pins keep their order among themselves, the rest keep theirs). Filtering always
+ * happens first, so a pinned id that doesn't belong to `activeTab` never appears in the result.
+ * Omitting `pinnedIds` (or passing an empty set) leaves ordering untouched — callers should only
+ * pass it while an INBOX view (any split tab) is on screen, never during search or a non-INBOX
+ * label view.
+ */
 export function selectVisibleThreads(
   threads: ThreadSummary[],
   defs: SplitDefinition[],
-  activeTab: string
+  activeTab: string,
+  pinnedIds?: ReadonlySet<string>
 ): ThreadSummary[] {
-  if (activeTab === INBOX_TAB) return threads;
-  const { assignment } = computeSplits(threads, defs);
-  return threads.filter((t) => assignment.get(t.id) === activeTab);
+  const filtered =
+    activeTab === INBOX_TAB
+      ? threads
+      : (() => {
+          const { assignment } = computeSplits(threads, defs);
+          return threads.filter((t) => assignment.get(t.id) === activeTab);
+        })();
+
+  if (!pinnedIds || pinnedIds.size === 0) return filtered;
+
+  const pinned: ThreadSummary[] = [];
+  const rest: ThreadSummary[] = [];
+  for (const t of filtered) {
+    (pinnedIds.has(t.id) ? pinned : rest).push(t);
+  }
+  return [...pinned, ...rest];
 }
