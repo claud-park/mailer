@@ -5,7 +5,8 @@
 
 ## A. 탭 바 표시·카운트
 
-- [ ] **TC-A1** If 데모 모드로 INBOX 뷰에 있고 splitInbox가 on일 때, When 앱을 실행하면, Then 리스트 상단에 [VIP][Team][Newsletter][Other] 탭 바가 position 순으로 표시되고 각 탭에 unread 카운트가 보인다.
+- [ ] **TC-A1** If 데모 모드로 INBOX 뷰에 있고 splitInbox가 on일 때, When 앱을 실행하면, Then 리스트 상단에 [Inbox][VIP][Team][Newsletter][Other] 탭 바가 표시되고(Inbox 맨 앞 고정, 스플릿은 position 순) 각 탭에 unread 카운트가 보인다.
+- [ ] **TC-A6** If Inbox 탭을 열면, When 목록을 보면, Then 필터 없이 로드된 전체 INBOX 스레드가 보인다(매칭과 무관).
 - [ ] **TC-A2** If 스레드가 여러 규칙에 매칭될 수 있을 때(예: 팀 도메인 발신자가 VIP 목록에도 있음), When 탭별 목록을 확인하면, Then 그 스레드는 position이 빠른 스플릿 하나에만 나타난다(first-match 배타).
 - [ ] **TC-A3** If 모든 스플릿의 카운트를 합하면, When 통합 리스트(⌘⇧I off)와 비교했을 때, Then 합계가 전체 INBOX 로드분과 일치한다(누락/중복 없음).
 - [ ] **TC-A4** If `nextPageToken`이 남아 있을 때(추가 페이지 존재), When 탭 카운트를 보면, Then `N+` 형식으로 표시된다.
@@ -37,6 +38,8 @@
 - [ ] **TC-D5** If 트랙패드 스와이프로 archive/스누즈하면, When 탭 필터가 적용된 상태라면, Then 올바른(화면에 보이는 그) 스레드에 액션이 적용된다.
 - [ ] **TC-D6** If 스레드를 읽음 처리(mark read)하면, When 재파생되면, Then 스레드는 같은 탭에 남고 unread 카운트만 감소한다.
 - [ ] **TC-D7** If 스레드가 열린 채 탭을 전환하면, When 새 탭에서 j/k를 누르면, Then 열린 스레드는 유지되되 선택은 새 탭 목록 안에서만 움직인다.
+- [ ] **TC-D8** If 스크롤로 다음 페이지를 로드하면(loadMore), When 스레드가 추가되면, Then 활성 탭·선택이 유지되고 탭 카운트만 갱신된다.
+- [ ] **TC-D9** If 열린 스레드가 속한 스플릿의 규칙을 편집해 그 스레드가 활성 탭에서 빠지게 되면, When 저장하면, Then 열린 스레드는 닫히지 않고 유지되며 선택만 새 목록 기준으로 재정박된다.
 
 ## E. 설정 모달 (CRUD)
 

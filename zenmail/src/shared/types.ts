@@ -97,6 +97,20 @@ export interface AccountInfo {
   demo: boolean;
 }
 
+export type SplitRule =
+  | { kind: 'senders'; emails: string[] }
+  | { kind: 'domains'; domains: string[] }
+  | { kind: 'labels'; labelIds: string[] }
+  | { kind: 'newsletter' };
+
+export interface SplitDefinition {
+  id: string;
+  name: string;
+  position: number; // 정렬 = 우선순위 = ⌘N 매핑
+  enabled: boolean;
+  rule: SplitRule;
+}
+
 /** API surface exposed on window.zenmail via contextBridge */
 export interface ZenmailApi {
   getAccount(): Promise<AccountInfo | null>;
@@ -113,6 +127,10 @@ export interface ZenmailApi {
   snooze(req: SnoozeRequest): Promise<void>;
   searchLocal(q: string): Promise<ThreadSummary[]>;
   listContacts(prefix: string): Promise<Contact[]>;
+  getSplits(): Promise<SplitDefinition[]>;
+  setSplits(defs: SplitDefinition[]): Promise<void>;
+  getSetting(key: string): Promise<string | null>;
+  setSetting(key: string, value: string): Promise<void>;
 
   onThreadsUpdated(cb: () => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;

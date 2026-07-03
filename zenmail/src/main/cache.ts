@@ -5,6 +5,7 @@ import type {
   Contact,
   MessageDetail,
   SendRequest,
+  SplitDefinition,
   ThreadDetail,
   ThreadSummary,
 } from '../shared/types';
@@ -52,6 +53,11 @@ export function openCache(): Database.Database {
     CREATE VIRTUAL TABLE IF NOT EXISTS threads_fts USING fts5(
       id UNINDEXED, subject, from_name, from_email, snippet
     );
+    CREATE TABLE IF NOT EXISTS splits (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1, rule TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
   return db;
 }
@@ -205,4 +211,59 @@ export function dueScheduledSends(now: number): { id: string; payload: SendReque
 
 export function removeScheduledSend(id: string): void {
   openCache().prepare('DELETE FROM scheduled_sends WHERE id = ?').run(id);
+}
+
+// --- splits ---
+
+export function getSplits(): SplitDefinition[] {
+  const rows = openCache()
+    .prepare('SELECT * FROM splits ORDER BY position ASC')
+    .all() as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    position: r.position as number,
+    enabled: !!(r.enabled as number),
+    rule: JSON.parse(r.rule as string),
+  }));
+}
+
+export function replaceSplits(defs: SplitDefinition[]): void {
+  const d = openCache();
+  const now = Date.now();
+  const del = d.prepare('DELETE FROM splits');
+  const ins = d.prepare(`
+    INSERT INTO splits (id, name, position, enabled, rule, created_at)
+    VALUES (@id, @name, @position, @enabled, @rule, @createdAt)
+  `);
+  d.transaction(() => {
+    del.run();
+    for (const def of defs) {
+      ins.run({
+        id: def.id,
+        name: def.name,
+        position: def.position,
+        enabled: def.enabled ? 1 : 0,
+        rule: JSON.stringify(def.rule),
+        createdAt: now,
+      });
+    }
+  })();
+}
+
+// --- settings ---
+
+export function getSetting(key: string): string | null {
+  const row = openCache()
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get(key) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+export function setSetting(key: string, value: string): void {
+  openCache()
+    .prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+    )
+    .run(key, value);
 }

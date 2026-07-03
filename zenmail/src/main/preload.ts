@@ -4,6 +4,7 @@ import type {
   ModifyLabelsRequest,
   SendRequest,
   SnoozeRequest,
+  SplitDefinition,
   ZenmailApi,
 } from '../shared/types';
 
@@ -22,6 +23,10 @@ const api: ZenmailApi = {
   snooze: (req: SnoozeRequest) => ipcRenderer.invoke('mail:snooze', req),
   searchLocal: (q: string) => ipcRenderer.invoke('mail:search-local', q),
   listContacts: (prefix: string) => ipcRenderer.invoke('mail:contacts', prefix),
+  getSplits: () => ipcRenderer.invoke('mail:get-splits'),
+  setSplits: (defs: SplitDefinition[]) => ipcRenderer.invoke('mail:set-splits', defs),
+  getSetting: (key: string) => ipcRenderer.invoke('mail:get-setting', key),
+  setSetting: (key: string, value: string) => ipcRenderer.invoke('mail:set-setting', key, value),
 
   onThreadsUpdated: (cb: () => void) => {
     const listener = () => cb();

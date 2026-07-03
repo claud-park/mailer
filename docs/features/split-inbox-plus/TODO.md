@@ -6,8 +6,8 @@
 ## CP0. 설계 (Goal 0~4)
 - [x] 컨텍스트 탐사 + 브레인스토밍 (deep-reasoner/Codex 병렬 설계)
 - [x] PRD.md / DECISIONS.md 작성
-- [ ] Codex 설계안 델타 대조·반영 (백그라운드 회수 중 — 구현 시작 전 게이트)
-- [ ] TC.md 작성
+- [x] Codex 설계안 델타 대조·반영 (D11~D13: Inbox 탭 채택, vitest 채택, 3건 기각)
+- [x] TC.md 작성
 
 ## CP1. 모델·영속화 (UI 무변경)
 - [ ] `shared/types.ts`: `SplitRule`/`SplitDefinition` 타입 + `ZenmailApi`에 getSplits/setSplits/getSetting/setSetting 추가
@@ -17,7 +17,8 @@
 - [ ] tsc 통과
 
 ## CP2. 매칭 엔진 + 스토어 리팩터
-- [ ] `renderer/lib/splits.ts`: `computeSplits` / `selectVisibleThreads` 순수함수
+- [ ] `renderer/lib/splits.ts`: `computeSplits` / `selectVisibleThreads` 순수함수 (order 맨 앞 'inbox' 무필터 탭 — D11)
+- [ ] vitest 도입(lib 한정) + splits.ts 단위 테스트 (first-match/카운트/재정박 — D12)
 - [ ] store: `splitDefs`/`activeSplitTab`/`splitSettingsOpen` 상태, `switchTab`/`nextTab`/`prevTab`/`saveSplits` 액션, init에서 IPC 로드
 - [ ] **selectedIndex 재정박** — 소비처 6곳 전환 (targetThreadId/moveSelection/openThread/openSelected/ThreadList 판정/swipe findIndexOf)
 - [ ] `splitInbox` "탭바 표시" 재해석, `partitionThreads` 제거

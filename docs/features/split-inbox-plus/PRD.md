@@ -27,7 +27,7 @@
 
 ### 3-1. 탭 바
 - 위치: Toolbar 아래, 스레드 리스트 위. `activeLabelId === 'INBOX' && !searchQuery && splitInbox` 일 때만 표시.
-- 구성: `[VIP 3] [Team 5] [Newsletter 24] [Other 12]` — enabled 스플릿을 position 순으로 + 마지막에 Other 고정. 우측에 설정(gear) 버튼.
+- 구성: `[Inbox 44] [VIP 3] [Team 5] [Newsletter 24] [Other 12]` — **Inbox 탭이 맨 앞**(필터 없는 전체 로드분, 매칭 우선순위 비참여), 이어서 enabled 스플릿 position 순, 마지막에 Other 고정. 우측에 설정(gear) 버튼.
 - 카운트: 로드된 스레드 기준 unread 수. `nextPageToken`이 남아 있으면 `N+` 표기(하한값 정직 표기).
 - 활성 탭 강조, 클릭으로 전환. 탭 전환 시 리스트 최상단 선택(selectedIndex=0).
 - 탭바 off(⌘⇧I) 시: 통합 단일 리스트(전체 INBOX). 기존 Toolbar "Split" 버튼도 동일 토글.
@@ -83,6 +83,7 @@ export interface SplitDefinition {
 ### 4-2. 매칭 엔진 (`src/renderer/lib/splits.ts`, 순수 모듈)
 ```ts
 computeSplits(threads, defs): { order: string[]; assignment: Map<threadId, splitId|'other'>; counts: Map<splitId, {total, unread}> }
+// order = ['inbox', ...enabled splits by position, 'other']. 'inbox'는 필터 없음(counts는 전체 로드분).
 selectVisibleThreads(threads, defs, activeSplitTab): ThreadSummary[]  // 원본 순서 보존 필터
 ```
 - 1-pass O(N·R), 파생값은 store state에 캐시하지 않고 useMemo + store 메서드 내 동일 함수 호출(단일 소스). threads 변형 액션마다 재동기화 버그 방지.

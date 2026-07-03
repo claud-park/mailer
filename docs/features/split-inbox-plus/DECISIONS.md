@@ -18,9 +18,9 @@
 - **결정**: VIP(수동 발신자 목록)·Team(도메인 매칭)·Newsletter(카테고리+휴리스틱) 기본 제공 + 스플릿 추가/편집/삭제/순서변경이 가능한 경량 설정 모달. 풀 Settings 화면 기각(YAGNI).
 - **이유**: DEV_WORKFLOW의 F1 정의("커스텀 스플릿, 스플릿 탭·카운트, 설정 UI")를 충족하는 최소 완결 범위.
 
-## 아키텍처 (2026-07-03, deep-reasoner 설계 채택 — Codex 델타 대조 대기 중)
+## 아키텍처 (2026-07-03, deep-reasoner 설계 채택 + Codex 델타 합성 완료)
 
-> 병렬 설계 경위: deep-reasoner(Opus)와 Codex에 동일 브리프를 독립 위임. Codex 1차 시도는 프로세스 유실로 실패(세션 로그에 task_started 후 무산출 확인), 재시도 백그라운드 진행 중. **Codex 델타 대조 전까지 구현 착수 금지 게이트** — 델타가 오면 이 문서에 반영.
+> 병렬 설계 경위: deep-reasoner(Opus)와 Codex에 동일 브리프를 독립 위임(서로의 답 비공개). Codex 1차 시도는 프로세스 유실로 실패, 재시도 성공. 두 안은 핵심(first-match 배타, 순수 매칭 모듈, 로드분 카운트, useKeyboard 소유, 5~6단계 체크포인트)에서 **독립적으로 수렴** — 설계 신뢰도 근거. 델타 판정은 D11~D13.
 
 ### D4. first-match 배타 할당 + Other catch-all
 - **결정**: position 오름차순으로 첫 매칭 스플릿에만 할당. 미매칭은 항상 존재하는 Other(삭제/편집 불가).
@@ -51,3 +51,19 @@
 ### D10. Tab/⇧Tab·⌘1~9 배치
 - **결정**: useKeyboard에서 처리. Tab은 isTyping·모달 가드 통과 후에만 preventDefault+탭 전환. ⌘1~9는 `if (e.metaKey) return` early-return보다 위에 배치(⌘⇧I 블록 옆). ⌘1~9 충돌 없음 확인됨(kbar는 ⌘K만).
 - **이유**: 단축키 소유권 규약(단일 키=kbar, 수식키/내비=useKeyboard) 준수. Compose/검색 중 Tab 포커스 이동 보존.
+
+## Codex 델타 합성 (2026-07-03)
+
+### D11. Inbox 탭 추가 (Codex 채택)
+- **결정**: 탭 바 맨 앞에 필터 없는 Inbox 탭(전체 로드분, 매칭 우선순위 비참여). `order = ['inbox', ...splits, 'other']`.
+- **이유**: 통합 뷰 탈출구가 숨은 토글(⌘⇧I)보다 발견 가능. 사용자에게 제시한 목업과도 일치. ⌘⇧I는 탭바 자체 on/off로 계속 유효(D7 유지).
+
+### D12. 매칭 모듈 단위 테스트 도입 (Codex 채택)
+- **결정**: vitest를 `lib/splits.ts` 순수함수에 한정 도입(첫 테스트 인프라). first-match 우선순위·재정박·카운트를 유닛 레벨에서 고정.
+- **이유**: 최대 리스크(D5 재정박 회귀)를 E2E 전에 순수함수에서 방어. 프로젝트에 테스트 프레임워크가 없었음.
+
+### D13. Codex 안 기각 항목
+- **`rule: {any: SplitRule[]}` OR 조합 스키마**: v1 YAGNI. 단일 규칙 유지(D8). 확장 시 JSON 마이그레이션으로 흡수 가능.
+- **per-account 스플릿 스코핑(account_email 컬럼)**: 단일 계정 앱. 계정 무관 로컬 설정 유지. 멀티 계정 도입 시 재검토.
+- **selectedIndex를 전역 backing index로 유지 + visibleIndexes 순회**: archive 후 auto-advance가 "다음 보이는 스레드"를 찾는 수동 로직 필요 → D5(visibleThreads 재정박)가 이를 공짜로 보존하므로 불리.
+- **활성 탭 비영속(Inbox 리셋)**: 삭제된 스플릿 복원 혼란은 로드 시 폴백(TC-E4/F2)으로 해결되므로 영속 유지(D8).

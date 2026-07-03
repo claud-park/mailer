@@ -7,6 +7,7 @@ import type {
   SendReceipt,
   SendRequest,
   SnoozeRequest,
+  SplitDefinition,
 } from '../shared/types';
 import * as auth from './auth';
 import * as cache from './cache';
@@ -146,5 +147,50 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('mail:contacts', async (_e, prefix: string) => {
     return cache.listContacts(prefix);
+  });
+
+  ipcMain.handle('mail:get-splits', async (): Promise<SplitDefinition[]> => {
+    const existing = cache.getSplits();
+    if (existing.length > 0) return existing;
+
+    const accountDomain = provider?.email.split('@')[1] ?? '';
+    const seeded: SplitDefinition[] = [
+      {
+        id: crypto.randomUUID(),
+        name: 'VIP',
+        position: 0,
+        enabled: true,
+        rule: { kind: 'senders', emails: [] },
+      },
+      {
+        id: crypto.randomUUID(),
+        name: 'Team',
+        position: 1,
+        enabled: true,
+        rule: { kind: 'domains', domains: accountDomain ? [accountDomain] : [] },
+      },
+      {
+        id: crypto.randomUUID(),
+        name: 'Newsletter',
+        position: 2,
+        enabled: true,
+        rule: { kind: 'newsletter' },
+      },
+    ];
+    // 로그인 전 호출이면 저장하지 않는다 — Team 도메인이 빈 채로 영구 시드되는 것 방지
+    if (provider) cache.replaceSplits(seeded);
+    return seeded;
+  });
+
+  ipcMain.handle('mail:set-splits', async (_e, defs: SplitDefinition[]) => {
+    cache.replaceSplits(defs);
+  });
+
+  ipcMain.handle('mail:get-setting', async (_e, key: string): Promise<string | null> => {
+    return cache.getSetting(key);
+  });
+
+  ipcMain.handle('mail:set-setting', async (_e, key: string, value: string) => {
+    cache.setSetting(key, value);
   });
 }
