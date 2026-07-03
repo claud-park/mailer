@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 import { computeSplits } from '../lib/splits';
 
 function isTyping(target: EventTarget | null): boolean {
@@ -47,10 +48,21 @@ export function useKeyboard(): void {
       }
 
       if (isTyping(e.target)) return;
-      if (s.composeInit || s.snoozePickerOpen || s.labelPickerOpen || s.splitSettingsOpen || s.followupPickerOpen) {
+      const coach = useCoachStore.getState();
+      if (
+        s.composeInit ||
+        s.snoozePickerOpen ||
+        s.labelPickerOpen ||
+        s.splitSettingsOpen ||
+        s.followupPickerOpen ||
+        coach.cheatSheetOpen ||
+        coach.statsOpen
+      ) {
         if (e.key === 'Escape') {
           s.closeSnoozePicker();
           s.closeLabelPicker();
+          if (coach.cheatSheetOpen) coach.closeCheatSheet();
+          if (coach.statsOpen) coach.closeStats();
         }
         return;
       }

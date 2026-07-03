@@ -42,6 +42,7 @@
 ### D8. `?` 소유권: kbar 우선, 실패 시 useKeyboard 폴백
 - **결정**: 단일 키 액션이므로 규약상 kbar에 등록(팔레트 발견성). kbar가 Shift 산출 `?`를 매칭 못 하면 useKeyboard의 isTyping 가드 뒤 폴백.
 - **검증**: CP1에서 최우선 실측(양안 공통 최대 불확실성). 결과를 이 문서에 기록.
+- **✅ CP1 검증 결과(2026-07-03)**: kbar vendor 번들 `lib/tinykeys.js`에 특수문자 전용 분기(`/^[^A-Za-z0-9]$/.test(event.key) && press[1] === event.key`)가 존재 — `?`를 정확히 이 목적으로 지원. **kbar 등록 채택 확정, useKeyboard 폴백 불필요.** 입력 중 차단도 kbar `shouldRejectKeystrokes`가 자체 처리(input/textarea/contenteditable/role=textbox).
 
 ### D9. 힌트/마일스톤은 신규 CoachToastHost (store.toast 재사용 기각)
 - **결정**: 독립 큐·수명(~4s)·dismiss 액션을 가진 신규 컴포넌트를 기존 Toasts 컨테이너에 형제 마운트(UndoSendToast 동형).

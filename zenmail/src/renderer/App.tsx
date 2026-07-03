@@ -14,6 +14,7 @@ import { LabelPicker } from './components/LabelPicker';
 import { SplitSettings } from './components/SplitSettings';
 import { Login } from './components/Login';
 import { Toasts } from './components/Toasts';
+import { CheatSheet } from './components/CheatSheet';
 
 function Shell() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
@@ -36,6 +37,7 @@ function Shell() {
       <FollowupPicker />
       <LabelPicker />
       <SplitSettings />
+      <CheatSheet />
       <Toasts />
     </div>
   );

@@ -10,6 +10,7 @@ import {
   type Action,
 } from 'kbar';
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 
 function RenderResults() {
   const { results } = useMatches();
@@ -77,6 +78,13 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         name: 'Configure splits…',
         section: 'View',
         perform: () => useMailStore.setState({ splitSettingsOpen: true }),
+      },
+      {
+        id: 'cheatsheet',
+        name: 'Keyboard shortcuts',
+        shortcut: ['?'],
+        section: 'Help',
+        perform: () => useCoachStore.getState().openCheatSheet(),
       },
     ];
   }, []);
