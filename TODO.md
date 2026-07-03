@@ -79,6 +79,17 @@ Last updated: 2026-07-02
 - [x] TODO/PRD/Obsidian 체크포인트 최종 업데이트
 
 ## 사용자 후속 액션 (릴리즈 전)
-- [ ] Google Cloud Console에서 Desktop-app OAuth Client 생성 → `GOOGLE_CLIENT_ID` 설정
+- [~] Google Cloud Console에서 Desktop-app OAuth Client 생성 → `GOOGLE_CLIENT_ID` 설정 (dreamus.io Internal, 스코프 설정 완료 · Gmail API enable 후 재시도 단계)
 - [ ] 실계정 OAuth 플로우 E2E 확인
 - [ ] `npm run make` 로 DMG/ZIP 패키징
+
+## v1.x Feature 로드맵 (2026-07-03 확정 — 상세: docs/DEV_WORKFLOW.md)
+
+> 각 feature는 DEV_WORKFLOW.md의 Goal 0~8 프로세스(superpowers plan → PRD → TODO → TC → DECISIONS → react-best-practices → impeccable audit → E2E → Obsidian)를 따른다.
+
+- [ ] F1 `split-inbox-plus` — Split Inbox 고도화 (wow #3)
+- [ ] F2 `follow-up-reminders` — remind-if-no-reply / send & remind (wow #4)
+- [ ] F3 `keyboard-mastery` — 인터랙티브 튜토리얼·단축키 힌트 (wow #2)
+- [ ] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1)
+- [ ] F5 `detail-density` — Snippets 등 마이크로 기능 (wow #5)
+- [ ] F6 `sync-engine` — 오프라인-퍼스트 전면화 (wow #6)
