@@ -43,6 +43,7 @@ function ChipInput({
           {v}
           <button
             onClick={() => onChange(values.filter((x) => x !== v))}
+            aria-label={`Remove ${v}`}
             className="text-text-muted hover:text-text-primary"
           >
             ×
@@ -76,6 +77,9 @@ function ChipInput({
           setInput('');
         }}
         placeholder={values.length === 0 ? placeholder : ''}
+        aria-label={placeholder}
+        spellCheck={false}
+        autoComplete="off"
         className="min-w-[80px] flex-1 bg-transparent py-0.5 text-[12px] text-text-primary outline-none placeholder:text-text-muted"
       />
     </div>
@@ -225,11 +229,14 @@ export function SplitSettings() {
                     <input
                       value={d.name}
                       onChange={(e) => update(d.id, { name: e.target.value })}
+                      aria-label="Split name"
+                      spellCheck={false}
                       className="w-32 flex-none rounded border border-bg-border bg-bg px-2 py-1 text-[12px] text-text-primary"
                     />
                     <select
                       value={d.rule.kind}
                       onChange={(e) => update(d.id, { rule: emptyRuleFor(e.target.value as SplitRule['kind']) })}
+                      aria-label="Rule type"
                       className="flex-none rounded border border-bg-border bg-bg px-1.5 py-1 text-[12px] text-text-primary"
                     >
                       {RULE_KINDS.map((k) => (
@@ -251,6 +258,7 @@ export function SplitSettings() {
                         onClick={() => move(d.id, -1)}
                         disabled={i === 0}
                         title="Move up"
+                        aria-label={`Move ${d.name} up`}
                         className="rounded px-1.5 py-0.5 text-text-secondary hover:bg-bg-border disabled:opacity-30"
                       >
                         ↑
@@ -259,6 +267,7 @@ export function SplitSettings() {
                         onClick={() => move(d.id, 1)}
                         disabled={i === arr.length - 1}
                         title="Move down"
+                        aria-label={`Move ${d.name} down`}
                         className="rounded px-1.5 py-0.5 text-text-secondary hover:bg-bg-border disabled:opacity-30"
                       >
                         ↓
@@ -266,6 +275,7 @@ export function SplitSettings() {
                       <button
                         onClick={() => remove(d.id)}
                         title="Delete split"
+                        aria-label={`Delete ${d.name}`}
                         className="rounded px-1.5 py-0.5 text-text-secondary hover:bg-bg-border"
                       >
                         ✕

@@ -20,7 +20,7 @@ export function SplitTabBar() {
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-bg-border px-2">
-      <div className="flex flex-1 items-center gap-1 overflow-x-auto">
+      <div role="tablist" aria-label="Inbox splits" className="flex flex-1 items-center gap-1 overflow-x-auto">
         {order.map((id) => {
           const active = id === activeSplitTab;
           const unread = counts.get(id)?.unread ?? 0;
@@ -28,6 +28,8 @@ export function SplitTabBar() {
           return (
             <button
               key={id}
+              role="tab"
+              aria-selected={active}
               onClick={() => switchTab(id)}
               className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
                 active
@@ -38,7 +40,7 @@ export function SplitTabBar() {
               {tabLabel(id, splitDefs)}
               {unread > 0 && (
                 <span
-                  className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
                     active ? 'bg-accent/20 text-accent' : 'bg-bg-border text-text-muted'
                   }`}
                 >
@@ -52,6 +54,7 @@ export function SplitTabBar() {
       <button
         onClick={() => useMailStore.setState({ splitSettingsOpen: true })}
         title="Configure splits…"
+        aria-label="Configure splits"
         className="shrink-0 rounded-md px-2 py-1 text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
       >
         ⚙︎
