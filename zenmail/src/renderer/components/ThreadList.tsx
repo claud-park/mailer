@@ -66,6 +66,7 @@ function ThreadRow({
       if (st.total > 0) {
         void archiveThread(thread.id); // swipe right → archive
         useCoachStore.getState().recordMouse('archive');
+        useCoachStore.getState().maybeHint('archive');
       } else {
         useMailStore.setState({ selectedIndex: findIndexOf(thread.id) });
         openSnoozePicker(); // swipe left → snooze
@@ -98,6 +99,7 @@ function ThreadRow({
       onClick={() => {
         void openThread(thread.id);
         useCoachStore.getState().recordMouse('openThread');
+        useCoachStore.getState().maybeHint('openThread');
       }}
       onWheel={onWheel}
       data-thread-id={thread.id}

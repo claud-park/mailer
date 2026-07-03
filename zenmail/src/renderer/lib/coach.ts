@@ -34,6 +34,15 @@ export function keyboardRatio(keyboardCount: number, mouseCount: number): number
   return keyboardCount / total;
 }
 
+/**
+ * Minimum sample size (total dual-modality actions) required before the ratio
+ * milestone (CP4) is allowed to fire — guards against a tiny, unrepresentative
+ * sample (e.g. 1 keyboard action) reading as "80% keyboard".
+ */
+export function meetsMinSample(keyboardCount: number, mouseCount: number, min = 20): boolean {
+  return keyboardCount + mouseCount >= min;
+}
+
 /** Hint visibility gating: global mute, lifetime cap (3), and one-per-session cap. */
 export function shouldShowHint(args: {
   hintsMuted: boolean;

@@ -70,6 +70,7 @@ export function Toolbar() {
         onClick={() => {
           toggleSplit();
           useCoachStore.getState().recordMouse('toggleSplit');
+          useCoachStore.getState().maybeHint('toggleSplit');
         }}
         title="Toggle split inbox (⌘⇧I)"
         className={`app-no-drag rounded-md px-2 py-1 text-[12px] ${
@@ -82,6 +83,7 @@ export function Toolbar() {
         onClick={() => {
           openCompose();
           useCoachStore.getState().recordMouse('compose');
+          useCoachStore.getState().maybeHint('compose');
         }}
         title="Compose (c)"
         className="app-no-drag rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent-hover"

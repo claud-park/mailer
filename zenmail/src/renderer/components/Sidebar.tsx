@@ -71,6 +71,7 @@ export function Sidebar() {
             onClick={() => {
               setActiveLabel(item.id);
               useCoachStore.getState().recordMouse('goToLabel');
+              useCoachStore.getState().maybeHint('goToLabel');
             }}
             unread={item.id === 'INBOX' ? byId.get('INBOX')?.unreadCount : undefined}
           >

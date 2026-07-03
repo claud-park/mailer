@@ -80,3 +80,16 @@ export const MODALITY_ACTION: Record<string, string> = {
   nextSplit: 'switchTab',
   prevSplit: 'switchTab',
 };
+
+/**
+ * Hint toast copy (CP3, PRD §3-3), keyed by the same dualId passed to
+ * recordMouse/maybeHint at each of the 6 mouse-affordance call sites.
+ */
+export const HINTS: Record<string, { keys: string[]; message: string }> = {
+  compose: { keys: ['C'], message: 'Press C to compose' },
+  toggleSplit: { keys: ['⌘', '⇧', 'I'], message: 'Press ⌘⇧I to toggle split inbox' },
+  goToLabel: { keys: ['g', 'i'], message: 'Try g then i / s / d to jump' },
+  openThread: { keys: ['j', 'k', '↵'], message: 'Use j / k to move, Enter to open' },
+  switchTab: { keys: ['Tab'], message: 'Press Tab or ⌘1–9 to switch splits' },
+  archive: { keys: ['E'], message: 'Press E to archive' },
+};

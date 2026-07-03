@@ -14,6 +14,7 @@ import { LabelPicker } from './components/LabelPicker';
 import { SplitSettings } from './components/SplitSettings';
 import { Login } from './components/Login';
 import { Toasts } from './components/Toasts';
+import { CoachToastHost } from './components/CoachToastHost';
 import { CheatSheet } from './components/CheatSheet';
 import { StatsPanel } from './components/StatsPanel';
 
@@ -40,6 +41,7 @@ function Shell() {
       <SplitSettings />
       <CheatSheet />
       <StatsPanel />
+      <CoachToastHost />
       <Toasts />
     </div>
   );

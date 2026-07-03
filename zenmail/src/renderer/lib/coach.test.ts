@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { crossedMilestone, isoWeekStart, keyboardRatio, rollWeek, shouldShowHint } from './coach';
+import {
+  crossedMilestone,
+  isoWeekStart,
+  keyboardRatio,
+  meetsMinSample,
+  rollWeek,
+  shouldShowHint,
+} from './coach';
 
 describe('isoWeekStart', () => {
   it('returns the Monday of the same week', () => {
@@ -92,5 +99,24 @@ describe('crossedMilestone', () => {
 
   it('does not fire when the threshold was skipped past without landing on it (still counts as crossed)', () => {
     expect(crossedMilestone('archive100', 98, 105, 100, [])).toBe(true);
+  });
+});
+
+describe('meetsMinSample', () => {
+  it('is false below the default minimum (20)', () => {
+    expect(meetsMinSample(10, 9)).toBe(false);
+  });
+
+  it('is true exactly at the default minimum', () => {
+    expect(meetsMinSample(15, 5)).toBe(true);
+  });
+
+  it('is true above the default minimum', () => {
+    expect(meetsMinSample(30, 10)).toBe(true);
+  });
+
+  it('honors a custom minimum', () => {
+    expect(meetsMinSample(2, 2, 5)).toBe(false);
+    expect(meetsMinSample(3, 2, 5)).toBe(true);
   });
 });
