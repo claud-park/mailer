@@ -3,6 +3,7 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 import type {
   Contact,
+  FollowupInfo,
   MessageDetail,
   SendRequest,
   SplitDefinition,
@@ -58,6 +59,13 @@ export function openCache(): Database.Database {
       enabled INTEGER NOT NULL DEFAULT 1, rule TEXT NOT NULL, created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS followups (
+      thread_id   TEXT PRIMARY KEY,
+      baseline_at INTEGER NOT NULL,
+      due_at      INTEGER NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      created_at  INTEGER NOT NULL
+    );
   `);
   return db;
 }
@@ -266,4 +274,63 @@ export function setSetting(key: string, value: string): void {
       'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
     )
     .run(key, value);
+}
+
+// --- followups ---
+
+export function addFollowup(threadId: string, baselineAt: number, dueAt: number): void {
+  openCache()
+    .prepare(
+      `INSERT INTO followups (thread_id, baseline_at, due_at, status, created_at)
+       VALUES (?, ?, ?, 'pending', ?)
+       ON CONFLICT(thread_id) DO UPDATE SET
+         baseline_at=excluded.baseline_at, due_at=excluded.due_at, status='pending',
+         created_at=excluded.created_at`
+    )
+    .run(threadId, baselineAt, dueAt, Date.now());
+}
+
+export function dueFollowups(now: number): { threadId: string; baselineAt: number }[] {
+  const rows = openCache()
+    .prepare(`SELECT thread_id, baseline_at FROM followups WHERE status = 'pending' AND due_at <= ?`)
+    .all(now) as { thread_id: string; baseline_at: number }[];
+  return rows.map((r) => ({ threadId: r.thread_id, baselineAt: r.baseline_at }));
+}
+
+export function setFollowupFired(threadId: string): void {
+  openCache().prepare(`UPDATE followups SET status = 'fired' WHERE thread_id = ?`).run(threadId);
+}
+
+export function removeFollowup(threadId: string): void {
+  openCache().prepare('DELETE FROM followups WHERE thread_id = ?').run(threadId);
+}
+
+export function listFollowups(): FollowupInfo[] {
+  const rows = openCache()
+    .prepare('SELECT thread_id, status, due_at FROM followups')
+    .all() as { thread_id: string; status: string; due_at: number }[];
+  return rows.map((r) => ({
+    threadId: r.thread_id,
+    status: r.status as 'pending' | 'fired',
+    dueAt: r.due_at,
+  }));
+}
+
+/** internal helper — baseline_at is not part of the public FollowupInfo shape */
+export function getFollowup(
+  threadId: string
+): { threadId: string; baselineAt: number; status: 'pending' | 'fired' } | null {
+  const row = openCache()
+    .prepare('SELECT thread_id, baseline_at, status FROM followups WHERE thread_id = ?')
+    .get(threadId) as { thread_id: string; baseline_at: number; status: string } | undefined;
+  if (!row) return null;
+  return {
+    threadId: row.thread_id,
+    baselineAt: row.baseline_at,
+    status: row.status as 'pending' | 'fired',
+  };
+}
+
+export function clearFollowups(): void {
+  openCache().prepare('DELETE FROM followups').run();
 }

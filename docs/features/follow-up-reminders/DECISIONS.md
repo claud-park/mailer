@@ -17,8 +17,6 @@
 - **결정**: due 시 답장이 없으면 스레드를 INBOX로 복귀(아카이브된 경우)시키고 구분되는 마커와 toast로 알린다. 구체 메커니즘(unread화 여부, 마커 형태, 정렬 위치)은 설계 합성에서 확정.
 - **이유**: 스누즈 복귀와 동일한 정신 모델 재사용, 단 "내가 기다리던 것"임을 구분해야 후속 액션(재촉 답장)으로 이어짐.
 
-## 아키텍처 (설계 합성 후 추가)
-
 ## 아키텍처 (2026-07-03, deep-reasoner+Codex 합성 완료)
 
 > 두 안은 스키마·send 시그니처·undo-후 등록·데몬 확장·due-시점 체크+기회적 해제·`h` 단축키·디버그 IPC E2E에서 **독립 수렴**. 갈린 축 판정은 D8~D10.
@@ -51,3 +49,8 @@
 ### D10. E2E 결정론: 디버그 IPC 2종 (env 가드)
 - **결정**: `__debugSimulateReply(threadId)`(mock에 인바운드 답장 주입)와 `__debugTick()`(데몬 틱 강제, 완료 await) — `ZENMAIL_E2E_PORT` 설정 && demo provider일 때만 등록. 60초 틱 대기·시간 조작 없이 결정론적 E2E.
 - **이유**: run-tc.mjs는 DOM/CDP 전용이지만 window.zenmail(contextBridge)은 page.evaluate로 호출 가능(deep-reasoner 검증).
+
+### D11. archived 컬럼 제거 — 재부상은 무조건 INBOX+UNREAD (CP1 리뷰 수정)
+- **결정**: fired 시 항상 `addLabelIds:['INBOX','UNREAD']`(이미 INBOX면 no-op). 등록 시점의 archive 여부를 기억하는 archived 컬럼은 제거.
+- **이유**: "다시 떠오르게"가 기능 본질 — send&archive든 수동 아카이브든 재부상은 INBOX 복귀여야 한다. 상태 스냅숏 컬럼은 수동 아카이브 케이스에서 오답을 내는 불필요한 복잡성(구현 워커가 플래그한 해석 모호성의 근원).
+- **추가**: getThread 404는 catch에서 명시적으로 행 삭제(영구 재시도 방지 — PRD §3-3과 일치).

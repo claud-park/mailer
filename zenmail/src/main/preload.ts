@@ -28,6 +28,12 @@ const api: ZenmailApi = {
   getSetting: (key: string) => ipcRenderer.invoke('mail:get-setting', key),
   setSetting: (key: string, value: string) => ipcRenderer.invoke('mail:set-setting', key, value),
 
+  addFollowup: (threadId: string, remindDays: number) =>
+    ipcRenderer.invoke('mail:add-followup', threadId, remindDays),
+  cancelFollowup: (threadId: string) => ipcRenderer.invoke('mail:cancel-followup', threadId),
+  dismissFollowup: (threadId: string) => ipcRenderer.invoke('mail:dismiss-followup', threadId),
+  listFollowups: () => ipcRenderer.invoke('mail:list-followups'),
+
   onThreadsUpdated: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on('mail:threads-updated', listener);
@@ -38,6 +44,18 @@ const api: ZenmailApi = {
     ipcRenderer.on('mail:snooze-fired', listener);
     return () => ipcRenderer.removeListener('mail:snooze-fired', listener);
   },
+  onFollowupFired: (cb: (threadId: string) => void) => {
+    const listener = (_e: unknown, threadId: string) => cb(threadId);
+    ipcRenderer.on('mail:followup-fired', listener);
+    return () => ipcRenderer.removeListener('mail:followup-fired', listener);
+  },
 };
+
+// E2E-only debug hooks — only exposed when ZENMAIL_E2E_PORT is set (see main/index.ts).
+if (process.env.ZENMAIL_E2E_PORT) {
+  api.__debugSimulateReply = (threadId: string) =>
+    ipcRenderer.invoke('mail:debug-simulate-reply', threadId);
+  api.__debugTick = () => ipcRenderer.invoke('mail:debug-tick');
+}
 
 contextBridge.exposeInMainWorld('zenmail', api);

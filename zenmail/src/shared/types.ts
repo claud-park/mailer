@@ -71,6 +71,8 @@ export interface SendRequest {
   sendAt?: string;
   /** archive the thread right after sending */
   archive?: boolean;
+  /** remind me if no reply within N days (follow-up reminder) */
+  remindDays?: number;
 }
 
 export interface SendReceipt {
@@ -78,6 +80,12 @@ export interface SendReceipt {
   sendId: string;
   /** epoch ms when the mail will actually go out */
   sendAt: number;
+}
+
+/** result of an actual GmailProvider.send() call (main-process internal only) */
+export interface SendResult {
+  threadId: string;
+  messageId: string;
 }
 
 export interface ModifyLabelsRequest {
@@ -111,6 +119,12 @@ export interface SplitDefinition {
   rule: SplitRule;
 }
 
+export interface FollowupInfo {
+  threadId: string;
+  status: 'pending' | 'fired';
+  dueAt: number;
+}
+
 /** API surface exposed on window.zenmail via contextBridge */
 export interface ZenmailApi {
   getAccount(): Promise<AccountInfo | null>;
@@ -132,8 +146,18 @@ export interface ZenmailApi {
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 
+  addFollowup(threadId: string, remindDays: number): Promise<void>;
+  cancelFollowup(threadId: string): Promise<void>;
+  dismissFollowup(threadId: string): Promise<void>;
+  listFollowups(): Promise<FollowupInfo[]>;
+
   onThreadsUpdated(cb: () => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;
+  onFollowupFired(cb: (threadId: string) => void): () => void;
+
+  /** E2E-only debug hooks — only present when ZENMAIL_E2E_PORT is set (see preload.ts) */
+  __debugSimulateReply?(threadId: string): Promise<void>;
+  __debugTick?(): Promise<void>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';

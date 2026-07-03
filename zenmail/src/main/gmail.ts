@@ -8,6 +8,7 @@ import {
   type Label,
   type ModifyLabelsRequest,
   type SendRequest,
+  type SendResult,
   type ThreadDetail,
   type ThreadSummary,
 } from '../shared/types';
@@ -18,7 +19,7 @@ export interface GmailProvider {
   listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse>;
   getThread(threadId: string): Promise<ThreadDetail>;
   listLabels(): Promise<Label[]>;
-  send(req: SendRequest): Promise<void>;
+  send(req: SendRequest): Promise<SendResult>;
   modifyThread(req: ModifyLabelsRequest): Promise<void>;
   /** id of the zenmail/snoozed label, creating it if needed */
   snoozeLabelId(): Promise<string>;
@@ -231,14 +232,18 @@ export class RealGmailProvider implements GmailProvider {
     }));
   }
 
-  async send(req: SendRequest): Promise<void> {
-    await this.gmail.users.messages.send({
+  async send(req: SendRequest): Promise<SendResult> {
+    const res = await this.gmail.users.messages.send({
       userId: 'me',
       requestBody: {
         raw: toBase64Url(buildMime(req, this.email)),
         threadId: req.threadId,
       },
     });
+    if (!res.data.threadId || !res.data.id) {
+      throw new Error('Gmail send response missing threadId/id');
+    }
+    return { threadId: res.data.threadId, messageId: res.data.id };
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {
@@ -294,7 +299,7 @@ function demoBody(paragraphs: string[], quoted?: string): string {
   return `<div>${paragraphs.map((p) => `<p>${p}</p>`).join('')}${quote}</div>`;
 }
 
-function buildDemoData(): { threads: MockThread[]; labels: Label[] } {
+function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
   const labels: Label[] = [
     { id: 'INBOX', name: 'Inbox', type: 'system', unreadCount: 0, visible: true },
     { id: 'SENT', name: 'Sent', type: 'system', unreadCount: 0, visible: true },
@@ -474,7 +479,7 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[] } {
     ], { quoted: 'On Mon, you wrote:<br>Can we finalize the interview loop by Wednesday?', messageCount: 3 }),
   ];
 
-  return { threads, labels };
+  return { threads, labels, senders };
 }
 
 export class MockGmailProvider implements GmailProvider {
@@ -482,11 +487,13 @@ export class MockGmailProvider implements GmailProvider {
   readonly email = 'demo@zenmail.app';
   private threads: MockThread[];
   private labels: Label[];
+  private senders: Contact[];
 
   constructor() {
     const data = buildDemoData();
     this.threads = data.threads;
     this.labels = data.labels;
+    this.senders = data.senders;
   }
 
   private async delay(): Promise<void> {
@@ -530,7 +537,7 @@ export class MockGmailProvider implements GmailProvider {
     }));
   }
 
-  async send(req: SendRequest): Promise<void> {
+  async send(req: SendRequest): Promise<SendResult> {
     await this.delay();
     const id = `demo_sent_${Date.now()}`;
     const from = { name: 'You', email: this.email };
@@ -554,7 +561,7 @@ export class MockGmailProvider implements GmailProvider {
         t.summary.messageCount += 1;
         t.summary.date = msg.date;
         t.summary.snippet = msg.snippet;
-        return;
+        return { threadId: t.summary.id, messageId: msg.id };
       }
     }
     this.threads.push({
@@ -570,6 +577,37 @@ export class MockGmailProvider implements GmailProvider {
       },
       detail: { id, subject: req.subject, labelIds: ['SENT'], messages: [msg] },
     });
+    return { threadId: id, messageId: msg.id };
+  }
+
+  /** E2E/demo helper: inject an inbound reply from a non-me participant into a thread. */
+  simulateReply(threadId: string): void {
+    const t = this.threads.find((t) => t.summary.id === threadId);
+    if (!t) return;
+    const meEmail = this.email.toLowerCase();
+    const existingNonMe = [...t.detail.messages]
+      .reverse()
+      .find((m) => m.from.email.toLowerCase() !== meEmail)?.from;
+    const from =
+      existingNonMe ?? (t.summary.from.email.toLowerCase() !== meEmail ? t.summary.from : this.senders[0]);
+    const date = Date.now();
+    const snippet = 'Sounds good, thanks for the update!';
+    const msg = {
+      id: `${threadId}_reply_${date}`,
+      threadId,
+      from,
+      to: [{ name: 'You', email: this.email }],
+      cc: [] as Contact[],
+      date,
+      snippet,
+      bodyHtml: `<div><p>${snippet}</p></div>`,
+      bodyText: snippet,
+      labelIds: ['INBOX', 'UNREAD'],
+    };
+    t.detail.messages.push(msg);
+    t.summary.date = date;
+    t.summary.unread = true;
+    t.summary.snippet = snippet;
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {
