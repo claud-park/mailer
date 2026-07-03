@@ -67,3 +67,8 @@
 - **per-account 스플릿 스코핑(account_email 컬럼)**: 단일 계정 앱. 계정 무관 로컬 설정 유지. 멀티 계정 도입 시 재검토.
 - **selectedIndex를 전역 backing index로 유지 + visibleIndexes 순회**: archive 후 auto-advance가 "다음 보이는 스레드"를 찾는 수동 로직 필요 → D5(visibleThreads 재정박)가 이를 공짜로 보존하므로 불리.
 - **활성 탭 비영속(Inbox 리셋)**: 삭제된 스플릿 복원 혼란은 로드 시 폴백(TC-E4/F2)으로 해결되므로 영속 유지(D8).
+
+### D14. /impeccable 부재 → web-design-guidelines로 대체 (Goal 6)
+- **상황**: DEV_WORKFLOW Goal 6이 지정한 /impeccable 스킬이 현재 환경에 설치되어 있지 않음.
+- **결정**: Web Interface Guidelines 감사(web-design-guidelines 스킬)로 대체 수행. 지적사항(탭 role/aria-selected, 아이콘 버튼 aria-label, spellcheck, tabular-nums) 수정 완료(`11858c1`). react-best-practices 리뷰에서는 StrictMode 이중 호출 no-op 버그와 ChipInput 다중 커밋 유실을 수정(`5b1e5fc`).
+- **후속**: /impeccable이 설치되면 F2부터 원래 게이트로 복귀.

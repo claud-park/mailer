@@ -47,8 +47,8 @@
 - [x] tsc 통과
 
 ## 게이트 (Goal 5~8)
-- [ ] /react-best-practices 리뷰 반영
-- [ ] impeccable audit pass (subagent)
+- [x] /react-best-practices 리뷰 반영 (5b1e5fc — move 순수화·ChipInput 수정)
+- [x] impeccable audit pass — 스킬 부재로 web-design-guidelines 대체 (11858c1, D14)
 - [ ] TC.md 전 케이스 E2E 통과
 - [ ] /code-review low → 커밋 → main push
 - [ ] Obsidian 체크포인트 (_obsidian/Projects/ZenMail.md + vault index 날짜)
