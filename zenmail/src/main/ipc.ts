@@ -11,7 +11,7 @@ import type {
 } from '../shared/types';
 import * as auth from './auth';
 import * as cache from './cache';
-import { MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
+import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
 
 const UNDO_WINDOW_MS = 10_000;
 
@@ -154,13 +154,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (existing.length > 0) return existing;
 
     const accountDomain = provider?.email.split('@')[1] ?? '';
+    // demo mode only: seed VIP with a sender from the mock data so the split is demonstrable out of the box
+    const vipEmails = provider?.demo ? [DEMO_VIP_EMAIL] : [];
     const seeded: SplitDefinition[] = [
       {
         id: crypto.randomUUID(),
         name: 'VIP',
         position: 0,
         enabled: true,
-        rule: { kind: 'senders', emails: [] },
+        rule: { kind: 'senders', emails: vipEmails },
       },
       {
         id: crypto.randomUUID(),

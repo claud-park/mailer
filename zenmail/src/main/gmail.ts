@@ -279,6 +279,9 @@ export class RealGmailProvider implements GmailProvider {
 
 const DEMO_SNOOZE_LABEL_ID = 'Label_snoozed';
 
+/** sender seeded as the VIP split's default in demo mode (see buildDemoData senders[0]) */
+export const DEMO_VIP_EMAIL = 'ana@linearly.dev';
+
 interface MockThread {
   summary: ThreadSummary;
   detail: ThreadDetail;
@@ -351,6 +354,11 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[] } {
     { name: 'Product Hunt Daily', email: 'hello@producthunt.example' },
     { name: 'LinkedIn', email: 'updates@linkedin.example' },
     { name: 'Weekly Dev Digest', email: 'digest@devnews.example' },
+    // same domain as the demo account (demo@zenmail.app) — powers the Team split demo
+    { name: 'Mina Cho', email: 'mina@zenmail.app' },
+    { name: 'Jordan Lee', email: 'jordan@zenmail.app' },
+    { name: 'Priya Shah', email: 'priya@zenmail.app' },
+    { name: 'Sam Rivera', email: 'sam@zenmail.app' },
   ];
 
   const mk = (
@@ -452,6 +460,18 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[] } {
     mk(16, { name: 'You', email: 'demo@zenmail.app' }, 'Re: contract renewal', 'Signed copy attached. Same terms, 12 months.', ['SENT'], 15, [
       'Signed copy attached. Same terms, 12 months.',
     ]),
+    mk(17, senders[10], 'Sprint 14 planning — capacity check', 'Pulled everyone\'s PTO into the capacity sheet, we\'re at 34 points this sprint…', ['INBOX', 'UNREAD', 'Label_work'], 4, [
+      'Pulled everyone\'s PTO into the capacity sheet — we\'re at 34 points this sprint, down from 40.',
+      'Can you flag anything from the split-inbox backlog that should slip to Sprint 15?',
+    ], { messageCount: 2 }),
+    mk(18, senders[11], 'Postmortem: snooze daemon missed wake at 3am', 'Root cause was a stale setTimeout across sleep/wake, fix is up for review…', ['INBOX', 'UNREAD', 'Label_work'], 9, [
+      'Root cause: a stale setTimeout survived the laptop sleep/wake cycle, so the daemon missed the 3am wake.',
+      'Fix replaces the timer with a periodic re-check against wall-clock time — PR is up for review.',
+    ]),
+    mk(19, senders[12], 'Re: interview loop for the design role', 'Panel is set for Thursday — I\'ll take the portfolio review slot.', ['INBOX', 'Label_work'], 33, [
+      'Panel is set for Thursday — I\'ll take the portfolio review slot, you take culture add.',
+      'Sharing the take-home brief now so we\'re aligned before the debrief.',
+    ], { quoted: 'On Mon, you wrote:<br>Can we finalize the interview loop by Wednesday?', messageCount: 3 }),
   ];
 
   return { threads, labels };

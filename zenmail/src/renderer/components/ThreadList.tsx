@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { partitionThreads, useMailStore } from '../store/mail';
-import type { Label, ThreadSummary } from '../../shared/types';
+import { useMailStore } from '../store/mail';
+import { selectVisibleThreads, INBOX_TAB } from '../lib/splits';
+import { SplitTabBar } from './SplitTabBar';
+import type { Label, SplitDefinition, ThreadSummary } from '../../shared/types';
 
 const ROW_HEIGHT = 56;
-const HEADER_HEIGHT = 32;
 const SWIPE_THRESHOLD = 100;
-
-type Item =
-  | { kind: 'header'; title: string }
-  | { kind: 'thread'; thread: ThreadSummary; index: number };
 
 function formatDate(ms: number): string {
   const d = new Date(ms);
@@ -65,8 +62,16 @@ function ThreadRow({
     }
   };
 
-  const findIndexOf = (id: string) =>
-    useMailStore.getState().threads.findIndex((t) => t.id === id);
+  // index within the currently visible (tab-filtered) list — matches selectedIndex's meaning
+  const findIndexOf = (id: string) => {
+    const st = useMailStore.getState();
+    const visible = selectVisibleThreads(
+      st.threads,
+      st.splitDefs,
+      st.splitInbox && st.activeLabelId === 'INBOX' && !st.searchQuery ? st.activeSplitTab : INBOX_TAB
+    );
+    return visible.findIndex((t) => t.id === id);
+  };
 
   const chips = thread.labelIds
     .map((id) => labelsById.get(id))
@@ -130,50 +135,36 @@ export function ThreadList() {
   const selectedIndex = useMailStore((s) => s.selectedIndex);
   const activeLabelId = useMailStore((s) => s.activeLabelId);
   const splitInbox = useMailStore((s) => s.splitInbox);
+  const splitDefs = useMailStore((s) => s.splitDefs);
+  const activeSplitTab = useMailStore((s) => s.activeSplitTab);
   const searchQuery = useMailStore((s) => s.searchQuery);
   const labels = useMailStore((s) => s.labels);
   const loadMore = useMailStore((s) => s.loadMore);
   const activeThreadId = useMailStore((s) => s.activeThreadId);
 
+  const useSplit = splitInbox && activeLabelId === 'INBOX' && !searchQuery;
+
   const labelsById = useMemo(() => new Map(labels.map((l) => [l.id, l])), [labels]);
 
-  const items = useMemo<Item[]>(() => {
-    const useSplit = splitInbox && activeLabelId === 'INBOX' && !searchQuery;
-    if (!useSplit) {
-      return threads.map((thread, index) => ({ kind: 'thread' as const, thread, index }));
-    }
-    const { primary, other } = partitionThreads(threads);
-    const out: Item[] = [];
-    // indices must match store.threads ordering for j/k selection
-    const indexOf = new Map(threads.map((t, i) => [t.id, i]));
-    if (primary.length) {
-      out.push({ kind: 'header', title: 'Primary' });
-      primary.forEach((thread) =>
-        out.push({ kind: 'thread', thread, index: indexOf.get(thread.id)! })
-      );
-    }
-    if (other.length) {
-      out.push({ kind: 'header', title: 'Other' });
-      other.forEach((thread) =>
-        out.push({ kind: 'thread', thread, index: indexOf.get(thread.id)! })
-      );
-    }
-    return out;
-  }, [threads, splitInbox, activeLabelId, searchQuery]);
+  const visibleThreads = useMemo(
+    () => selectVisibleThreads(threads, splitDefs, useSplit ? activeSplitTab : INBOX_TAB),
+    [threads, splitDefs, useSplit, activeSplitTab]
+  );
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
-    count: items.length,
+    count: visibleThreads.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (i) => (items[i].kind === 'header' ? HEADER_HEIGHT : ROW_HEIGHT),
+    estimateSize: () => ROW_HEIGHT,
     overscan: 12,
   });
 
   // keep the keyboard selection in view
   useEffect(() => {
-    const itemIdx = items.findIndex((it) => it.kind === 'thread' && it.index === selectedIndex);
-    if (itemIdx >= 0) virtualizer.scrollToIndex(itemIdx, { align: 'auto' });
-  }, [selectedIndex, items, virtualizer]);
+    if (selectedIndex >= 0 && selectedIndex < visibleThreads.length) {
+      virtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
+    }
+  }, [selectedIndex, visibleThreads.length, virtualizer]);
 
   // infinite scroll
   useEffect(() => {
@@ -186,55 +177,64 @@ export function ThreadList() {
     return () => el.removeEventListener('scroll', onScroll);
   }, [loadMore]);
 
-  if (!threadsLoading && threads.length === 0) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-muted">
-        <div className="text-3xl">🪷</div>
-        <div className="text-[13px]">
-          {searchQuery ? 'No results' : 'Inbox zero. Enjoy the quiet.'}
-        </div>
-      </div>
-    );
-  }
+  const emptyState = !threadsLoading && threads.length === 0;
+  const emptyTab = !threadsLoading && threads.length > 0 && visibleThreads.length === 0;
 
   return (
-    <div
-      ref={parentRef}
-      className={`overflow-y-auto ${activeThreadId ? 'h-2/5 border-b border-bg-border' : 'flex-1'}`}
-    >
-      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-        {virtualizer.getVirtualItems().map((vi) => {
-          const item = items[vi.index];
-          return (
-            <div
-              key={vi.key}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: vi.size,
-                transform: `translateY(${vi.start}px)`,
-              }}
-            >
-              {item.kind === 'header' ? (
-                <div className="flex h-full items-end px-4 pb-1 text-[10px] font-semibold tracking-wider text-text-muted uppercase">
-                  {item.title}
+    <>
+      {useSplit && <SplitTabBar />}
+      {emptyState ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-muted">
+          <div className="text-3xl">🪷</div>
+          <div className="text-[13px]">
+            {searchQuery ? 'No results' : 'Inbox zero. Enjoy the quiet.'}
+          </div>
+        </div>
+      ) : emptyTab ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-muted">
+          <div className="text-3xl">✨</div>
+          <div className="text-[13px]">
+            No {tabName(activeSplitTab, splitDefs)} mail — all clear.
+          </div>
+        </div>
+      ) : (
+        <div
+          ref={parentRef}
+          className={`overflow-y-auto ${activeThreadId ? 'h-2/5 border-b border-bg-border' : 'flex-1'}`}
+        >
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((vi) => {
+              const thread = visibleThreads[vi.index];
+              return (
+                <div
+                  key={vi.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: vi.size,
+                    transform: `translateY(${vi.start}px)`,
+                  }}
+                >
+                  <ThreadRow
+                    thread={thread}
+                    selected={vi.index === selectedIndex}
+                    labelsById={labelsById}
+                  />
                 </div>
-              ) : (
-                <ThreadRow
-                  thread={item.thread}
-                  selected={item.index === selectedIndex}
-                  labelsById={labelsById}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {threadsLoading && (
-        <div className="p-3 text-center text-[12px] text-text-muted">Loading…</div>
+              );
+            })}
+          </div>
+          {threadsLoading && (
+            <div className="p-3 text-center text-[12px] text-text-muted">Loading…</div>
+          )}
+        </div>
       )}
-    </div>
+    </>
   );
+}
+
+function tabName(id: string, splitDefs: SplitDefinition[]): string {
+  return splitDefs.find((d) => d.id === id)?.name ?? 'Other';
 }
