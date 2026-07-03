@@ -7,6 +7,11 @@ import { startSnoozeDaemon, stopSnoozeDaemon } from './snooze';
 
 if (started) app.quit();
 
+// E2E test harness hook only — never enabled unless ZENMAIL_E2E_PORT is set (see zenmail/e2e/).
+if (process.env.ZENMAIL_E2E_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.ZENMAIL_E2E_PORT);
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 const createWindow = () => {
