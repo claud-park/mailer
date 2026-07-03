@@ -92,6 +92,12 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         section: 'Help',
         perform: () => useCoachStore.getState().openStats(),
       },
+      {
+        id: 'tutorial',
+        name: 'Start tutorial',
+        section: 'Help',
+        perform: () => useCoachStore.getState().startTutorial(),
+      },
     ].map((a) => ({
       ...a,
       perform: () => {

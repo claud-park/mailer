@@ -17,6 +17,7 @@ import { Toasts } from './components/Toasts';
 import { CoachToastHost } from './components/CoachToastHost';
 import { CheatSheet } from './components/CheatSheet';
 import { StatsPanel } from './components/StatsPanel';
+import { Tutorial } from './components/Tutorial';
 
 function Shell() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
@@ -41,6 +42,7 @@ function Shell() {
       <SplitSettings />
       <CheatSheet />
       <StatsPanel />
+      <Tutorial />
       <CoachToastHost />
       <Toasts />
     </div>

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { DUAL_MODALITY, HINTS, MODALITY_ACTION } from '../lib/shortcuts';
 import { MILESTONES, crossedMilestone, keyboardRatio, meetsMinSample, rollWeek, shouldShowHint } from '../lib/coach';
+import { TUTORIAL_STEPS } from '../lib/tutorial';
 
 /** A queued coaching toast (CP3 hint / CP4 milestone) — independent slot from store.toast (D9). */
 export interface CoachToast {
@@ -36,6 +37,10 @@ interface CoachVolatile {
   coachToasts: CoachToast[];
   /** Local monotonically-increasing id for coachToasts entries. */
   seq: number;
+  /** CP5 interactive tutorial — volatile only, no persistence of "in progress" state. */
+  tutorialActive: boolean;
+  /** Index into TUTORIAL_STEPS; === TUTORIAL_STEPS.length means "completion card showing". */
+  tutorialStep: number;
 }
 
 interface CoachActions {
@@ -57,6 +62,12 @@ interface CoachActions {
   dismissCoachToast: (seq: number) => void;
   /** Global opt-out — persisted, no further hints ever shown. */
   muteHints: () => void;
+  /** Starts (or restarts, e.g. from the palette's "Start tutorial") the CP5 tutorial at step 0. */
+  startTutorial: () => void;
+  /** Advances one step; clamps at TUTORIAL_STEPS.length (the completion card), never past it. */
+  advanceTutorial: () => void;
+  /** Ends the tutorial (skip or completion) — always marks tutorialSeen so auto-start never fires again. */
+  exitTutorial: (completed: boolean) => void;
 }
 
 type CoachState = CoachPersisted & CoachVolatile & CoachActions;
@@ -152,6 +163,8 @@ export const useCoachStore = create<CoachState>()(
       hintsShownSession: [],
       coachToasts: [],
       seq: 0,
+      tutorialActive: false,
+      tutorialStep: 0,
 
       openCheatSheet: () => set({ cheatSheetOpen: true }),
       closeCheatSheet: () => set({ cheatSheetOpen: false }),
@@ -254,6 +267,12 @@ export const useCoachStore = create<CoachState>()(
       },
 
       muteHints: () => set({ hintsMuted: true }),
+
+      startTutorial: () => set({ tutorialActive: true, tutorialStep: 0 }),
+
+      advanceTutorial: () => set((s) => ({ tutorialStep: Math.min(s.tutorialStep + 1, TUTORIAL_STEPS.length) })),
+
+      exitTutorial: (_completed) => set({ tutorialActive: false, tutorialSeen: true }),
     }),
     {
       name: 'zenmail-coach',

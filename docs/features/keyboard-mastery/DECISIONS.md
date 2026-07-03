@@ -38,6 +38,7 @@
 - **결정**: 별도 샘플 데이터 없이 실(데모) 인박스 위에서 연습. 튜토리얼 활성 중 window **capture-phase** 리스너가 중재: 비파괴 키(j/k/Enter/Esc/c)는 통과시켜 실제 효과 체감, **파괴 키(e/#)는 전 스텝에서 항상 삼킴**(`preventDefault+stopImmediatePropagation`) — e-스텝에서도 설명만 하고 실제 아카이브 없음. 진행 판정은 올바른 키 입력(`e.key ∈ step.keys`).
 - **capture가 통하는 근거**: useKeyboard(window bubble)·kbar보다 capture 리스너가 선행. 모달 stopPropagation 규약과 동일 정신.
 - **기각**: 샘플 데이터 주입(provider 침습·YAGNI), store tutorial-mode 분기(회귀 표면 폭발), 실 아카이브+자동 undo(타이밍 복잡), store 구독 predicate 진행 판정(1안 — 키 감지로 충분, YAGNI).
+- **✅ CP5 검증·세부 판정(2026-07-03)**: kbar 단축키 디스패치는 window **bubble**(InternalEvents.js:233 → tinykeys.js:152, capture 플래그 없음), useKeyboard도 bubble → capture 중재 선행이 실증됨. 구현 판정 3건: (1) **isTyping이 파괴 키 삼킴보다 우선** — 컴포즈 본문에 'e'를 타이핑할 수 있어야 하며 kbar도 입력 중엔 자체 무시. (2) **Esc 이중 역할 해소** — 현재 스텝의 지정 키가 Esc(④닫기/⑦discard)면 통과+진행, 아니면 삼키고 스킵. (3) **⑦ discard 완료 감지는 composeInit 스토어 구독** — Compose가 To 필드 autoFocus라 Esc가 isTyping 상태에서 눌려 키 감지 불가(유일한 상태 구독 예외, 키 경로와의 중복 advance는 step 인덱스 가드로 차단).
 
 ### D8. `?` 소유권: kbar 우선, 실패 시 useKeyboard 폴백
 - **결정**: 단일 키 액션이므로 규약상 kbar에 등록(팔레트 발견성). kbar가 Shift 산출 `?`를 매칭 못 하면 useKeyboard의 isTyping 가드 뒤 폴백.
