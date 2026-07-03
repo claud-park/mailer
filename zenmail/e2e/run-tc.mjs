@@ -330,6 +330,7 @@ async function run() {
     await scenario_C(page);
     await scenario_D(page);
     await scenario_E_and_B4_and_A2(page);
+    await scenario_D9(page);
     await scenario_H1(page);
     record('TC-G1', 'PASS', 'validated inline during TC-A section (VIP/Team/Newsletter each >=1 thread)');
 
@@ -938,6 +939,55 @@ async function scenario_E_and_B4_and_A2(page) {
     record('TC-E7', 'FAIL', `stillOpenAfterEsc=${stillOpenAfterEsc} discarded=${discarded}`);
   }
 
+  await clickTab(page, 'Inbox');
+}
+
+// --- D9: rule edit removes open thread from active tab -------------------
+
+async function toggleSplitEnabled(page, name) {
+  await openSplitSettings(page);
+  const row = await rowHandleByName(page, name);
+  const cb = await row.$('input[type="checkbox"]');
+  await cb.click();
+  await saveSplitSettings(page);
+  await sleep(300);
+}
+
+async function scenario_D9(page) {
+  await clickTab(page, 'Newsletter');
+  await focusBody(page);
+  await page.keyboard.press('j');
+  await sleep(150);
+  await page.keyboard.press('Enter'); // open the selected Newsletter thread
+  const readingPaneOpen = await page
+    .waitForSelector('iframe', { timeout: 5000 }) // ThreadView renders sandboxed HTML in an iframe
+    .then(() => true, () => false);
+
+  // disable Newsletter — the open thread leaves the (now removed) active tab
+  await toggleSplitEnabled(page, 'Newsletter');
+
+  const tabs = (await tabsInfo(page)).map((t) => t.label);
+  const activeTab = (await tabsInfo(page)).find((t) => t.active)?.label;
+  const openThreadStillShown =
+    readingPaneOpen && (await page.evaluate(() => !!document.querySelector('iframe')));
+  await page.keyboard.press('j');
+  await sleep(150);
+  const selIdx = await page.evaluate(() => {
+    const dots = Array.from(document.querySelectorAll('main span.rounded-full')).filter(
+      (el) => el.classList.contains('h-2') && el.classList.contains('w-2') && !el.classList.contains('inline-block')
+    );
+    const rows = dots.map((d) => d.closest('button'));
+    return rows.findIndex((b) => b?.classList.contains('bg-bg-subtle'));
+  });
+  if (openThreadStillShown && !tabs.includes('Newsletter') && activeTab === 'Inbox' && selIdx >= 0) {
+    record('TC-D9', 'PASS', 'rule edit removed active tab; open thread stayed open, active tab fell back to Inbox, selection re-anchored');
+  } else {
+    record('TC-D9', 'FAIL', `openThreadStillShown=${openThreadStillShown} tabs=${tabs.join(',')} activeTab=${activeTab} selIdx=${selIdx}`);
+  }
+
+  // cleanup: re-enable Newsletter, close reading pane
+  await page.keyboard.press('Escape');
+  await toggleSplitEnabled(page, 'Newsletter');
   await clickTab(page, 'Inbox');
 }
 
