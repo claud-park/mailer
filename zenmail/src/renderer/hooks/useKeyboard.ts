@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useMailStore } from '../store/mail';
+import { computeSplits } from '../lib/splits';
 
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -8,6 +9,11 @@ function isTyping(target: EventTarget | null): boolean {
     target.tagName === 'TEXTAREA' ||
     target.isContentEditable
   );
+}
+
+/** true when the split tab bar is driving the on-screen list (mirrors store's splitViewActive) */
+function splitViewActive(s: ReturnType<typeof useMailStore.getState>): boolean {
+  return s.splitInbox && s.activeLabelId === 'INBOX' && !s.searchQuery;
 }
 
 /**
@@ -27,12 +33,31 @@ export function useKeyboard(): void {
         return;
       }
 
+      // ⌘1~⌘9 — jump to nth split tab (must sit above the `if (e.metaKey) return` guard below)
+      if (e.metaKey && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        if (splitViewActive(s)) {
+          const n = Number(e.code.slice(5));
+          const { order } = computeSplits(s.threads, s.splitDefs);
+          if (order[n - 1] !== undefined) {
+            e.preventDefault();
+            s.switchTab(order[n - 1]);
+          }
+        }
+        return;
+      }
+
       if (isTyping(e.target)) return;
-      if (s.composeInit || s.snoozePickerOpen || s.labelPickerOpen) {
+      if (s.composeInit || s.snoozePickerOpen || s.labelPickerOpen || s.splitSettingsOpen) {
         if (e.key === 'Escape') {
           s.closeSnoozePicker();
           s.closeLabelPicker();
         }
+        return;
+      }
+      if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey && splitViewActive(s)) {
+        e.preventDefault();
+        if (e.shiftKey) s.prevTab();
+        else s.nextTab();
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;

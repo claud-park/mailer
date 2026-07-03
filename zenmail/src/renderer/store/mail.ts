@@ -73,6 +73,7 @@ interface MailState {
   nextTab(): void;
   prevTab(): void;
   saveSplits(defs: SplitDefinition[]): Promise<void>;
+  closeSplitSettings(): void;
   setSearchQuery(q: string): void;
   submitSearch(q: string): void;
   clearSearch(): void;
@@ -324,6 +325,10 @@ export const useMailStore = create<MailState>((set, get) => {
         return { splitDefs: defs, activeSplitTab };
       });
       await api().setSplits(defs);
+    },
+
+    closeSplitSettings() {
+      set({ splitSettingsOpen: false });
     },
 
     setSearchQuery(q) {

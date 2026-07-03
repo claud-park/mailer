@@ -45,7 +45,7 @@
 ### 3-3. 설정 모달 (SplitSettings)
 - 진입: 탭바 gear 버튼, kbar "Configure splits…". 전용 단축키 없음(저빈도).
 - 스플릿 행: 이름 · 규칙 타입 선택 · 값 입력(senders/domains=chip 입력, labels=라벨 선택, newsletter=값 없음) · enabled 토글 · 위/아래 정렬 버튼 · 삭제. 하단 "+ Add split".
-- Other는 목록에 노출하되 편집/삭제/정렬 불가 표시.
+- Inbox/Other는 스플릿이 아니므로 편집 목록에 없음 — 하단에 "Unmatched mail goes to Other" 안내 텍스트만 표시.
 - 로컬 편집 후 저장 시 replace-all 1회 커밋. Esc 닫기, keydown stopPropagation(기존 모달 패턴).
 
 ### 3-4. 키보드

@@ -10,35 +10,35 @@
 - [x] TC.md 작성
 
 ## CP1. 모델·영속화 (UI 무변경)
-- [ ] `shared/types.ts`: `SplitRule`/`SplitDefinition` 타입 + `ZenmailApi`에 getSplits/setSplits/getSetting/setSetting 추가
-- [ ] `main/cache.ts`: splits/settings 테이블 DDL + CRUD 헬퍼
-- [ ] `main/ipc.ts`: 핸들러 4종 + 기본 3종 시드(빈 테이블 시, Team=계정 도메인 지연 시드)
-- [ ] `main/preload.ts`: expose
-- [ ] tsc 통과
+- [x] `shared/types.ts`: `SplitRule`/`SplitDefinition` 타입 + `ZenmailApi`에 getSplits/setSplits/getSetting/setSetting 추가
+- [x] `main/cache.ts`: splits/settings 테이블 DDL + CRUD 헬퍼
+- [x] `main/ipc.ts`: 핸들러 4종 + 기본 3종 시드(빈 테이블 시, Team=계정 도메인 지연 시드)
+- [x] `main/preload.ts`: expose
+- [x] tsc 통과
 
 ## CP2. 매칭 엔진 + 스토어 리팩터
-- [ ] `renderer/lib/splits.ts`: `computeSplits` / `selectVisibleThreads` 순수함수 (order 맨 앞 'inbox' 무필터 탭 — D11)
-- [ ] vitest 도입(lib 한정) + splits.ts 단위 테스트 (first-match/카운트/재정박 — D12)
-- [ ] store: `splitDefs`/`activeSplitTab`/`splitSettingsOpen` 상태, `switchTab`/`nextTab`/`prevTab`/`saveSplits` 액션, init에서 IPC 로드
-- [ ] **selectedIndex 재정박** — 소비처 6곳 전환 (targetThreadId/moveSelection/openThread/openSelected/ThreadList 판정/swipe findIndexOf)
-- [ ] `splitInbox` "탭바 표시" 재해석, `partitionThreads` 제거
-- [ ] tsc 통과
+- [x] `renderer/lib/splits.ts`: `computeSplits` / `selectVisibleThreads` 순수함수 (order 맨 앞 'inbox' 무필터 탭 — D11)
+- [x] vitest 도입(lib 한정) + splits.ts 단위 테스트 (first-match/카운트/재정박 — D12)
+- [x] store: `splitDefs`/`activeSplitTab`/`splitSettingsOpen` 상태, `switchTab`/`nextTab`/`prevTab`/`saveSplits` 액션, init에서 IPC 로드
+- [x] **selectedIndex 재정박** — 소비처 6곳 전환 (targetThreadId/moveSelection/openThread/openSelected/ThreadList 판정/swipe findIndexOf)
+- [x] `splitInbox` "탭바 표시" 재해석, `partitionThreads` 제거
+- [x] tsc 통과 (vitest 13/13)
 
 ## CP3. 탭 바 + ThreadList
-- [ ] `SplitTabBar.tsx`: 탭+unread 카운트(`N+` 표기)+gear 버튼
-- [ ] `ThreadList.tsx`: Primary/Other 헤더 제거 → visibleThreads 렌더, 탭 문맥 empty state
-- [ ] 데모 데이터 보강: 팀 도메인 클러스터 3~4명 + VIP 발신자 (gmail.ts buildDemoData)
-- [ ] tsc 통과 + 데모 모드 시각 확인
+- [x] `SplitTabBar.tsx`: 탭+unread 카운트(`N+` 표기)+gear 버튼
+- [x] `ThreadList.tsx`: Primary/Other 헤더 제거 → visibleThreads 렌더, 탭 문맥 empty state
+- [x] 데모 데이터 보강: 팀 도메인 클러스터 3~4명 + VIP 발신자 (gmail.ts buildDemoData)
+- [~] tsc 통과 + 데모 모드 시각 확인 (tsc ok, 시각 확인은 Goal 7 E2E에서)
 
 ## CP4. 키보드
-- [ ] `useKeyboard.ts`: Tab/⇧Tab(가드 후 캡처), ⌘1~9(메타 early-return 위 배치)
-- [ ] `CommandPalette.tsx`: kbar 액션 3종 (Next/Previous split, Configure splits…)
-- [ ] tsc 통과
+- [x] `useKeyboard.ts`: Tab/⇧Tab(가드 후 캡처), ⌘1~9(메타 early-return 위 배치)
+- [x] `CommandPalette.tsx`: kbar 액션 3종 (Next/Previous split, Configure splits…) — 리드 리뷰에서 Tab shortcut 이중 발화 버그 제거
+- [x] tsc 통과
 
 ## CP5. 설정 모달
-- [ ] `SplitSettings.tsx`: 목록·행 편집(chip 입력/라벨 선택/토글/정렬/삭제)·Add split·replace-all 저장
-- [ ] 진입점: 탭바 gear + kbar. Esc/stopPropagation 모달 패턴
-- [ ] 활성 탭 삭제 시 폴백(switchTab(order[0] ?? 'other'))
+- [x] `SplitSettings.tsx`: 목록·행 편집(chip 입력/라벨 선택/토글/정렬/삭제)·Add split·replace-all 저장
+- [x] 진입점: 탭바 gear + kbar. Esc/stopPropagation 모달 패턴
+- [x] 활성 탭 삭제 시 폴백(saveSplits에서 order에 없으면 INBOX_TAB 폴백)
 - [ ] tsc 통과
 
 ## CP6. 영속화 마무리 + 폴리시
