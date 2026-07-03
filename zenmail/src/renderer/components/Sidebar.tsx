@@ -1,4 +1,5 @@
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 import { SNOOZE_LABEL_NAME, type Label } from '../../shared/types';
 
 const SYSTEM_ITEMS: { id: string; name: string }[] = [
@@ -67,7 +68,10 @@ export function Sidebar() {
           <SidebarRow
             key={item.id}
             active={activeLabelId === item.id}
-            onClick={() => setActiveLabel(item.id)}
+            onClick={() => {
+              setActiveLabel(item.id);
+              useCoachStore.getState().recordMouse('goToLabel');
+            }}
             unread={item.id === 'INBOX' ? byId.get('INBOX')?.unreadCount : undefined}
           >
             {item.name}

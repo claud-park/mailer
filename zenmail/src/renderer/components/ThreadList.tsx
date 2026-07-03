@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 import { selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { SplitTabBar } from './SplitTabBar';
 import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../shared/types';
@@ -64,6 +65,7 @@ function ThreadRow({
       st.fired = true;
       if (st.total > 0) {
         void archiveThread(thread.id); // swipe right → archive
+        useCoachStore.getState().recordMouse('archive');
       } else {
         useMailStore.setState({ selectedIndex: findIndexOf(thread.id) });
         openSnoozePicker(); // swipe left → snooze
@@ -93,7 +95,10 @@ function ThreadRow({
 
   return (
     <button
-      onClick={() => void openThread(thread.id)}
+      onClick={() => {
+        void openThread(thread.id);
+        useCoachStore.getState().recordMouse('openThread');
+      }}
       onWheel={onWheel}
       data-thread-id={thread.id}
       style={{ transform: offset ? `translateX(${offset}px)` : undefined }}

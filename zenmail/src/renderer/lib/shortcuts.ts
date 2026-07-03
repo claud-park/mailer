@@ -53,3 +53,30 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'commandPalette', keys: ['⌘', 'K'], label: 'Command palette', section: 'Help' },
   { id: 'cheatsheet', keys: ['?'], label: 'Keyboard shortcuts', section: 'Help' },
 ];
+
+/**
+ * Actions that genuinely have both a keyboard and a mouse path (PRD §4-1 Layer B,
+ * DECISIONS D10). Only these count toward the keyboard-ratio denominator — actions
+ * with no mouse equivalent (reply/snooze/label/...) would otherwise inflate the ratio.
+ */
+export const DUAL_MODALITY: Set<string> = new Set([
+  'compose',
+  'toggleSplit',
+  'openThread',
+  'goToLabel',
+  'switchTab',
+  'archive',
+]);
+
+/**
+ * Normalizes kbar action ids that map onto a dual-modality id used elsewhere
+ * (e.g. Sidebar's mouse click on Inbox/Sent/Drafts records as 'goToLabel', so the
+ * kbar 'inbox'/'sent'/'drafts' actions must record under the same id to compare).
+ */
+export const MODALITY_ACTION: Record<string, string> = {
+  inbox: 'goToLabel',
+  sent: 'goToLabel',
+  drafts: 'goToLabel',
+  nextSplit: 'switchTab',
+  prevSplit: 'switchTab',
+};

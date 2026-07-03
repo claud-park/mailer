@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 
 export function Toolbar() {
   const searchQuery = useMailStore((s) => s.searchQuery);
@@ -66,7 +67,10 @@ export function Toolbar() {
       </div>
 
       <button
-        onClick={toggleSplit}
+        onClick={() => {
+          toggleSplit();
+          useCoachStore.getState().recordMouse('toggleSplit');
+        }}
         title="Toggle split inbox (⌘⇧I)"
         className={`app-no-drag rounded-md px-2 py-1 text-[12px] ${
           splitInbox ? 'text-accent' : 'text-text-secondary'
@@ -75,7 +79,10 @@ export function Toolbar() {
         Split
       </button>
       <button
-        onClick={() => openCompose()}
+        onClick={() => {
+          openCompose();
+          useCoachStore.getState().recordMouse('compose');
+        }}
         title="Compose (c)"
         className="app-no-drag rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent-hover"
       >

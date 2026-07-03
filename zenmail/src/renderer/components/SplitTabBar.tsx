@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useMailStore } from '../store/mail';
+import { useCoachStore } from '../store/coach';
 import { computeSplits, INBOX_TAB, OTHER_TAB } from '../lib/splits';
 import type { SplitDefinition } from '../../shared/types';
 
@@ -30,7 +31,10 @@ export function SplitTabBar() {
               key={id}
               role="tab"
               aria-selected={active}
-              onClick={() => switchTab(id)}
+              onClick={() => {
+                switchTab(id);
+                useCoachStore.getState().recordMouse('switchTab');
+              }}
               className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
                 active
                   ? 'bg-bg-border text-text-primary'

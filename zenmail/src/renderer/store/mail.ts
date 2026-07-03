@@ -9,6 +9,7 @@ import {
   type ThreadSummary,
 } from '../../shared/types';
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
+import { useCoachStore } from './coach';
 
 const api = () => window.zenmail;
 
@@ -388,6 +389,7 @@ export const useMailStore = create<MailState>((set, get) => {
 
     focusSearch() {
       set((s) => ({ searchFocusTick: s.searchFocusTick + 1 }));
+      useCoachStore.getState().bumpStat('search');
     },
 
     moveSelection(delta) {
@@ -459,6 +461,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
       get().showToast('Archived');
+      useCoachStore.getState().bumpStat('archive');
     },
 
     async trashThread(threadId) {
@@ -476,6 +479,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       await api().modifyLabels({ threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
       get().showToast('Moved to trash');
+      useCoachStore.getState().bumpStat('trash');
     },
 
     async markRead(threadId, read = true) {
@@ -535,6 +539,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       await api().snooze({ threadId: id, until: until.toISOString() });
       get().showToast(`Snoozed until ${until.toLocaleString()}`);
+      useCoachStore.getState().bumpStat('snooze');
     },
 
     openCompose(init) {
@@ -588,6 +593,7 @@ export const useMailStore = create<MailState>((set, get) => {
     async send(req) {
       const receipt = await api().send(req);
       set({ composeInit: null });
+      useCoachStore.getState().bumpStat('send');
       if (req.sendAt) {
         get().showToast(`Scheduled for ${new Date(req.sendAt).toLocaleString()}`);
       } else {
@@ -644,6 +650,7 @@ export const useMailStore = create<MailState>((set, get) => {
       await api().addFollowup(id, days);
       await get().refreshFollowups();
       get().showToast(`Reminder set — ${days} days`);
+      useCoachStore.getState().bumpStat('followup');
     },
 
     async cancelFollowup(threadId) {

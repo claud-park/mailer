@@ -15,6 +15,7 @@ import { SplitSettings } from './components/SplitSettings';
 import { Login } from './components/Login';
 import { Toasts } from './components/Toasts';
 import { CheatSheet } from './components/CheatSheet';
+import { StatsPanel } from './components/StatsPanel';
 
 function Shell() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
@@ -38,6 +39,7 @@ function Shell() {
       <LabelPicker />
       <SplitSettings />
       <CheatSheet />
+      <StatsPanel />
       <Toasts />
     </div>
   );

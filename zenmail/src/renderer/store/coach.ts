@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { DUAL_MODALITY, MODALITY_ACTION } from '../lib/shortcuts';
+import { keyboardRatio, rollWeek } from '../lib/coach';
 
 /** Persisted (localStorage) slice — coaching telemetry only, no main/IPC consumer (see DECISIONS D6). */
 interface CoachPersisted {
@@ -19,6 +21,8 @@ interface CoachPersisted {
 interface CoachVolatile {
   cheatSheetOpen: boolean;
   statsOpen: boolean;
+  /** ids of hints already shown once this session — cleared on reload, not persisted (CP2). */
+  hintsShownSession: string[];
 }
 
 interface CoachActions {
@@ -26,6 +30,14 @@ interface CoachActions {
   closeCheatSheet: () => void;
   openStats: () => void;
   closeStats: () => void;
+  /** Records a dual-modality action performed via keyboard (kbar perform / useKeyboard). */
+  recordEfficient: (actionId: string) => void;
+  /** Records a dual-modality action performed via mouse (onClick/swipe). */
+  recordMouse: (actionId: string) => void;
+  /** Totals funnel — called once at the end of every store/mail.ts terminal action. */
+  bumpStat: (kind: string) => void;
+  /** Derived keyboard-vs-mouse ratio over dual-modality actions only (D10). */
+  ratio: () => number | null;
 }
 
 type CoachState = CoachPersisted & CoachVolatile & CoachActions;
@@ -43,17 +55,53 @@ const initialPersisted: CoachPersisted = {
   hintsMuted: false,
 };
 
+/** actions that roll into the weekly-processed counter (PRD §3-4). */
+const WEEKLY_STATS = new Set(['archive', 'trash', 'snooze']);
+
 export const useCoachStore = create<CoachState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...initialPersisted,
       cheatSheetOpen: false,
       statsOpen: false,
+      hintsShownSession: [],
 
       openCheatSheet: () => set({ cheatSheetOpen: true }),
       closeCheatSheet: () => set({ cheatSheetOpen: false }),
       openStats: () => set({ statsOpen: true }),
       closeStats: () => set({ statsOpen: false }),
+
+      recordEfficient: (actionId) => {
+        const dualId = MODALITY_ACTION[actionId] ?? actionId;
+        if (!DUAL_MODALITY.has(dualId)) return;
+        set((s) => ({ keyboardCount: s.keyboardCount + 1 }));
+      },
+
+      recordMouse: (actionId) => {
+        const dualId = MODALITY_ACTION[actionId] ?? actionId;
+        if (!DUAL_MODALITY.has(dualId)) return;
+        set((s) => ({ mouseCount: s.mouseCount + 1 }));
+      },
+
+      bumpStat: (kind) => {
+        set((s) => {
+          const counters = { ...s.counters, [kind]: (s.counters[kind] ?? 0) + 1 };
+          const firsts = s.firsts[kind] ? s.firsts : { ...s.firsts, [kind]: true };
+          let weekStart = s.weekStart;
+          let weekProcessed = s.weekProcessed;
+          if (WEEKLY_STATS.has(kind)) {
+            const rolled = rollWeek({ weekStart: s.weekStart, weekProcessed: s.weekProcessed }, new Date());
+            weekStart = rolled.weekStart;
+            weekProcessed = rolled.weekProcessed + 1;
+          }
+          return { counters, firsts, weekStart, weekProcessed };
+        });
+      },
+
+      ratio: () => {
+        const s = get();
+        return keyboardRatio(s.keyboardCount, s.mouseCount);
+      },
     }),
     {
       name: 'zenmail-coach',

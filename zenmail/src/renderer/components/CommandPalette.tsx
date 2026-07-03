@@ -86,7 +86,19 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         section: 'Help',
         perform: () => useCoachStore.getState().openCheatSheet(),
       },
-    ];
+      {
+        id: 'stats',
+        name: 'Your stats',
+        section: 'Help',
+        perform: () => useCoachStore.getState().openStats(),
+      },
+    ].map((a) => ({
+      ...a,
+      perform: () => {
+        useCoachStore.getState().recordEfficient(a.id);
+        return a.perform?.();
+      },
+    }));
   }, []);
 
   return (

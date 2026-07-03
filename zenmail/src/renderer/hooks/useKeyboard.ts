@@ -31,6 +31,7 @@ export function useKeyboard(): void {
       if (e.metaKey && e.shiftKey && e.code === 'KeyI') {
         e.preventDefault();
         s.toggleSplit();
+        useCoachStore.getState().recordEfficient('toggleSplit');
         return;
       }
 
@@ -42,6 +43,7 @@ export function useKeyboard(): void {
           if (order[n - 1] !== undefined) {
             e.preventDefault();
             s.switchTab(order[n - 1]);
+            useCoachStore.getState().recordEfficient('switchTab');
           }
         }
         return;
@@ -70,6 +72,7 @@ export function useKeyboard(): void {
         e.preventDefault();
         if (e.shiftKey) s.prevTab();
         else s.nextTab();
+        useCoachStore.getState().recordEfficient('switchTab');
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -78,14 +81,17 @@ export function useKeyboard(): void {
         case 'j':
           e.preventDefault();
           s.moveSelection(1);
+          useCoachStore.getState().recordEfficient('nav');
           break;
         case 'k':
           e.preventDefault();
           s.moveSelection(-1);
+          useCoachStore.getState().recordEfficient('nav');
           break;
         case 'Enter':
           e.preventDefault();
           s.openSelected();
+          useCoachStore.getState().recordEfficient('openThread');
           break;
         case ']':
           e.preventDefault();
