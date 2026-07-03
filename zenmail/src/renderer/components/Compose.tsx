@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMailStore } from '../store/mail';
 import type { Contact } from '../../shared/types';
+import {
+  FOLLOWUP_PRESETS,
+  FOLLOWUP_DEFAULT_DAYS,
+  FOLLOWUP_DEFAULT_DAYS_KEY,
+  formatRemindDays,
+} from '../lib/followup';
 
 function RecipientField({
   label,
@@ -119,6 +125,9 @@ export function Compose() {
   const [subject, setSubject] = useState('');
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState('');
+  const [remindOpen, setRemindOpen] = useState(false);
+  const [remindDays, setRemindDays] = useState<number | null>(null);
+  const [remindCustomDays, setRemindCustomDays] = useState(FOLLOWUP_DEFAULT_DAYS);
   const [sending, setSending] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
 
@@ -131,8 +140,17 @@ export function Compose() {
     setSubject(composeInit.subject);
     setScheduleOpen(false);
     setScheduleAt('');
+    setRemindOpen(false);
+    setRemindDays(null);
     if (editorRef.current) editorRef.current.innerHTML = '';
   }, [composeInit]);
+
+  useEffect(() => {
+    void window.zenmail.getSetting(FOLLOWUP_DEFAULT_DAYS_KEY).then((v) => {
+      const n = v ? Number(v) : NaN;
+      setRemindCustomDays(Number.isFinite(n) && n > 0 ? n : FOLLOWUP_DEFAULT_DAYS);
+    });
+  }, []);
 
   if (!composeInit) return null;
 
@@ -157,7 +175,11 @@ export function Compose() {
         inReplyTo: composeInit.inReplyTo,
         archive: opts.archive,
         sendAt: opts.schedule && scheduleAt ? new Date(scheduleAt).toISOString() : undefined,
+        remindDays: remindDays ?? undefined,
       });
+      if (remindDays != null) {
+        void window.zenmail.setSetting(FOLLOWUP_DEFAULT_DAYS_KEY, String(remindDays));
+      }
     } finally {
       setSending(false);
     }
@@ -273,6 +295,61 @@ export function Compose() {
             </div>
           )}
         </div>
+        <div className="relative">
+          <button
+            onClick={() => setRemindOpen((v) => !v)}
+            aria-label="Remind me if no reply"
+            className="rounded-md border border-bg-border px-3 py-1.5 text-[13px] text-text-secondary hover:text-text-primary"
+          >
+            Remind…
+          </button>
+          {remindOpen && (
+            <div className="absolute bottom-full left-0 mb-2 flex items-center gap-2 rounded-md border border-bg-border bg-bg-subtle p-3 shadow-xl">
+              {FOLLOWUP_PRESETS.map((p) => (
+                <button
+                  key={p.days}
+                  onClick={() => {
+                    setRemindDays(p.days);
+                    setRemindOpen(false);
+                  }}
+                  className="rounded border border-bg-border px-2 py-1 text-[12px] text-text-secondary hover:text-text-primary"
+                >
+                  {p.label}
+                </button>
+              ))}
+              <input
+                type="number"
+                min={1}
+                value={remindCustomDays}
+                onChange={(e) => setRemindCustomDays(Number(e.target.value))}
+                aria-label="Custom remind days"
+                className="w-14 rounded border border-bg-border bg-bg px-2 py-1 text-[12px] text-text-primary"
+              />
+              <button
+                onClick={() => {
+                  setRemindDays(remindCustomDays);
+                  setRemindOpen(false);
+                }}
+                disabled={!remindCustomDays || remindCustomDays < 1}
+                className="rounded bg-accent px-2 py-1 text-[12px] text-white disabled:opacity-40"
+              >
+                Set
+              </button>
+            </div>
+          )}
+        </div>
+        {remindDays != null && (
+          <span className="flex items-center gap-1 rounded-full bg-bg-border px-2 py-0.5 text-[12px] text-text-secondary">
+            Remind in {formatRemindDays(remindDays)}
+            <button
+              onClick={() => setRemindDays(null)}
+              aria-label="Remove reminder"
+              className="text-text-muted hover:text-text-primary"
+            >
+              ×
+            </button>
+          </span>
+        )}
         <span className="ml-auto text-[11px] text-text-muted">10s undo window after send</span>
       </footer>
     </div>

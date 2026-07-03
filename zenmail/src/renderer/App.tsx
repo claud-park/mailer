@@ -9,6 +9,7 @@ import { ThreadList } from './components/ThreadList';
 import { ThreadView } from './components/ThreadView';
 import { Compose } from './components/Compose';
 import { SnoozePicker } from './components/SnoozePicker';
+import { FollowupPicker } from './components/FollowupPicker';
 import { LabelPicker } from './components/LabelPicker';
 import { SplitSettings } from './components/SplitSettings';
 import { Login } from './components/Login';
@@ -32,6 +33,7 @@ function Shell() {
       </div>
       {composeOpen && <Compose />}
       <SnoozePicker />
+      <FollowupPicker />
       <LabelPicker />
       <SplitSettings />
       <Toasts />

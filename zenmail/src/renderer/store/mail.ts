@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   type AccountInfo,
+  type FollowupInfo,
   type Label,
   type SendRequest,
   type SplitDefinition,
@@ -54,6 +55,8 @@ interface MailState {
   composeInit: ComposeInit | null;
   snoozePickerOpen: boolean;
   labelPickerOpen: boolean;
+  followupPickerOpen: boolean;
+  followups: Map<string, FollowupInfo>;
   pendingSend: PendingSend | null;
   toast: string | null;
 
@@ -103,6 +106,12 @@ interface MailState {
   closeSnoozePicker(): void;
   openLabelPicker(): void;
   closeLabelPicker(): void;
+  openFollowupPicker(): void;
+  closeFollowupPicker(): void;
+  refreshFollowups(): Promise<void>;
+  scheduleFollowup(days: number, threadId?: string): Promise<void>;
+  cancelFollowup(threadId?: string): Promise<void>;
+  dismissFollowup(threadId?: string): Promise<void>;
   showToast(msg: string): void;
 }
 
@@ -192,15 +201,26 @@ export const useMailStore = create<MailState>((set, get) => {
     composeInit: null,
     snoozePickerOpen: false,
     labelPickerOpen: false,
+    followupPickerOpen: false,
+    followups: new Map(),
     pendingSend: null,
     toast: null,
 
     async init() {
+      api().onFollowupFired((threadId) => {
+        const thread = get().threads.find((t) => t.id === threadId);
+        get().showToast(
+          thread
+            ? `No reply yet — "${thread.subject}" is back`
+            : 'No reply yet — thread is back in your inbox'
+        );
+        void get().refreshFollowups();
+      });
       try {
         const account = await api().getAccount();
         set({ account, accountLoading: false });
         if (account) {
-          await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState()]);
+          await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
         }
       } catch (err) {
         set({ accountLoading: false, authError: String(err) });
@@ -212,7 +232,7 @@ export const useMailStore = create<MailState>((set, get) => {
       try {
         const account = await api().signIn();
         set({ account });
-        await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState()]);
+        await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
       } catch (err) {
         set({ authError: err instanceof Error ? err.message : String(err) });
       }
@@ -221,7 +241,7 @@ export const useMailStore = create<MailState>((set, get) => {
     async signInDemo() {
       const account = await api().signInDemo();
       set({ account, authError: null });
-      await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState()]);
+      await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
     },
 
     async signOut() {
@@ -232,6 +252,7 @@ export const useMailStore = create<MailState>((set, get) => {
         labels: [],
         activeThreadId: null,
         activeThread: null,
+        followups: new Map(),
       });
     },
 
@@ -579,6 +600,48 @@ export const useMailStore = create<MailState>((set, get) => {
     },
     closeLabelPicker() {
       set({ labelPickerOpen: false });
+    },
+    openFollowupPicker() {
+      if (targetThreadId(get())) set({ followupPickerOpen: true });
+    },
+    closeFollowupPicker() {
+      set({ followupPickerOpen: false });
+    },
+
+    async refreshFollowups() {
+      try {
+        const list = await api().listFollowups();
+        set({ followups: new Map(list.map((f) => [f.threadId, f])) });
+      } catch (err) {
+        console.error('refreshFollowups failed', err);
+      }
+    },
+
+    async scheduleFollowup(days, threadId) {
+      const s = get();
+      const id = targetThreadId(s, threadId);
+      if (!id) return;
+      set({ followupPickerOpen: false });
+      await api().addFollowup(id, days);
+      await get().refreshFollowups();
+      get().showToast(`Reminder set — ${days} days`);
+    },
+
+    async cancelFollowup(threadId) {
+      const s = get();
+      const id = targetThreadId(s, threadId);
+      if (!id) return;
+      set({ followupPickerOpen: false });
+      await api().cancelFollowup(id);
+      await get().refreshFollowups();
+    },
+
+    async dismissFollowup(threadId) {
+      const s = get();
+      const id = targetThreadId(s, threadId);
+      if (!id) return;
+      await api().dismissFollowup(id);
+      await get().refreshFollowups();
     },
 
     showToast(msg) {

@@ -47,7 +47,7 @@ export function useKeyboard(): void {
       }
 
       if (isTyping(e.target)) return;
-      if (s.composeInit || s.snoozePickerOpen || s.labelPickerOpen || s.splitSettingsOpen) {
+      if (s.composeInit || s.snoozePickerOpen || s.labelPickerOpen || s.splitSettingsOpen || s.followupPickerOpen) {
         if (e.key === 'Escape') {
           s.closeSnoozePicker();
           s.closeLabelPicker();

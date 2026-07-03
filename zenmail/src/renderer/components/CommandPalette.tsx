@@ -59,6 +59,7 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
       { id: 'forward', name: 'Forward', shortcut: ['f'], section: 'Actions', perform: () => s().openForward() },
       { id: 'label', name: 'Apply label…', shortcut: ['l'], section: 'Actions', perform: () => s().openLabelPicker() },
       { id: 'snooze', name: 'Snooze…', shortcut: ['b'], section: 'Actions', perform: () => s().openSnoozePicker() },
+      { id: 'remindMe', name: 'Remind me…', shortcut: ['h'], section: 'Actions', perform: () => s().openFollowupPicker() },
       { id: 'trash', name: 'Move to trash', shortcut: ['#'], section: 'Actions', perform: () => void s().trashThread() },
       { id: 'markRead', name: 'Mark as read', shortcut: ['I'], section: 'Actions', perform: () => void s().markRead(undefined, true) },
       { id: 'markUnread', name: 'Mark as unread', shortcut: ['U'], section: 'Actions', perform: () => void s().markRead(undefined, false) },

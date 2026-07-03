@@ -170,7 +170,44 @@ function InlineReply() {
   );
 }
 
+function FollowupBanner({ threadId }: { threadId: string }) {
+  const followup = useMailStore((s) => s.followups.get(threadId));
+  const cancelFollowup = useMailStore((s) => s.cancelFollowup);
+  const dismissFollowup = useMailStore((s) => s.dismissFollowup);
+
+  if (!followup) return null;
+  const dateStr = new Date(followup.dueAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+  if (followup.status === 'pending') {
+    return (
+      <div className="flex items-center justify-between gap-2 border-b border-bg-border/60 bg-bg-subtle px-6 py-1.5 text-[12px] text-text-secondary">
+        <span>Reminder set — no reply by {dateStr}</span>
+        <button
+          onClick={() => void cancelFollowup(threadId)}
+          aria-label="Cancel reminder"
+          className="text-text-muted hover:text-text-primary"
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-bg-border/60 bg-accent/10 px-6 py-1.5 text-[12px] text-accent">
+      <span>No reply since {dateStr}</span>
+      <button
+        onClick={() => void dismissFollowup(threadId)}
+        className="rounded px-1.5 py-0.5 text-[11px] font-medium hover:bg-accent/20"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 export function ThreadView() {
+  const activeThreadId = useMailStore((s) => s.activeThreadId);
   const activeThread = useMailStore((s) => s.activeThread);
   const threadLoading = useMailStore((s) => s.threadLoading);
   const labels = useMailStore((s) => s.labels);
@@ -191,6 +228,7 @@ export function ThreadView() {
 
   return (
     <div className="zen-fade-in flex min-h-0 flex-1 flex-col">
+      {activeThreadId && <FollowupBanner threadId={activeThreadId} />}
       <div className="flex-1 overflow-y-auto">
         <div className="flex items-center gap-2 px-6 pt-4 pb-1">
           <h2 className="text-[15px] font-semibold text-text-primary">{activeThread.subject}</h2>

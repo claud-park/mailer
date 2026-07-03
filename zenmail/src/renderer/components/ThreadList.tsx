@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMailStore } from '../store/mail';
 import { selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { SplitTabBar } from './SplitTabBar';
-import type { Label, SplitDefinition, ThreadSummary } from '../../shared/types';
+import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../shared/types';
 
 const ROW_HEIGHT = 56;
 const SWIPE_THRESHOLD = 100;
@@ -27,10 +27,12 @@ function ThreadRow({
   thread,
   selected,
   labelsById,
+  followup,
 }: {
   thread: ThreadSummary;
   selected: boolean;
   labelsById: Map<string, Label>;
+  followup?: FollowupInfo;
 }) {
   const openThread = useMailStore((s) => s.openThread);
   const archiveThread = useMailStore((s) => s.archiveThread);
@@ -122,6 +124,11 @@ function ThreadRow({
           {l.name}
         </span>
       ))}
+      {followup?.status === 'fired' && (
+        <span className="shrink-0 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+          No reply
+        </span>
+      )}
       <span className="w-16 shrink-0 text-right text-[11px] text-text-muted">
         {formatDate(thread.date)}
       </span>
@@ -141,6 +148,7 @@ export function ThreadList() {
   const labels = useMailStore((s) => s.labels);
   const loadMore = useMailStore((s) => s.loadMore);
   const activeThreadId = useMailStore((s) => s.activeThreadId);
+  const followups = useMailStore((s) => s.followups);
 
   const useSplit = splitInbox && activeLabelId === 'INBOX' && !searchQuery;
 
@@ -221,6 +229,7 @@ export function ThreadList() {
                     thread={thread}
                     selected={vi.index === selectedIndex}
                     labelsById={labelsById}
+                    followup={followups.get(thread.id)}
                   />
                 </div>
               );

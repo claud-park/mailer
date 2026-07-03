@@ -12,9 +12,12 @@ export function useThreads(): void {
 
   useEffect(() => {
     if (!signedIn) return;
-    const { refresh, showToast } = useMailStore.getState();
+    const { refresh, showToast, refreshFollowups } = useMailStore.getState();
 
-    const offUpdated = window.zenmail.onThreadsUpdated(() => void refresh());
+    const offUpdated = window.zenmail.onThreadsUpdated(() => {
+      void refresh();
+      void refreshFollowups();
+    });
     const offSnooze = window.zenmail.onSnoozeFired(() => showToast('A snoozed thread is back'));
     const poll = setInterval(() => void refresh(), POLL_MS);
 
