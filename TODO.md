@@ -4,7 +4,7 @@
 > Obsidian checkpoint: `_obsidian/Projects/ZenMail.md`
 > Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 ## 0. 프로젝트 셋업
 - [x] PRD.md / TODO.md 작성
@@ -87,7 +87,7 @@ Last updated: 2026-07-02
 
 > 각 feature는 DEV_WORKFLOW.md의 Goal 0~8 프로세스(superpowers plan → PRD → TODO → TC → DECISIONS → react-best-practices → impeccable audit → E2E → Obsidian)를 따른다.
 
-- [ ] F1 `split-inbox-plus` — Split Inbox 고도화 (wow #3)
+- [x] F1 `split-inbox-plus` — Split Inbox 고도화 (wow #3) — 2026-07-03 완료, TC 35 PASS·3 SKIP·0 FAIL (docs/features/split-inbox-plus/)
 - [ ] F2 `follow-up-reminders` — remind-if-no-reply / send & remind (wow #4)
 - [ ] F3 `keyboard-mastery` — 인터랙티브 튜토리얼·단축키 힌트 (wow #2)
 - [ ] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1)
