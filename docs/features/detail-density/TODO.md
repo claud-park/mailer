@@ -23,9 +23,9 @@
 - [x] ⌘Z 1스텝 undo 수동 확인(D6 근거 실증), tsc + npm test
 
 ## CP3. SnippetsManager CRUD
-- [ ] `components/SnippetsManager.tsx` — textarea 기반 목록/추가/편집/삭제, SplitSettings 미러(store 플래그 `snippetsOpen` + App 마운트)
-- [ ] CommandPalette "Snippets…" 액션
-- [ ] tsc + npm test
+- [x] `components/SnippetsManager.tsx` — textarea 기반 목록/추가/편집/삭제, SplitSettings 미러(store 플래그 `snippetsOpen` + App 마운트)
+- [x] CommandPalette "Snippets…" 액션
+- [x] tsc + npm test
 
 ## CP4. Instant Intro
 - [ ] `lib/intro.ts` — detectIntro(detail, me): D8 AND 게이트, 상수 노출(INTRO_MAX_MESSAGES, INTRO_SUBJECT_RE) + `lib/intro.test.ts`(양성·오탐 케이스: 일반 그룹 reply-all, 긴 스레드, 키워드 무, from=me)

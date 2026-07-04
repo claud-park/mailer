@@ -12,6 +12,7 @@ import { SnoozePicker } from './components/SnoozePicker';
 import { FollowupPicker } from './components/FollowupPicker';
 import { LabelPicker } from './components/LabelPicker';
 import { SplitSettings } from './components/SplitSettings';
+import { SnippetsManager } from './components/SnippetsManager';
 import { Login } from './components/Login';
 import { Toasts } from './components/Toasts';
 import { CoachToastHost } from './components/CoachToastHost';
@@ -41,6 +42,7 @@ function Shell() {
       <FollowupPicker />
       <LabelPicker />
       <SplitSettings />
+      <SnippetsManager />
       <CheatSheet />
       <StatsPanel />
       <Tutorial />

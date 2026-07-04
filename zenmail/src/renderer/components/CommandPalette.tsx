@@ -80,6 +80,12 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         perform: () => useMailStore.setState({ splitSettingsOpen: true }),
       },
       {
+        id: 'snippets',
+        name: 'Snippets…',
+        section: 'View',
+        perform: () => useMailStore.setState({ snippetsOpen: true }),
+      },
+      {
         id: 'cheatsheet',
         name: 'Keyboard shortcuts',
         shortcut: ['?'],

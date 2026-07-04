@@ -50,6 +50,7 @@ interface MailState {
   splitDefs: SplitDefinition[];
   activeSplitTab: string;
   splitSettingsOpen: boolean;
+  snippetsOpen: boolean;
   searchQuery: string;
   searchFocusTick: number;
 
@@ -84,6 +85,7 @@ interface MailState {
   prevTab(): void;
   saveSplits(defs: SplitDefinition[]): Promise<void>;
   closeSplitSettings(): void;
+  closeSnippets(): void;
   setSearchQuery(q: string): void;
   submitSearch(q: string): void;
   clearSearch(): void;
@@ -227,6 +229,7 @@ export const useMailStore = create<MailState>((set, get) => {
     splitDefs: [],
     activeSplitTab: INBOX_TAB,
     splitSettingsOpen: false,
+    snippetsOpen: false,
     searchQuery: '',
     searchFocusTick: 0,
 
@@ -388,6 +391,10 @@ export const useMailStore = create<MailState>((set, get) => {
 
     closeSplitSettings() {
       set({ splitSettingsOpen: false });
+    },
+
+    closeSnippets() {
+      set({ snippetsOpen: false });
     },
 
     setSearchQuery(q) {

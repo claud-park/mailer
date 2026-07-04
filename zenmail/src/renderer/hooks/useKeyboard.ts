@@ -65,6 +65,7 @@ export function useKeyboard(): void {
         s.snoozePickerOpen ||
         s.labelPickerOpen ||
         s.splitSettingsOpen ||
+        s.snippetsOpen ||
         s.followupPickerOpen ||
         coach.cheatSheetOpen ||
         coach.statsOpen
