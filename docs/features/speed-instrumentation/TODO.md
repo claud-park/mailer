@@ -9,12 +9,12 @@
 - [ ] D8(사용자向 UI 0) 사용자 복귀 시 확인
 
 ## CP1. `lib/latency.ts` 순수 코어 (배선 없음)
-- [ ] 버짓 테이블 상수 + `LatencyAction` 유니온 + `classify(actionId)`(budgeted/informational)
-- [ ] 고정 링버퍼(액션별 50) push/스냅샷
-- [ ] p50/p95 — n<20이면 null(coach 관례), 정렬 온디맨드
-- [ ] 위반 판정 + 집계 리듀서(`zenmail-latency` persist용 모양)
-- [ ] `lib/latency.test.ts` vitest (경계: 빈 버퍼, n=19/20, 링 순환, gross 카운트)
-- [ ] tsc + npm test 통과
+- [x] 버짓 테이블 상수 + `LatencyAction` 유니온 + `classify(actionId)`(budgeted/informational)
+- [x] 고정 링버퍼(액션별 50) push/스냅샷
+- [x] p50/p95 — n<20이면 null(coach 관례), 정렬 온디맨드
+- [x] 위반 판정 + 집계 리듀서(`zenmail-latency` persist용 모양)
+- [x] `lib/latency.test.ts` vitest (경계: 빈 버퍼, n=19/20, 링 순환, gross 카운트)
+- [x] tsc + npm test 통과
 
 ## CP2. 계측 배선 + F3 부채 완화
 - [ ] `store/latency.ts` — 휘발 링버퍼 보관 + `begin(actionId)`/`commit` (double-rAF 종료마크, set-return 델타 2차 기록)
