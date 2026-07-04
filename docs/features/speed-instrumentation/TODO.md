@@ -32,10 +32,10 @@
 - [x] tsc + npm test
 
 ## CP4. followup 낙관화 + openThread 계측
-- [ ] scheduleFollowup/cancelFollowup/dismissFollowup 낙관 전환 + invert 롤백 (D5), refreshFollowups는 사후 조정
-- [ ] followup 실패 주입 경로(debug IPC 확장 또는 공용 플래그)
-- [ ] openThread `openThread:select`(어포던스 페인트) / `openThread:content`(fetch-class) 분리 계측 (D7)
-- [ ] tsc + npm test
+- [x] scheduleFollowup/cancelFollowup/dismissFollowup 낙관 전환 + invert 롤백 (D5), refreshFollowups는 사후 조정
+- [x] followup 실패 주입 경로(debug IPC 확장 또는 공용 플래그)
+- [x] openThread `openThread:select`(어포던스 페인트) / `openThread:content`(fetch-class) 분리 계측 (D7)
+- [x] tsc + npm test
 
 ## CP5. 개발자 표면 + 위반 집계 persist
 - [ ] `components/LatencyHud.tsx` — ⌘⌥⇧L 토글(미광고), per-action p50/p95/count/위반수, CoachToastHost 형제 마운트 (D8)

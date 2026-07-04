@@ -229,15 +229,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:add-followup', async (_e, threadId: string, remindDays: number) => {
+    if (consumeDebugFailNextModify()) throw new Error('injected failure');
     const now = Date.now();
     cache.addFollowup(threadId, now, now + remindDays * DAY_MS);
   });
 
   ipcMain.handle('mail:cancel-followup', async (_e, threadId: string) => {
+    if (consumeDebugFailNextModify()) throw new Error('injected failure');
     cache.removeFollowup(threadId);
   });
 
   ipcMain.handle('mail:dismiss-followup', async (_e, threadId: string) => {
+    if (consumeDebugFailNextModify()) throw new Error('injected failure');
     cache.removeFollowup(threadId);
   });
 

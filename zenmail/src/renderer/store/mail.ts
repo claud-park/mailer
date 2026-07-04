@@ -14,6 +14,7 @@ import { useCoachStore } from './coach';
 import { instrument, recordRollback } from './latency';
 
 const api = () => window.zenmail;
+const DAY_MS = 86_400_000;
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
 
@@ -424,16 +425,20 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async openThread(id) {
+      const doneSelect = instrument('openThread:select');
+      const doneContent = instrument('openThread:content');
       const idx = visibleThreads(get()).findIndex((t) => t.id === id);
       set({
         activeThreadId: id,
         threadLoading: true,
         ...(idx >= 0 ? { selectedIndex: idx } : {}),
       });
+      doneSelect();
       try {
         const detail = await api().fetchThread(id);
         if (get().activeThreadId !== id) return; // stale response
         set({ activeThread: detail, threadLoading: false });
+        doneContent();
         const summary = get().threads.find((t) => t.id === id);
         if (summary?.unread) void get().markRead(id, true);
       } catch (err) {
@@ -711,31 +716,93 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async scheduleFollowup(days, threadId) {
+      const done = instrument('followup:add');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
-      set({ followupPickerOpen: false });
-      await api().addFollowup(id, days);
-      await get().refreshFollowups();
+      const previous = s.followups.get(id);
+      const optimistic: FollowupInfo = {
+        threadId: id,
+        status: 'pending',
+        dueAt: Date.now() + days * DAY_MS,
+      };
+      set((st) => {
+        const followups = new Map(st.followups);
+        followups.set(id, optimistic);
+        return { followups, followupPickerOpen: false };
+      });
+      done();
+      try {
+        await api().addFollowup(id, days);
+        void get().refreshFollowups();
+      } catch (err) {
+        console.error('scheduleFollowup failed', err);
+        set((st) => {
+          const followups = new Map(st.followups);
+          if (previous) followups.set(id, previous);
+          else followups.delete(id);
+          return { followups };
+        });
+        recordRollback('followup:add');
+        get().showToast('Reminder failed — restored');
+        return;
+      }
       get().showToast(`Reminder set — ${days} days`);
       useCoachStore.getState().bumpStat('followup');
     },
 
     async cancelFollowup(threadId) {
+      const done = instrument('followup:cancel');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
-      set({ followupPickerOpen: false });
-      await api().cancelFollowup(id);
-      await get().refreshFollowups();
+      const previous = s.followups.get(id);
+      set((st) => {
+        const followups = new Map(st.followups);
+        followups.delete(id);
+        return { followups, followupPickerOpen: false };
+      });
+      done();
+      try {
+        await api().cancelFollowup(id);
+        void get().refreshFollowups();
+      } catch (err) {
+        console.error('cancelFollowup failed', err);
+        set((st) => {
+          const followups = new Map(st.followups);
+          if (previous) followups.set(id, previous);
+          return { followups };
+        });
+        recordRollback('followup:cancel');
+        get().showToast('Cancel reminder failed — restored');
+      }
     },
 
     async dismissFollowup(threadId) {
+      const done = instrument('followup:dismiss');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
-      await api().dismissFollowup(id);
-      await get().refreshFollowups();
+      const previous = s.followups.get(id);
+      set((st) => {
+        const followups = new Map(st.followups);
+        followups.delete(id);
+        return { followups };
+      });
+      done();
+      try {
+        await api().dismissFollowup(id);
+        void get().refreshFollowups();
+      } catch (err) {
+        console.error('dismissFollowup failed', err);
+        set((st) => {
+          const followups = new Map(st.followups);
+          if (previous) followups.set(id, previous);
+          return { followups };
+        });
+        recordRollback('followup:dismiss');
+        get().showToast('Dismiss reminder failed — restored');
+      }
     },
 
     showToast(msg) {
