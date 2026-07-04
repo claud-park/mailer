@@ -12,6 +12,7 @@ import {
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { captureRemoval, reinsert, removeLabelId, toggleUnread, type RemovalCapture } from '../lib/optimistic';
 import { parseSnippets, SNIPPETS_KEY } from '../lib/snippets';
+import { detectIntro, type IntroSuggestion } from '../lib/intro';
 import { useCoachStore } from './coach';
 import { instrument, recordRollback } from './latency';
 
@@ -28,6 +29,7 @@ export interface ComposeInit {
   quotedHtml?: string;
   threadId?: string;
   inReplyTo?: string;
+  intro?: IntroSuggestion;
 }
 
 export interface PendingSend {
@@ -657,6 +659,7 @@ export const useMailStore = create<MailState>((set, get) => {
         quotedHtml: quoteHtml(detail),
         threadId: detail.id,
         inReplyTo: last.id,
+        intro: all && me ? detectIntro(detail, me) ?? undefined : undefined,
       });
     },
 

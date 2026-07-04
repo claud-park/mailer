@@ -28,11 +28,11 @@
 - [x] tsc + npm test
 
 ## CP4. Instant Intro
-- [ ] `lib/intro.ts` — detectIntro(detail, me): D8 AND 게이트, 상수 노출(INTRO_MAX_MESSAGES, INTRO_SUBJECT_RE) + `lib/intro.test.ts`(양성·오탐 케이스: 일반 그룹 reply-all, 긴 스레드, 키워드 무, from=me)
-- [ ] `store/mail.ts` — ComposeInit.intro 확장, openReply(replyAll)에서 detectIntro 배선
-- [ ] Compose 상단 배너 + 원클릭(To/Bcc 재배치·제3자 승격·showCcBcc·감사 문구 prepend) + × 해제
-- [ ] 데모 mock에 인트로형 스레드 존재 확인 → 부재 시 `__debugSeedIntroThread` 훅(D11)
-- [ ] tsc + npm test
+- [x] `lib/intro.ts` — detectIntro(detail, me): D8 AND 게이트, 상수 노출(INTRO_MAX_MESSAGES, INTRO_SUBJECT_RE) + `lib/intro.test.ts`(양성·오탐 케이스: 일반 그룹 reply-all, 긴 스레드, 키워드 무, from=me)
+- [x] `store/mail.ts` — ComposeInit.intro 확장, openReply(replyAll)에서 detectIntro 배선
+- [x] Compose 상단 배너 + 원클릭(To/Bcc 재배치·제3자 승격·showCcBcc·감사 문구 prepend) + × 해제
+- [x] 데모 mock에 인트로형 스레드 존재 확인 → 부재 시 `__debugSeedIntroThread` 훅(D11)
+- [x] tsc + npm test
 
 ## CP5. E2E (run-tc.mjs 확장, TC-DD-*)
 - [ ] 스니펫 시드(setSetting) + 피커 전 키보드 흐름 + 커서 정합성 AXB/AXYB 어서션

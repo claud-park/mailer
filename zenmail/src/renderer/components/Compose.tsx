@@ -10,6 +10,11 @@ import {
 import { textToFragment } from '../lib/snippets';
 import { SnippetPicker } from './SnippetPicker';
 
+/** D8: thank-you note prepended to the body when the intro banner's one-click apply is used. */
+function introThanks(name: string): string {
+  return `${name}, moving you to Bcc — thanks for the intro!\n\n`;
+}
+
 function RecipientField({
   label,
   values,
@@ -133,6 +138,7 @@ export function Compose() {
   const [remindCustomDays, setRemindCustomDays] = useState(FOLLOWUP_DEFAULT_DAYS);
   const [sending, setSending] = useState(false);
   const [snippetOpen, setSnippetOpen] = useState(false);
+  const [introDismissed, setIntroDismissed] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRangeRef = useRef<Range | null>(null);
 
@@ -147,6 +153,7 @@ export function Compose() {
     setScheduleAt('');
     setRemindOpen(false);
     setRemindDays(null);
+    setIntroDismissed(false);
     if (editorRef.current) editorRef.current.innerHTML = '';
   }, [composeInit]);
 
@@ -229,6 +236,24 @@ export function Compose() {
     setSnippetOpen(false);
   };
 
+  // D8 one-click apply: promote the third parties to To, move the introducer to Bcc, drop both
+  // from Cc, and prepend a short thank-you note above the rest of the body.
+  const applyIntro = () => {
+    const intro = composeInit.intro;
+    if (!intro) return;
+    setTo(intro.others);
+    setBcc([intro.introducer.email]);
+    setCc((prev) => prev.filter((e) => e !== intro.introducer.email && !intro.others.includes(e)));
+    setShowCcBcc(true);
+    const editor = editorRef.current;
+    if (editor) {
+      const frag = textToFragment(introThanks(intro.introducer.name || intro.introducer.email));
+      editor.insertBefore(frag, editor.firstChild);
+    }
+    setIntroDismissed(true);
+    editor?.focus();
+  };
+
   return (
     <div
       className="zen-fade-in absolute inset-0 z-30 flex flex-col bg-bg"
@@ -247,6 +272,29 @@ export function Compose() {
           ✕
         </button>
       </header>
+
+      {composeInit.intro && !introDismissed && (
+        <div className="flex items-center justify-between gap-2 border-b border-bg-border/60 bg-bg-subtle px-6 py-1.5 text-[12px] text-text-secondary">
+          <span>
+            Introduced by {composeInit.intro.introducer.name || composeInit.intro.introducer.email}?
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={applyIntro}
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20"
+            >
+              Move to Bcc &amp; thank
+            </button>
+            <button
+              onClick={() => setIntroDismissed(true)}
+              aria-label="Dismiss intro suggestion"
+              className="text-text-muted hover:text-text-primary"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       <div
         className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-y-auto px-6 py-4"

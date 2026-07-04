@@ -479,6 +479,47 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     ], { quoted: 'On Mon, you wrote:<br>Can we finalize the interview loop by Wednesday?', messageCount: 3 }),
   ];
 
+  // F5 CP4 (Instant Intro, DECISIONS D8): a short double opt-in intro — one message, from a third
+  // party, cc'ing another third party, subject reads as an intro. Deliberately from a sender that
+  // matches none of the default split rules (not ana@linearly.dev, not the @zenmail.app domain, not
+  // a newsletter-pattern address) so it lands in the Other tab and doesn't disturb VIP/Team/Newsletter
+  // counts or ordering relied on elsewhere in the demo data / E2E suite.
+  const introFrom: Contact = { name: 'Jamie Wu', email: 'jamie@indiehatch.dev' };
+  const introOther: Contact = { name: 'Yuna Cho', email: 'yuna.cho@partnerco.dev' };
+  const introSubject = 'Intro: Yuna <> ZenMail team';
+  const introSnippet = 'Meet Yuna — she leads partnerships at Partner Co and has been asking about our API.';
+  const introParagraphs = [
+    'Meet Yuna — she leads partnerships at Partner Co and has been asking about our API.',
+    'Yuna, meet the ZenMail team. I\'ll let you two take it from here!',
+  ];
+  const introId = 'demo_20';
+  const introLabelIds = ['INBOX'];
+  const introMessage = {
+    id: `${introId}_m0`,
+    threadId: introId,
+    from: introFrom,
+    to: [{ name: 'You', email: 'demo@zenmail.app' }],
+    cc: [introOther],
+    date: now - 6 * h,
+    snippet: introSnippet,
+    bodyHtml: demoBody(introParagraphs),
+    bodyText: introParagraphs.join('\n\n'),
+    labelIds: introLabelIds,
+  };
+  threads.push({
+    summary: {
+      id: introId,
+      subject: introSubject,
+      from: introFrom,
+      snippet: introSnippet,
+      date: introMessage.date,
+      unread: false,
+      labelIds: introLabelIds,
+      messageCount: 1,
+    },
+    detail: { id: introId, subject: introSubject, labelIds: introLabelIds, messages: [introMessage] },
+  });
+
   return { threads, labels, senders };
 }
 
