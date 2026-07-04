@@ -17,12 +17,12 @@
 - [x] tsc + npm test 통과
 
 ## CP2. 계측 배선 + F3 부채 완화
-- [ ] `store/latency.ts` — 휘발 링버퍼 보관 + `begin(actionId)`/`commit` (double-rAF 종료마크, set-return 델타 2차 기록)
-- [ ] mail.ts 뮤테이션 6종(archive/trash/markRead/applyLabel/snooze/send) 진입점 계측 배선 — 동작 무변경
-- [ ] `window.__zenmailLatency = { snapshot() }` 노출 (D9, 무조건)
-- [ ] D12: CommandPalette.tsx `recordEfficient`를 perform() 뒤로 이동
-- [ ] 위반 시 DEV console.warn
-- [ ] tsc + npm test + 수동 스모크(npm start, 스냅샷 확인)
+- [x] `store/latency.ts` — 휘발 링버퍼 보관 + `begin(actionId)`/`commit` (double-rAF 종료마크, set-return 델타 2차 기록)
+- [x] mail.ts 뮤테이션 6종(archive/trash/markRead/applyLabel/snooze/send) 진입점 계측 배선 — 동작 무변경
+- [x] `window.__zenmailLatency = { snapshot() }` 노출 (D9, 무조건)
+- [x] D12: CommandPalette.tsx `recordEfficient`를 perform() 뒤로 이동
+- [x] 위반 시 DEV console.warn
+- [x] tsc + npm test (스냅샷 실측 스모크는 CP6 E2E에서 수행)
 
 ## CP3. 롤백 (`withOptimistic`)
 - [ ] `withOptimistic(actionId, mutate, invert)` 헬퍼 — invert set + 에러 토스트 + refresh() 사후 조정 (D4)

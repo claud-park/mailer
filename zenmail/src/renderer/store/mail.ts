@@ -10,6 +10,7 @@ import {
 } from '../../shared/types';
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { useCoachStore } from './coach';
+import { instrument } from './latency';
 
 const api = () => window.zenmail;
 
@@ -447,6 +448,7 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async archiveThread(threadId) {
+      const done = instrument('archive');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
@@ -459,12 +461,14 @@ export const useMailStore = create<MailState>((set, get) => {
           ...(st.activeThreadId === id ? { activeThreadId: null, activeThread: null } : {}),
         };
       });
+      done();
       await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
       get().showToast('Archived');
       useCoachStore.getState().bumpStat('archive');
     },
 
     async trashThread(threadId) {
+      const done = instrument('trash');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
@@ -477,12 +481,14 @@ export const useMailStore = create<MailState>((set, get) => {
           ...(st.activeThreadId === id ? { activeThreadId: null, activeThread: null } : {}),
         };
       });
+      done();
       await api().modifyLabels({ threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
       get().showToast('Moved to trash');
       useCoachStore.getState().bumpStat('trash');
     },
 
     async markRead(threadId, read = true) {
+      const done = instrument('markRead');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
@@ -497,6 +503,7 @@ export const useMailStore = create<MailState>((set, get) => {
             : t
         ),
       }));
+      done();
       await api().modifyLabels({
         threadId: id,
         addLabelIds: read ? [] : ['UNREAD'],
@@ -506,6 +513,7 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async applyLabel(labelId, threadId) {
+      const done = instrument('applyLabel');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
@@ -519,11 +527,13 @@ export const useMailStore = create<MailState>((set, get) => {
         const next = { ...st, threads };
         return { threads, selectedIndex: clampSelection(next) };
       });
+      done();
       await api().modifyLabels({ threadId: id, addLabelIds: [labelId], removeLabelIds: [] });
       get().showToast('Label applied');
     },
 
     async snoozeThread(until, threadId) {
+      const done = instrument('snooze');
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
@@ -537,6 +547,7 @@ export const useMailStore = create<MailState>((set, get) => {
           ...(st.activeThreadId === id ? { activeThreadId: null, activeThread: null } : {}),
         };
       });
+      done();
       await api().snooze({ threadId: id, until: until.toISOString() });
       get().showToast(`Snoozed until ${until.toLocaleString()}`);
       useCoachStore.getState().bumpStat('snooze');
@@ -591,8 +602,10 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async send(req) {
+      const done = instrument('send');
       const receipt = await api().send(req);
       set({ composeInit: null });
+      done();
       useCoachStore.getState().bumpStat('send');
       if (req.sendAt) {
         get().showToast(`Scheduled for ${new Date(req.sendAt).toLocaleString()}`);

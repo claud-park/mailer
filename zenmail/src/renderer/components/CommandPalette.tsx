@@ -101,8 +101,9 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
     ].map((a) => ({
       ...a,
       perform: () => {
+        const result = a.perform?.();
         useCoachStore.getState().recordEfficient(a.id);
-        return a.perform?.();
+        return result;
       },
     }));
   }, []);
