@@ -7,6 +7,8 @@ import {
   FOLLOWUP_DEFAULT_DAYS_KEY,
   formatRemindDays,
 } from '../lib/followup';
+import { textToFragment } from '../lib/snippets';
+import { SnippetPicker } from './SnippetPicker';
 
 function RecipientField({
   label,
@@ -117,6 +119,7 @@ export function Compose() {
   const closeCompose = useMailStore((s) => s.closeCompose);
   const send = useMailStore((s) => s.send);
   const showToast = useMailStore((s) => s.showToast);
+  const snippets = useMailStore((s) => s.snippets);
 
   const [to, setTo] = useState<string[]>([]);
   const [cc, setCc] = useState<string[]>([]);
@@ -129,7 +132,9 @@ export function Compose() {
   const [remindDays, setRemindDays] = useState<number | null>(null);
   const [remindCustomDays, setRemindCustomDays] = useState(FOLLOWUP_DEFAULT_DAYS);
   const [sending, setSending] = useState(false);
+  const [snippetOpen, setSnippetOpen] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+  const savedRangeRef = useRef<Range | null>(null);
 
   useEffect(() => {
     if (!composeInit) return;
@@ -185,6 +190,45 @@ export function Compose() {
     }
   };
 
+  // D6 order: focus editor → restore saved caret → insert → close picker last (no blur race)
+  const insertSnippet = (body: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel) return;
+    let range = savedRangeRef.current;
+    if (!range) {
+      // no saved caret (subject field / unfocused) → append at editor end
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, body);
+    } catch {
+      inserted = false;
+    }
+    if (!inserted) {
+      range.deleteContents();
+      const frag = textToFragment(body);
+      const last = frag.lastChild;
+      range.insertNode(frag);
+      if (last) {
+        range.setStartAfter(last);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+    savedRangeRef.current = null;
+    setSnippetOpen(false);
+  };
+
   return (
     <div
       className="zen-fade-in absolute inset-0 z-30 flex flex-col bg-bg"
@@ -207,6 +251,16 @@ export function Compose() {
       <div
         className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-y-auto px-6 py-4"
         onKeyDown={(e) => {
+          if (e.metaKey && e.key === ';') {
+            e.preventDefault();
+            const sel = window.getSelection();
+            savedRangeRef.current =
+              sel && sel.rangeCount && editorRef.current?.contains(sel.anchorNode)
+                ? sel.getRangeAt(0).cloneRange()
+                : null; // subject field / no focus → append-at-end fallback
+            setSnippetOpen(true);
+            return;
+          }
           if (e.key === 'Escape') {
             e.stopPropagation();
             closeCompose();
@@ -353,6 +407,17 @@ export function Compose() {
         )}
         <span className="ml-auto text-[11px] text-text-muted">10s undo window after send</span>
       </footer>
+
+      {snippetOpen && (
+        <SnippetPicker
+          snippets={snippets}
+          onInsert={insertSnippet}
+          onClose={() => {
+            savedRangeRef.current = null;
+            setSnippetOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -9,18 +9,18 @@
 - [x] PRD/TODO/TC/DECISIONS 작성
 
 ## CP1. Snippets 데이터층 (UI 없음)
-- [ ] `shared/types.ts` — `SnippetRecord { id; name; body; createdAt }` (ZenmailApi 무변경)
-- [ ] `lib/snippets.ts` — SNIPPETS_KEY, parse 가드(손상 JSON→[]), filterSnippets(검색), textToFragment(createTextNode+br, escape 불요 원리 주석)
-- [ ] `store/mail.ts` — `snippets` 상태 + loadSnippets(init 배선)/saveSnippets(setSetting)
-- [ ] `lib/snippets.test.ts` vitest (파싱 가드·필터·개행 변환·빈 목록)
-- [ ] tsc + npm test
+- [x] `shared/types.ts` — `SnippetRecord { id; name; body; createdAt }` (ZenmailApi 무변경)
+- [x] `lib/snippets.ts` — SNIPPETS_KEY, parse 가드(손상 JSON→[]), filterSnippets(검색), textToFragment(createTextNode+br, escape 불요 원리 주석)
+- [x] `store/mail.ts` — `snippets` 상태 + loadSnippets(init 배선)/saveSnippets(setSetting)
+- [x] `lib/snippets.test.ts` vitest (파싱 가드·필터·개행 변환·빈 목록)
+- [x] tsc + npm test
 
 ## CP2. SnippetPicker + ⌘; 삽입 (커서 정합성 — 최대 불확실성 우선)
-- [ ] Compose 내부 onKeyDown에 ⌘; 분기 — Range 스냅샷 저장(editor 포함 여부 가드) + 피커 오픈
-- [ ] `components/SnippetPicker.tsx` — 검색 input autofocus·↑↓·Enter·Esc, 모달 stopPropagation 규약, 빈 상태 안내
-- [ ] 삽입: focus→addRange(saved)→execCommand('insertText') 1차→insertNode(textToFragment) 폴백→캐럿 끝→닫기 (D6 순서)
-- [ ] 본문 무포커스 폴백(끝 append+focus)
-- [ ] ⌘Z 1스텝 undo 수동 확인(D6 근거 실증), tsc + npm test
+- [x] Compose 내부 onKeyDown에 ⌘; 분기 — Range 스냅샷 저장(editor 포함 여부 가드) + 피커 오픈
+- [x] `components/SnippetPicker.tsx` — 검색 input autofocus·↑↓·Enter·Esc, 모달 stopPropagation 규약, 빈 상태 안내
+- [x] 삽입: focus→addRange(saved)→execCommand('insertText') 1차→insertNode(textToFragment) 폴백→캐럿 끝→닫기 (D6 순서)
+- [x] 본문 무포커스 폴백(끝 append+focus)
+- [x] ⌘Z 1스텝 undo 수동 확인(D6 근거 실증), tsc + npm test
 
 ## CP3. SnippetsManager CRUD
 - [ ] `components/SnippetsManager.tsx` — textarea 기반 목록/추가/편집/삭제, SplitSettings 미러(store 플래그 `snippetsOpen` + App 마운트)
