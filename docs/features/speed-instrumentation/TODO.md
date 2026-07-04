@@ -25,11 +25,11 @@
 - [x] tsc + npm test (스냅샷 실측 스모크는 CP6 E2E에서 수행)
 
 ## CP3. 롤백 (`withOptimistic`)
-- [ ] `withOptimistic(actionId, mutate, invert)` 헬퍼 — invert set + 에러 토스트 + refresh() 사후 조정 (D4)
-- [ ] 5개 낙관 액션(archive/trash/markRead/applyLabel/snooze)에 적용 — invert: 재삽입 가드/멱등 필드 반전
-- [ ] `mail:__debug-fail-next-modify` debug IPC (ZENMAIL_E2E_PORT 게이트, D11)
-- [ ] invert 동시성 단위 테스트(겹친 in-flight 시나리오)
-- [ ] tsc + npm test
+- [x] `withOptimistic(actionId, mutate, invert)` 헬퍼 — invert set + 에러 토스트 + refresh() 사후 조정 (D4)
+- [x] 5개 낙관 액션(archive/trash/markRead/applyLabel/snooze)에 적용 — invert: 재삽입 가드/멱등 필드 반전
+- [x] `mail:__debug-fail-next-modify` debug IPC (ZENMAIL_E2E_PORT 게이트, D11)
+- [x] invert 동시성 단위 테스트(겹친 in-flight 시나리오)
+- [x] tsc + npm test
 
 ## CP4. followup 낙관화 + openThread 계측
 - [ ] scheduleFollowup/cancelFollowup/dismissFollowup 낙관 전환 + invert 롤백 (D5), refreshFollowups는 사후 조정

@@ -9,8 +9,9 @@ import {
   type ThreadSummary,
 } from '../../shared/types';
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
+import { captureRemoval, reinsert, removeLabelId, toggleUnread, type RemovalCapture } from '../lib/optimistic';
 import { useCoachStore } from './coach';
-import { instrument } from './latency';
+import { instrument, recordRollback } from './latency';
 
 const api = () => window.zenmail;
 
@@ -194,6 +195,14 @@ export const useMailStore = create<MailState>((set, get) => {
     } catch (err) {
       console.error('loadSplitState failed', err);
     }
+  }
+
+  /** Reinserts a captured removal (if any) and records the rollback (F4 CP3, DECISIONS D4). */
+  function rollbackRemoval(capture: RemovalCapture | null, action: 'archive' | 'trash' | 'snooze'): void {
+    if (capture) {
+      set((st) => ({ threads: reinsert(st.threads, capture) }));
+    }
+    recordRollback(action);
   }
 
   return {
@@ -452,6 +461,7 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -462,7 +472,15 @@ export const useMailStore = create<MailState>((set, get) => {
         };
       });
       done();
-      await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
+      try {
+        await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
+      } catch (err) {
+        console.error('archiveThread failed', err);
+        rollbackRemoval(capture, 'archive');
+        get().showToast('Archive failed — restored');
+        void get().refresh();
+        return;
+      }
       get().showToast('Archived');
       useCoachStore.getState().bumpStat('archive');
     },
@@ -472,6 +490,7 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -482,7 +501,15 @@ export const useMailStore = create<MailState>((set, get) => {
         };
       });
       done();
-      await api().modifyLabels({ threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
+      try {
+        await api().modifyLabels({ threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
+      } catch (err) {
+        console.error('trashThread failed', err);
+        rollbackRemoval(capture, 'trash');
+        get().showToast('Trash failed — restored');
+        void get().refresh();
+        return;
+      }
       get().showToast('Moved to trash');
       useCoachStore.getState().bumpStat('trash');
     },
@@ -492,6 +519,7 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const prevUnread = s.threads.find((t) => t.id === id)?.unread ?? !read;
       set((st) => ({
         threads: st.threads.map((t) =>
           t.id === id
@@ -504,11 +532,20 @@ export const useMailStore = create<MailState>((set, get) => {
         ),
       }));
       done();
-      await api().modifyLabels({
-        threadId: id,
-        addLabelIds: read ? [] : ['UNREAD'],
-        removeLabelIds: read ? ['UNREAD'] : [],
-      });
+      try {
+        await api().modifyLabels({
+          threadId: id,
+          addLabelIds: read ? [] : ['UNREAD'],
+          removeLabelIds: read ? ['UNREAD'] : [],
+        });
+      } catch (err) {
+        console.error('markRead failed', err);
+        set((st) => ({ threads: toggleUnread(st.threads, id, prevUnread) }));
+        recordRollback('markRead');
+        get().showToast('Mark as read failed — restored');
+        void get().refresh();
+        return;
+      }
       void get().loadLabels();
     },
 
@@ -528,7 +565,16 @@ export const useMailStore = create<MailState>((set, get) => {
         return { threads, selectedIndex: clampSelection(next) };
       });
       done();
-      await api().modifyLabels({ threadId: id, addLabelIds: [labelId], removeLabelIds: [] });
+      try {
+        await api().modifyLabels({ threadId: id, addLabelIds: [labelId], removeLabelIds: [] });
+      } catch (err) {
+        console.error('applyLabel failed', err);
+        set((st) => ({ threads: removeLabelId(st.threads, id, labelId) }));
+        recordRollback('applyLabel');
+        get().showToast('Apply label failed — restored');
+        void get().refresh();
+        return;
+      }
       get().showToast('Label applied');
     },
 
@@ -537,6 +583,7 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -548,7 +595,15 @@ export const useMailStore = create<MailState>((set, get) => {
         };
       });
       done();
-      await api().snooze({ threadId: id, until: until.toISOString() });
+      try {
+        await api().snooze({ threadId: id, until: until.toISOString() });
+      } catch (err) {
+        console.error('snoozeThread failed', err);
+        rollbackRemoval(capture, 'snooze');
+        get().showToast('Snooze failed — restored');
+        void get().refresh();
+        return;
+      }
       get().showToast(`Snoozed until ${until.toLocaleString()}`);
       useCoachStore.getState().bumpStat('snooze');
     },

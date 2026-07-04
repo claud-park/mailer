@@ -161,6 +161,8 @@ export interface ZenmailApi {
   /** E2E-only: force-add/replace a followup whose baseline+due are both "now" (bypasses the
    *  FollowupPicker's day-count-only input so tests can exercise the due-in-the-past path). */
   __debugAddFollowupDueNow?(threadId: string): Promise<void>;
+  /** E2E-only: makes the next mail:modify-labels or mail:snooze call throw (one-shot, consumed on use). */
+  __debugFailNextModify?(): Promise<void>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';

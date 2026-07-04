@@ -21,6 +21,15 @@ const DAY_MS = 86_400_000;
 let provider: GmailProvider | null = null;
 const pendingSends = new Map<string, NodeJS.Timeout>();
 
+// E2E-only: consumed (one-shot) by the next mail:modify-labels or mail:snooze call —
+// only ever set true via the ZENMAIL_E2E_PORT-gated mail:debug-fail-next-modify handler below.
+let debugFailNextModify = false;
+function consumeDebugFailNextModify(): boolean {
+  if (!debugFailNextModify) return false;
+  debugFailNextModify = false;
+  return true;
+}
+
 export function getProvider(): GmailProvider | null {
   return provider;
 }
@@ -146,11 +155,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:modify-labels', async (_e, req: ModifyLabelsRequest) => {
+    if (consumeDebugFailNextModify()) throw new Error('injected failure');
     await requireProvider().modifyThread(req);
     notifyThreadsUpdated();
   });
 
   ipcMain.handle('mail:snooze', async (_e, req: SnoozeRequest) => {
+    if (consumeDebugFailNextModify()) throw new Error('injected failure');
     const p = requireProvider();
     const snoozeLabel = await p.snoozeLabelId();
     await p.modifyThread({
@@ -250,6 +261,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ipcMain.handle('mail:debug-add-followup-due-now', async (_e, threadId: string) => {
       const now = Date.now();
       cache.addFollowup(threadId, now, now);
+    });
+
+    ipcMain.handle('mail:debug-fail-next-modify', async () => {
+      debugFailNextModify = true;
     });
   }
 }

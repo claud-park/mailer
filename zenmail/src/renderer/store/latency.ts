@@ -14,6 +14,12 @@ import {
 } from '../lib/latency';
 
 const buffers: Partial<Record<LatencyAction, LatencySample[]>> = {};
+const rollbacks: Partial<Record<LatencyAction, number>> = {};
+
+/** Records one optimistic-mutation rollback for `action` (F4 CP3 — failure recovery). */
+export function recordRollback(action: LatencyAction): void {
+  rollbacks[action] = (rollbacks[action] ?? 0) + 1;
+}
 
 /**
  * Stamps t0 and returns a completion mark to call right after the optimistic
@@ -40,9 +46,9 @@ export function instrument(action: LatencyAction): () => void {
   };
 }
 
-/** Builds a fresh LatencySnapshot from the live ring buffers. */
+/** Builds a fresh LatencySnapshot from the live ring buffers, plus per-action rollback counts. */
 export function latencySnapshot() {
-  return snapshotOf(buffers);
+  return { actions: snapshotOf(buffers), rollbacks: { ...rollbacks } };
 }
 
 // E2E / diagnostics read-only exposure (D9 — always exposed, no env gate).

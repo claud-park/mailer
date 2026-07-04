@@ -58,6 +58,7 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugTick = () => ipcRenderer.invoke('mail:debug-tick');
   api.__debugAddFollowupDueNow = (threadId: string) =>
     ipcRenderer.invoke('mail:debug-add-followup-due-now', threadId);
+  api.__debugFailNextModify = () => ipcRenderer.invoke('mail:debug-fail-next-modify');
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);
