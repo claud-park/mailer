@@ -44,13 +44,13 @@
 - [x] tsc + npm test
 
 ## CP6. E2E 게이트 (run-tc.mjs 확장)
-- [ ] `latencyState(page)` 헬퍼 — `window.__zenmailLatency.snapshot()` 판독
-- [ ] TC-SP-B* burst 게이트: 웜업 2 폐기, K≥25, p50≤100 && gross(400ms)==0 (D10)
-- [ ] TC-SP-C* 롤백: 실패 주입 → 복원+토스트, 연타 부분 실패 정합성
-- [ ] TC-SP-D*/E*/F* followup 낙관·openThread 분리·HUD
-- [ ] TC-SP-G2: 기존 F1~F3 전체(93건) 무회귀 — 특히 D12 이동 후 TC-KM-*
-- [ ] 기존 npm test/tsc 게이트 앞에 배선, 연속 2회 재실행 안정성 확인
-- [ ] TC.md 상태 갱신
+- [x] `latencyState(page)` 헬퍼 — `window.__zenmailLatency.snapshot()` 판독
+- [x] TC-SP-B* burst 게이트: 웜업 2 폐기, K≥25, p50≤100 && gross(400ms)==0 (D10)
+- [x] TC-SP-C* 롤백: 실패 주입 → 복원+토스트, 연타 부분 실패 정합성
+- [x] TC-SP-D*/E*/F* followup 낙관·openThread 분리·HUD
+- [x] TC-SP-G2: 기존 F1~F3 전체(93건) 무회귀 — 특히 D12 이동 후 TC-KM-*
+- [x] 기존 npm test/tsc 게이트 앞에 배선, 연속 2회 재실행 안정성 확인
+- [x] TC.md 상태 갱신
 
 ## CP7. 마무리 (Goal 5~8)
 - [ ] /react-best-practices 리뷰 반영
