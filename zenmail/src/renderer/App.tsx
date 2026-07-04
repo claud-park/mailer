@@ -18,6 +18,7 @@ import { CoachToastHost } from './components/CoachToastHost';
 import { CheatSheet } from './components/CheatSheet';
 import { StatsPanel } from './components/StatsPanel';
 import { Tutorial } from './components/Tutorial';
+import { LatencyHud } from './components/LatencyHud';
 
 function Shell() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
@@ -45,6 +46,7 @@ function Shell() {
       <Tutorial />
       <CoachToastHost />
       <Toasts />
+      <LatencyHud />
     </div>
   );
 }

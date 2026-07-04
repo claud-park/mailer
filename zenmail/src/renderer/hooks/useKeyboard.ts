@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useMailStore } from '../store/mail';
 import { useCoachStore } from '../store/coach';
+import { toggleHud } from '../store/latency';
 import { computeSplits } from '../lib/splits';
 
 function isTyping(target: EventTarget | null): boolean {
@@ -26,6 +27,14 @@ export function useKeyboard(): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const s = useMailStore.getState();
+
+      // ⌘⌥⇧L — hidden diagnostic HUD toggle (unadvertised, works even while
+      // typing/modal-open since it's a read-only overlay, not a mutating action)
+      if (e.metaKey && e.altKey && e.shiftKey && e.code === 'KeyL') {
+        e.preventDefault();
+        toggleHud();
+        return;
+      }
 
       // ⌘⇧I — split/unified toggle works even while typing
       if (e.metaKey && e.shiftKey && e.code === 'KeyI') {

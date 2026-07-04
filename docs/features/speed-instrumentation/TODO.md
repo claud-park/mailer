@@ -38,10 +38,10 @@
 - [x] tsc + npm test
 
 ## CP5. 개발자 표면 + 위반 집계 persist
-- [ ] `components/LatencyHud.tsx` — ⌘⌥⇧L 토글(미광고), per-action p50/p95/count/위반수, CoachToastHost 형제 마운트 (D8)
-- [ ] `zenmail-latency` 위반 집계 persist(원시 샘플 제외 — D3)
-- [ ] HUD 열림 중 전역 단축키 간섭 없음(오버레이 비모달 — 읽기 전용)
-- [ ] tsc + npm test
+- [x] `components/LatencyHud.tsx` — ⌘⌥⇧L 토글(미광고), per-action p50/p95/count/위반수, CoachToastHost 형제 마운트 (D8)
+- [x] `zenmail-latency` 위반 집계 persist(원시 샘플 제외 — D3)
+- [x] HUD 열림 중 전역 단축키 간섭 없음(오버레이 비모달 — 읽기 전용)
+- [x] tsc + npm test
 
 ## CP6. E2E 게이트 (run-tc.mjs 확장)
 - [ ] `latencyState(page)` 헬퍼 — `window.__zenmailLatency.snapshot()` 판독
