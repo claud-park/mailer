@@ -53,7 +53,7 @@
 - [x] TC.md 상태 갱신
 
 ## CP7. 마무리 (Goal 5~8)
-- [ ] /react-best-practices 리뷰 반영
-- [ ] /impeccable 대체(web-design-guidelines, F1 D14 선례) 감사 — HUD·에러 토스트 표면
-- [ ] /code-review low → 최종 커밋 → push
-- [ ] DEV_WORKFLOW/TODO 스냅샷 갱신 + Obsidian 체크포인트
+- [x] /react-best-practices 리뷰 (CP5, 클린)
+- [x] web-design-guidelines 감사(HUD·에러 토스트) — pass
+- [x] /code-review low (CP별 + 최종 전체 범위, findings 없음) → 커밋 → push
+- [x] DEV_WORKFLOW/TODO 스냅샷 갱신 + Obsidian 체크포인트
