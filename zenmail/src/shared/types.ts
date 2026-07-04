@@ -125,6 +125,13 @@ export interface FollowupInfo {
   dueAt: number;
 }
 
+export interface SnippetRecord {
+  id: string;
+  name: string;
+  body: string;
+  createdAt: number;
+}
+
 /** API surface exposed on window.zenmail via contextBridge */
 export interface ZenmailApi {
   getAccount(): Promise<AccountInfo | null>;

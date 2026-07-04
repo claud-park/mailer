@@ -4,12 +4,14 @@ import {
   type FollowupInfo,
   type Label,
   type SendRequest,
+  type SnippetRecord,
   type SplitDefinition,
   type ThreadDetail,
   type ThreadSummary,
 } from '../../shared/types';
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { captureRemoval, reinsert, removeLabelId, toggleUnread, type RemovalCapture } from '../lib/optimistic';
+import { parseSnippets, SNIPPETS_KEY } from '../lib/snippets';
 import { useCoachStore } from './coach';
 import { instrument, recordRollback } from './latency';
 
@@ -63,6 +65,7 @@ interface MailState {
   followups: Map<string, FollowupInfo>;
   pendingSend: PendingSend | null;
   toast: string | null;
+  snippets: SnippetRecord[];
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -117,6 +120,9 @@ interface MailState {
   cancelFollowup(threadId?: string): Promise<void>;
   dismissFollowup(threadId?: string): Promise<void>;
   showToast(msg: string): void;
+
+  loadSnippets(): Promise<void>;
+  saveSnippets(list: SnippetRecord[]): Promise<void>;
 }
 
 /** true when the split tab bar is the thing driving what's on screen (see ThreadList's `useSplit`) */
@@ -236,6 +242,7 @@ export const useMailStore = create<MailState>((set, get) => {
     followups: new Map(),
     pendingSend: null,
     toast: null,
+    snippets: [],
 
     async init() {
       api().onFollowupFired((threadId) => {
@@ -251,7 +258,7 @@ export const useMailStore = create<MailState>((set, get) => {
         const account = await api().getAccount();
         set({ account, accountLoading: false });
         if (account) {
-          await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
+          await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
         }
       } catch (err) {
         set({ accountLoading: false, authError: String(err) });
@@ -263,7 +270,7 @@ export const useMailStore = create<MailState>((set, get) => {
       try {
         const account = await api().signIn();
         set({ account });
-        await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
+        await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
       } catch (err) {
         set({ authError: err instanceof Error ? err.message : String(err) });
       }
@@ -272,7 +279,7 @@ export const useMailStore = create<MailState>((set, get) => {
     async signInDemo() {
       const account = await api().signInDemo();
       set({ account, authError: null });
-      await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups()]);
+      await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
     },
 
     async signOut() {
@@ -810,6 +817,20 @@ export const useMailStore = create<MailState>((set, get) => {
       setTimeout(() => {
         if (get().toast === msg) set({ toast: null });
       }, 2500);
+    },
+
+    async loadSnippets() {
+      try {
+        const raw = await api().getSetting(SNIPPETS_KEY);
+        set({ snippets: parseSnippets(raw) });
+      } catch (err) {
+        console.error('loadSnippets failed', err);
+      }
+    },
+
+    async saveSnippets(list) {
+      set({ snippets: list });
+      await api().setSetting(SNIPPETS_KEY, JSON.stringify(list));
     },
   };
 });
