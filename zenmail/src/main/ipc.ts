@@ -29,6 +29,15 @@ function consumeDebugFailNextModify(): boolean {
   debugFailNextModify = false;
   return true;
 }
+// The injected failure must land *after* the mock provider's ~120ms round-trip would have,
+// so E2E can overlap a second real mutation inside the failure window (TC-SP-C2's whole
+// point). An instant throw resolves the rollback before the harness can even press the
+// second key, collapsing the concurrency the test exists to exercise.
+async function maybeInjectDebugFailure(): Promise<void> {
+  if (!consumeDebugFailNextModify()) return;
+  await new Promise((r) => setTimeout(r, 400));
+  throw new Error('injected failure');
+}
 
 export function getProvider(): GmailProvider | null {
   return provider;
@@ -155,13 +164,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:modify-labels', async (_e, req: ModifyLabelsRequest) => {
-    if (consumeDebugFailNextModify()) throw new Error('injected failure');
+    await maybeInjectDebugFailure();
     await requireProvider().modifyThread(req);
     notifyThreadsUpdated();
   });
 
   ipcMain.handle('mail:snooze', async (_e, req: SnoozeRequest) => {
-    if (consumeDebugFailNextModify()) throw new Error('injected failure');
+    await maybeInjectDebugFailure();
     const p = requireProvider();
     const snoozeLabel = await p.snoozeLabelId();
     await p.modifyThread({
@@ -229,18 +238,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:add-followup', async (_e, threadId: string, remindDays: number) => {
-    if (consumeDebugFailNextModify()) throw new Error('injected failure');
+    await maybeInjectDebugFailure();
     const now = Date.now();
     cache.addFollowup(threadId, now, now + remindDays * DAY_MS);
   });
 
   ipcMain.handle('mail:cancel-followup', async (_e, threadId: string) => {
-    if (consumeDebugFailNextModify()) throw new Error('injected failure');
+    await maybeInjectDebugFailure();
     cache.removeFollowup(threadId);
   });
 
   ipcMain.handle('mail:dismiss-followup', async (_e, threadId: string) => {
-    if (consumeDebugFailNextModify()) throw new Error('injected failure');
+    await maybeInjectDebugFailure();
     cache.removeFollowup(threadId);
   });
 

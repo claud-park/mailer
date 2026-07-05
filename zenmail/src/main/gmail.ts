@@ -500,7 +500,9 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     from: introFrom,
     to: [{ name: 'You', email: 'demo@zenmail.app' }],
     cc: [introOther],
-    date: now - 6 * h,
+    // oldest seed on purpose: keeps demo_20 at the bottom of the INBOX so the
+    // index/order assumptions of earlier E2E scenarios (F2 TC-FUP-*) are undisturbed
+    date: now - 120 * h,
     snippet: introSnippet,
     bodyHtml: demoBody(introParagraphs),
     bodyText: introParagraphs.join('\n\n'),

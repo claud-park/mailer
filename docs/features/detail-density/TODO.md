@@ -35,11 +35,11 @@
 - [x] tsc + npm test
 
 ## CP5. E2E (run-tc.mjs 확장, TC-DD-*)
-- [ ] 스니펫 시드(setSetting) + 피커 전 키보드 흐름 + 커서 정합성 AXB/AXYB 어서션
-- [ ] 제목 필드 폴백, CRUD 반영, 빈 상태
-- [ ] 인트로 양성(Bcc 이동·To 승격·문구)·음성(일반 그룹 reply-all 배너 부재)
-- [ ] 기존 112건 무회귀, 연속 2회 안정, TC.md 갱신
-- [ ] 기존 npm test/tsc 게이트 앞 배선
+- [x] 스니펫 시드(setSetting) + 피커 전 키보드 흐름 + 커서 정합성 AXB/AXYB 어서션
+- [x] 제목 필드 폴백, CRUD 반영, 빈 상태
+- [x] 인트로 양성(Bcc 이동·To 승격·문구)·음성(일반 그룹 reply-all 배너 부재)
+- [x] 기존 112건 무회귀, 연속 2회 안정, TC.md 갱신
+- [x] 기존 npm test/tsc 게이트 앞 배선
 
 ## CP6. 마무리 (Goal 5~8)
 - [ ] /react-best-practices + web-design-guidelines 감사(피커·매니저·배너)

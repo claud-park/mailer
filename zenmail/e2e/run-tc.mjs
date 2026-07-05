@@ -470,6 +470,13 @@ async function run() {
     await trySpScenario(page, 'Hud', () => scenario_sp_hud(page));
     await trySpScenario(page, 'Persist', () => scenario_sp_persist(page));
 
+    // --- F5 detail-density: runs after every TC-SP scenario has recorded its assertions (its
+    // snippet-seeding reload is only safe once TC-SP's latency ring-buffer reads are done), and
+    // before the mutate+restart block below.
+    await tryDdScenario(page, 'SnippetInsert', () => scenario_dd_snippet_insert(page));
+    await tryDdScenario(page, 'SnippetCrud', () => scenario_dd_snippet_crud(page));
+    await tryDdScenario(page, 'Intro', () => scenario_dd_intro(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -529,6 +536,23 @@ async function run() {
     record('TC-SP-G3', 'PASS', 'npm test + npx tsc --noEmit (incl. new latency suite) both exit 0 (reusing TC-KM-G2/G3)');
   } else {
     record('TC-SP-G3', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-DD-E1/E2: F5 regression gates ------------------------------------
+  const preDdFails = results.filter((r) => !r.id.startsWith('TC-DD') && r.status === 'FAIL');
+  if (preDdFails.length === 0) {
+    record(
+      'TC-DD-E1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-DD')).length} pre-existing F1/F2/F3/F4 assertions still PASS/SKIP with F5 wired in`
+    );
+  } else {
+    record('TC-DD-E1', 'FAIL', `${preDdFails.length} pre-existing (non-F5) assertions failed: ${preDdFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-DD-E2', 'PASS', 'npm test + npx tsc --noEmit (incl. new snippets/intro suites) both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-DD-E2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
   }
 
   console.log('\n=== TC Results ===');
@@ -2376,8 +2400,10 @@ async function scenario_sp_burst(page) {
   snap2 = await latencyState(page);
 
   if (!snap2?.actions?.trash || snap2.actions.trash.count < 1) {
-    // avoid trashing threads that later SP scenarios reference by name
-    const reserved = ['Q3 roadmap review', 'Postmortem: snooze daemon'];
+    // avoid trashing threads that later SP scenarios reference by name — also reserves the F5
+    // detail-density Instant Intro fixture (demo_20), which trash would destroy irrecoverably
+    // (unlike archive, which the DD scenarios' openThreadRobust can find again via search).
+    const reserved = ['Q3 roadmap review', 'Postmortem: snooze daemon', 'Intro: Yuna'];
     const rowsForTrash = (await rowsInfo(page)).filter(
       (r) => !r.text.includes(targetText) && !reserved.some((name) => r.text.includes(name))
     );
@@ -2470,19 +2496,28 @@ async function scenario_sp_rollback(page) {
   await armFailNextModify(page);
   await focusBody(page);
   await page.keyboard.press('e'); // archive X (armed to fail)
-  await page.keyboard.press('j'); // move to next row
+  // NOTE: no 'j' here — archiveThread()'s optimistic update removes X from `threads` AND clears
+  // activeThreadId synchronously (before the IPC round-trip even starts, see store/mail.ts), which
+  // also clamps selectedIndex. Y (rowsBeforeC2[1]) has therefore *already* shifted into index 0 by
+  // the time the next keypress is processed — targetThreadId() falls back to
+  // visibleThreads[selectedIndex].id once activeThreadId is null, so it already resolves to Y.
+  // Pressing 'j' here would advance past Y onto whatever is now at index 1 instead.
   await sleep(100);
-  await page.keyboard.press('e'); // archive Y (real)
-  await waitFor(
+  await page.keyboard.press('e'); // archive Y (real) — already the current selection, see above
+  // Settle on BOTH conditions together: the injected failure now lands ~400ms in (see
+  // ipc.ts maybeInjectDebugFailure), after Y's real archive round-trip and the follow-up
+  // refresh — poll until the final server-reconciled state (X back, Y gone) is reached.
+  const yText = rowsBeforeC2[1]?.text ?? '__none__';
+  const settledC2 = await waitFor(
     async () => {
       const rows = await rowsInfo(page);
-      return rows.some((r) => r.text.includes(xText));
+      return rows.some((r) => r.text.includes(xText)) && !rows.some((r) => r.text.includes(yText));
     },
-    { timeout: 5000, desc: 'X restored after rollback' }
-  );
+    { timeout: 6000, desc: 'X restored AND Y gone (entity-scoped rollback)' }
+  ).then(() => true, () => false);
   const rowsAfterC2 = await rowsInfo(page);
   const xRestored = rowsAfterC2.some((r) => r.text.includes(xText));
-  const yGone = !rowsAfterC2.some((r) => r.text.includes(rowsBeforeC2[1]?.text ?? '__none__'));
+  const yGone = settledC2 || !rowsAfterC2.some((r) => r.text.includes(yText));
   record('TC-SP-C2', xRestored && yGone ? 'PASS' : 'FAIL', `X ("${xText.slice(0, 30)}") restored=${xRestored}, Y gone=${yGone} after X-fail/Y-real rapid archive`);
 
   // TC-SP-C3: markRead rollback — unread dot reverts, rollbacks.markRead bumps
@@ -2496,12 +2531,25 @@ async function scenario_sp_rollback(page) {
   await armFailNextModify(page);
   await focusBody(page);
   await page.keyboard.press(unreadBeforeC3 ? 'I' : 'U');
+  // Three-phase settle: the injected failure lands ~400ms in (ipc.ts maybeInjectDebugFailure),
+  // so first observe the optimistic flip — otherwise the revert check below passes vacuously on
+  // its very first poll (dot still at its original state) before the rollback ever happened.
+  await waitFor(
+    async () => (await isThreadRowUnread(page, threadIdC3)) === !unreadBeforeC3,
+    { timeout: 2000, desc: 'markRead optimistic flip of unread dot' }
+  );
   await waitFor(
     async () => (await isThreadRowUnread(page, threadIdC3)) === unreadBeforeC3,
     { timeout: 5000, desc: 'markRead rollback reverts unread dot' }
   );
+  const rollbackC3 = await waitFor(
+    async () => {
+      const snap = await latencyState(page);
+      return (snap?.rollbacks?.markRead ?? 0) >= (beforeSnapC3?.rollbacks?.markRead ?? 0) + 1;
+    },
+    { timeout: 3000, desc: 'rollbacks.markRead incremented' }
+  ).then(() => true, () => false);
   const afterSnapC3 = await latencyState(page);
-  const rollbackC3 = (afterSnapC3?.rollbacks?.markRead ?? 0) >= (beforeSnapC3?.rollbacks?.markRead ?? 0) + 1;
   record('TC-SP-C3', rollbackC3 ? 'PASS' : 'FAIL', `unread dot reverted to ${unreadBeforeC3}; rollbacks.markRead ${beforeSnapC3?.rollbacks?.markRead ?? 0} -> ${afterSnapC3?.rollbacks?.markRead ?? 0}`);
 
   await page.keyboard.press('Escape');
@@ -2693,6 +2741,394 @@ async function trySpScenario(page, label, fn) {
     try {
       await page.keyboard.press('Escape');
       await page.evaluate(() => document.querySelector('.absolute.inset-0.z-40')?.click());
+      await sleep(200);
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+// ===========================================================================
+// F5 detail-density (docs/features/detail-density/TC.md)
+// ===========================================================================
+
+/** Compose's own contenteditable body — scoped by Compose's unique `z-30` wrapper (the same
+ *  `[contenteditable]` attribute is also shared with ThreadView's InlineReply — DECISIONS D11). */
+async function composeEditorHandle(page) {
+  const handle = await page.evaluateHandle(() => document.querySelector('.z-30 [contenteditable]'));
+  const el = handle.asElement();
+  if (!el) throw new Error('compose editor not found (is Compose open?)');
+  return el;
+}
+
+async function composeEditorText(page) {
+  return page.evaluate(() => document.querySelector('.z-30 [contenteditable]')?.innerText ?? null);
+}
+
+/** chip values rendered by Compose's RecipientField for a given labeled row ("To"/"Cc"/"Bcc"),
+ *  scoped to Compose's z-30 wrapper so it can never pick up an unrelated same-named span. */
+async function composeRecipientChips(page, label) {
+  return page.evaluate((lbl) => {
+    const root = document.querySelector('.z-30');
+    if (!root) return [];
+    const spans = Array.from(root.querySelectorAll('span'));
+    const labelSpan = spans.find((s) => s.textContent.trim() === lbl);
+    const row = labelSpan?.parentElement;
+    if (!row) return [];
+    return Array.from(row.querySelectorAll('span.rounded-full')).map((chip) =>
+      chip.textContent.replace(/×$/, '').trim()
+    );
+  }, label);
+}
+
+/** ignores line-break differences (`<br>` vs literal `\n`) — TC-DD-B1/B2/B3 explicitly allow this
+ *  ("개행 무시 비교 허용") since execCommand('insertText', ...) may render multi-line snippet
+ *  bodies as <br>-separated text rather than literal '\n' characters in innerText. */
+function normalizeNoNewlines(s) {
+  return (s ?? '').replace(/\r?\n/g, '');
+}
+
+/** seeds settings('snippets') directly via the always-exposed setSetting IPC (DECISIONS D11 — no
+ *  new debug hook needed), then reloads so store.loadSnippets() (only invoked from init/signIn/
+ *  signInDemo) actually picks up the new value — an already-logged-in session's `snippets` state
+ *  does not otherwise re-fetch. Safe here specifically because this runs after every TC-SP
+ *  scenario has already recorded its assertions — a reload resets the in-memory latency ring
+ *  buffer that TC-SP's aggregates depend on (see TC-SP scenario notes above). */
+async function seedSnippets(page, list) {
+  await page.evaluate((data) => window.zenmail.setSetting('snippets', JSON.stringify(data)), list);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+}
+
+/** SnippetPicker's own "Insert snippet…" heading has Tailwind's `uppercase` class, which
+ *  CSS-transforms it to "INSERT SNIPPET…" in `innerText` (same gotcha noted for FollowupPicker/
+ *  SnoozePicker elsewhere in this file) — detect it via its search input's placeholder instead,
+ *  which is not CSS-transformed and unique to this modal. */
+async function snippetPickerOpen(page) {
+  return page.evaluate(() => !!document.querySelector('input[placeholder="Search snippets"]'));
+}
+
+/** closes an open SnippetPicker first — its own z-40 overlay covers the whole Compose surface,
+ *  including Compose's own Close button, so clicking that button while the picker is still open
+ *  would silently no-op. A no-op first Escape if the picker isn't open. */
+async function closePickerThenCompose(page) {
+  if (await snippetPickerOpen(page)) {
+    await page.keyboard.press('Escape');
+    await sleep(150);
+  }
+  await closeComposeViaButton(page);
+}
+
+/** opens a thread by visible text, falling back to the search box (which drops the labelIds
+ *  filter entirely while a search is active — store/mail.ts's loadThreads — so it surfaces every
+ *  non-trashed thread regardless of current tab/archived state) in case an earlier F1/F2/F3/F4
+ *  scenario archived it out of the currently active Inbox view. Leaves the search box populated;
+ *  callers should clear it when done (mirrors the existing TC-B2/TC-C4 pattern). */
+async function openThreadRobust(page, textSubstr) {
+  await clickTab(page, 'Inbox');
+  const rows = await rowsInfo(page);
+  if (rows.some((r) => r.text.includes(textSubstr))) {
+    await clickRowContaining(page, textSubstr);
+    return;
+  }
+  await page.fill('input[placeholder^="Search mail"]', textSubstr);
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  await clickRowContaining(page, textSubstr);
+}
+
+async function clearSearchIfActive(page) {
+  await page.click('input[placeholder^="Search mail"]');
+  await page.keyboard.press('Escape');
+  await sleep(200);
+}
+
+// --- B: snippet insertion (TC-DD-B1~B6) -------------------------------------
+
+async function scenario_dd_snippet_insert(page) {
+  const SIG_BODY = 'Best,\nYR';
+  const GREET_BODY = 'Hi there,\nHope you are well.';
+  await seedSnippets(page, [
+    { id: 'e2e-sig', name: 'sig', body: SIG_BODY, createdAt: Date.now() },
+    { id: 'e2e-greet', name: 'greet', body: GREET_BODY, createdAt: Date.now() },
+  ]);
+
+  // TC-DD-B1: ⌘; inserts at the saved caret position (A|B -> A{body}B), not appended at the end
+  await openNewCompose(page);
+  const editor1 = await composeEditorHandle(page);
+  await editor1.click();
+  await page.keyboard.type('AB');
+  await page.keyboard.press('ArrowLeft'); // caret now sits between A and B
+  await page.keyboard.press('Meta+;');
+  const pickerOpenB1 = await waitFor(() => snippetPickerOpen(page), {
+    desc: 'snippet picker opens (B1)',
+  }).then(
+    () => true,
+    () => false
+  );
+  await page.keyboard.type('sig');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+  const textB1 = await composeEditorText(page);
+  const b1ok = pickerOpenB1 && normalizeNoNewlines(textB1) === normalizeNoNewlines('A' + SIG_BODY + 'B');
+  record('TC-DD-B1', b1ok ? 'PASS' : 'FAIL', `pickerOpenB1=${pickerOpenB1} text=${JSON.stringify(textB1)}`);
+
+  // TC-DD-B2: caret lands at the end of the inserted snippet — typing "Y" lands right before "B"
+  await page.keyboard.type('Y');
+  const textB2 = await composeEditorText(page);
+  const b2ok = normalizeNoNewlines(textB2) === normalizeNoNewlines('A' + SIG_BODY + 'YB');
+  record('TC-DD-B2', b2ok ? 'PASS' : 'FAIL', `text=${JSON.stringify(textB2)}`);
+  await closeComposeViaButton(page);
+
+  // TC-DD-B3: no saved caret (Subject field was focused) -> append at body end + focus moves to body
+  await openNewCompose(page);
+  const subjectEl = await composeFieldHandle(page, 'Subject');
+  await subjectEl.click();
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'picker opens (B3)' });
+  await page.keyboard.type('sig');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+  const textB3 = await composeEditorText(page);
+  const focusInBodyB3 = await page.evaluate(
+    () => document.activeElement === document.querySelector('.z-30 [contenteditable]')
+  );
+  const b3ok = normalizeNoNewlines(textB3) === normalizeNoNewlines(SIG_BODY) && focusInBodyB3;
+  record('TC-DD-B3', b3ok ? 'PASS' : 'FAIL', `text=${JSON.stringify(textB3)} focusInBody=${focusInBodyB3}`);
+
+  // TC-DD-B4: Esc while the picker is open closes only the picker — Compose itself stays open
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'picker opens (B4)' });
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  const pickerClosedB4 = !(await snippetPickerOpen(page));
+  const composeStillOpenB4 = await page.evaluate(() => !!document.querySelector('.z-30'));
+  record(
+    'TC-DD-B4',
+    pickerClosedB4 && composeStillOpenB4 ? 'PASS' : 'FAIL',
+    `pickerClosedB4=${pickerClosedB4} composeStillOpenB4=${composeStillOpenB4}`
+  );
+
+  // TC-DD-B6: while the picker is open, list-owned keys (e.g. "j") are consumed as search text —
+  // never leaked to the global shortcut layer (Compose's own onKeyDown stopPropagation shield).
+  // Re-focus the editor first: SnippetPicker's onClose (unlike onInsert) never refocuses it, so
+  // B4's Escape left focus on document.body — a keydown targeting body never reaches Compose's
+  // own React onKeyDown handler (body isn't a descendant of the React root), which would make
+  // this ⌘; press a silent no-op.
+  const editor3 = await composeEditorHandle(page);
+  await editor3.click();
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'picker opens (B6)' });
+  await page.keyboard.press('j');
+  await sleep(150);
+  const stillOpenB6 = await snippetPickerOpen(page);
+  const searchValB6 = await page.$eval('input[placeholder="Search snippets"]', (el) => el.value);
+  record(
+    'TC-DD-B6',
+    stillOpenB6 && searchValB6 === 'j' ? 'PASS' : 'FAIL',
+    `stillOpenB6=${stillOpenB6} searchValB6=${JSON.stringify(searchValB6)}`
+  );
+  await closePickerThenCompose(page);
+
+  // TC-DD-B5: zero snippets -> the picker shows the empty-state copy instead of a list
+  await seedSnippets(page, []);
+  await openNewCompose(page);
+  const editor5 = await composeEditorHandle(page);
+  await editor5.click();
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'picker opens (B5)' });
+  const emptyStateB5 = (await bodyText(page)).includes('No snippets yet');
+  record('TC-DD-B5', emptyStateB5 ? 'PASS' : 'FAIL', `emptyStateB5=${emptyStateB5}`);
+  await closePickerThenCompose(page);
+}
+
+// --- C: snippet management (TC-DD-C1~C3) ------------------------------------
+
+async function openSnippetsManager(page) {
+  await focusBody(page);
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('snippets');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await waitFor(async () => (await bodyText(page)).includes('+ Add snippet'), { desc: 'SnippetsManager open' });
+}
+
+async function scenario_dd_snippet_crud(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-DD-C1: add via the manager -> reflected in the list + persisted as settings JSON
+  await openSnippetsManager(page);
+  const nameC1 = 'e2e-crud-sig';
+  const bodyC1 = 'crud body text';
+  await page.fill('input[aria-label="New snippet name"]', nameC1);
+  await page.fill('textarea[aria-label="New snippet body"]', bodyC1);
+  await page.click('button:has-text("+ Add snippet")');
+  await sleep(200);
+  const listedC1 = (await bodyText(page)).includes(nameC1);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await waitFor(async () => !(await bodyText(page)).includes('+ Add snippet'), { desc: 'manager closes after save (C1)' });
+  const storedRawC1 = await page.evaluate(() => window.zenmail.getSetting('snippets'));
+  const storedC1 = JSON.parse(storedRawC1 || '[]');
+  const persistedC1 = storedC1.some((s) => s.name === nameC1 && s.body === bodyC1);
+  record('TC-DD-C1', listedC1 && persistedC1 ? 'PASS' : 'FAIL', `listedC1=${listedC1} persistedC1=${persistedC1} stored=${storedRawC1}`);
+
+  // TC-DD-C2: delete removes it from the list, the settings JSON, and the insert picker
+  await openSnippetsManager(page);
+  await waitFor(async () => (await bodyText(page)).includes(nameC1), { desc: 'manager reopened shows the new snippet' });
+  await page.click(`[aria-label="Delete ${nameC1}"]`);
+  await sleep(150);
+  const removedFromListC2 = !(await bodyText(page)).includes(nameC1);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await waitFor(async () => !(await bodyText(page)).includes('+ Add snippet'), { desc: 'manager closes after delete-save (C2)' });
+  const storedRawC2 = await page.evaluate(() => window.zenmail.getSetting('snippets'));
+  const storedC2 = JSON.parse(storedRawC2 || '[]');
+  const removedFromStorageC2 = !storedC2.some((s) => s.name === nameC1);
+
+  await openNewCompose(page);
+  const editorC2 = await composeEditorHandle(page);
+  await editorC2.click();
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'picker opens (C2 check)' });
+  const notInPickerC2 = !(await bodyText(page)).includes(nameC1);
+  await closePickerThenCompose(page);
+  record(
+    'TC-DD-C2',
+    removedFromListC2 && removedFromStorageC2 && notInPickerC2 ? 'PASS' : 'FAIL',
+    `removedFromListC2=${removedFromListC2} removedFromStorageC2=${removedFromStorageC2} notInPickerC2=${notInPickerC2}`
+  );
+
+  // TC-DD-C3: Esc closes the manager and global shortcuts (j) work again immediately after
+  await openSnippetsManager(page);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  const closedC3 = !(await bodyText(page)).includes('+ Add snippet');
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  const rowsBeforeC3 = await rowsInfo(page);
+  const selBeforeC3 = rowsBeforeC3.findIndex((r) => r.selected);
+  await page.keyboard.press('j');
+  await sleep(150);
+  const rowsAfterC3 = await rowsInfo(page);
+  const selAfterC3 = rowsAfterC3.findIndex((r) => r.selected);
+  const navWorksC3 = selAfterC3 === Math.min(selBeforeC3 + 1, rowsAfterC3.length - 1);
+  record(
+    'TC-DD-C3',
+    closedC3 && navWorksC3 ? 'PASS' : 'FAIL',
+    `closedC3=${closedC3} selBeforeC3=${selBeforeC3} selAfterC3=${selAfterC3}`
+  );
+}
+
+// --- D: Instant Intro (TC-DD-D1~D5) + E3 ------------------------------------
+
+async function scenario_dd_intro(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-DD-D1: reply-all on the seeded intro thread (demo_20) shows the intro banner
+  await openThreadRobust(page, 'Intro: Yuna');
+  await sleep(300);
+  await page.keyboard.press('a'); // reply all (CommandPalette.tsx shortcut ['a'])
+  await waitFor(async () => (await bodyText(page)).includes('Introduced by'), { desc: 'intro banner shows (D1)' });
+  const bannerD1 = (await bodyText(page)).includes('Introduced by Jamie Wu');
+  record('TC-DD-D1', bannerD1 ? 'PASS' : 'FAIL', `bannerD1=${bannerD1}`);
+
+  // TC-DD-D2: one-click apply moves the introducer to Bcc, promotes the third party to To, and
+  // prepends the thank-you note above the rest of the body
+  await page.click('button:has-text("Move to Bcc")');
+  await sleep(200);
+  const toD2 = await composeRecipientChips(page, 'To');
+  const bccD2 = await composeRecipientChips(page, 'Bcc');
+  const bodyTextD2 = (await composeEditorText(page)) ?? '';
+  const okD2 =
+    toD2.includes('yuna.cho@partnerco.dev') &&
+    bccD2.includes('jamie@indiehatch.dev') &&
+    bodyTextD2.trim().startsWith('Jamie Wu, moving you to Bcc');
+  record(
+    'TC-DD-D2',
+    okD2 ? 'PASS' : 'FAIL',
+    `to=${JSON.stringify(toD2)} bcc=${JSON.stringify(bccD2)} bodyStart=${JSON.stringify(bodyTextD2.slice(0, 50))}`
+  );
+  await closeComposeViaButton(page);
+
+  // TC-DD-D3: dismissing the banner via × leaves To/Cc untouched and hides the banner
+  await openThreadRobust(page, 'Intro: Yuna');
+  await sleep(300);
+  await page.keyboard.press('a');
+  await waitFor(async () => (await bodyText(page)).includes('Introduced by'), { desc: 'intro banner reshows (D3)' });
+  const toBeforeD3 = await composeRecipientChips(page, 'To');
+  const ccBeforeD3 = await composeRecipientChips(page, 'Cc');
+  await page.click('[aria-label="Dismiss intro suggestion"]');
+  await sleep(200);
+  const bannerGoneD3 = !(await bodyText(page)).includes('Introduced by');
+  const toAfterD3 = await composeRecipientChips(page, 'To');
+  const ccAfterD3 = await composeRecipientChips(page, 'Cc');
+  const unchangedD3 =
+    JSON.stringify(toBeforeD3) === JSON.stringify(toAfterD3) && JSON.stringify(ccBeforeD3) === JSON.stringify(ccAfterD3);
+  record(
+    'TC-DD-D3',
+    bannerGoneD3 && unchangedD3 ? 'PASS' : 'FAIL',
+    `bannerGoneD3=${bannerGoneD3} to ${JSON.stringify(toBeforeD3)}->${JSON.stringify(toAfterD3)} cc ${JSON.stringify(ccBeforeD3)}->${JSON.stringify(ccAfterD3)}`
+  );
+  await closeComposeViaButton(page);
+
+  // TC-DD-D4 (voice): a regular single-sender thread with no intro-keyword subject -> no banner.
+  // Reserved from the TC-SP-B2 trash fill-in (never trashed), and found via openThreadRobust's
+  // search fallback regardless of whether an earlier scenario archived it out of Inbox.
+  await openThreadRobust(page, 'Postmortem: snooze daemon');
+  await sleep(300);
+  await page.keyboard.press('a');
+  await sleep(300);
+  const noBannerD4 = !(await bodyText(page)).includes('Introduced by');
+  record('TC-DD-D4', noBannerD4 ? 'PASS' : 'FAIL', `noBannerD4=${noBannerD4}`);
+  await closeComposeViaButton(page);
+
+  // TC-DD-D5 (voice): a solo-received thread (0 third parties, no Cc) -> no banner. Also reserved
+  // from the TC-SP-B2 trash fill-in.
+  await openThreadRobust(page, 'Q3 roadmap review');
+  await sleep(300);
+  await page.keyboard.press('a');
+  await sleep(300);
+  const noBannerD5 = !(await bodyText(page)).includes('Introduced by');
+  record('TC-DD-D5', noBannerD5 ? 'PASS' : 'FAIL', `noBannerD5=${noBannerD5}`);
+  await closeComposeViaButton(page);
+
+  // TC-DD-E3: ⌘; outside Compose (on the list/reading pane) is a global no-op — never registered
+  await clearSearchIfActive(page);
+  await clickTab(page, 'Inbox');
+  await page.keyboard.press('Escape'); // close any lingering reading pane
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('Meta+;');
+  await sleep(200);
+  const noPickerE3 = !(await snippetPickerOpen(page));
+  const noComposeE3 = !(await page.evaluate(() => !!document.querySelector('.z-30')));
+  record('TC-DD-E3', noPickerE3 && noComposeE3 ? 'PASS' : 'FAIL', `noPickerE3=${noPickerE3} noComposeE3=${noComposeE3}`);
+}
+
+async function tryDdScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] DD scenario "${label}" failed:`, err);
+    record(`TC-DD-${label}-error`, 'FAIL', String(err));
+    try {
+      // DD scenarios can fail two modal layers deep (SnippetPicker/SnippetsManager's z-40 on top
+      // of Compose's own z-30) — a single Escape only closes the innermost one, which would leave
+      // Compose open (and its onKeyDown stopPropagation shield swallowing every later scenario's
+      // shortcuts/clicks). Press Escape twice, then fall back to an explicit Close click.
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await page.evaluate(() => document.querySelector('.absolute.inset-0.z-40')?.click());
+      await sleep(150);
+      if (await page.evaluate(() => !!document.querySelector('.z-30'))) {
+        await page.click('button[title="Close (Esc)"]').catch(() => {});
+      }
       await sleep(200);
     } catch {
       /* best-effort only */
