@@ -91,5 +91,5 @@ Last updated: 2026-07-04
 - [x] F2 `follow-up-reminders` — remind-if-no-reply / send & remind (wow #4) — 2026-07-03 완료, 58 PASS·0 FAIL (docs/features/follow-up-reminders/)
 - [x] F3 `keyboard-mastery` — 인터랙티브 튜토리얼·단축키 힌트·숙련도 통계 (wow #2) — 2026-07-04 완료, E2E 93건 90 PASS·0 FAIL·3 SKIP(F1 기존) (docs/features/keyboard-mastery/)
 - [x] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1) — 2026-07-04 완료, E2E 112건 109 PASS·0 FAIL·3 SKIP(F1 기존), burst p50 ~13ms (docs/features/speed-instrumentation/)
-- [ ] F5 `detail-density` — Snippets 등 마이크로 기능 (wow #5)
+- [x] F5 `detail-density` — Snippets(⌘; 피커)+Instant Intro, read-status 기각 (wow #5) — 2026-07-05 완료, E2E 128건 125 PASS·0 FAIL·3 SKIP(F1 기존) (docs/features/detail-density/)
 - [ ] F6 `sync-engine` — 오프라인-퍼스트 전면화 (wow #6)

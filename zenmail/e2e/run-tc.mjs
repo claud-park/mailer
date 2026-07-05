@@ -2805,7 +2805,7 @@ async function seedSnippets(page, list) {
  *  SnoozePicker elsewhere in this file) — detect it via its search input's placeholder instead,
  *  which is not CSS-transformed and unique to this modal. */
 async function snippetPickerOpen(page) {
-  return page.evaluate(() => !!document.querySelector('input[placeholder="Search snippets"]'));
+  return page.evaluate(() => !!document.querySelector('input[aria-label="Search snippets"]'));
 }
 
 /** closes an open SnippetPicker first — its own z-40 overlay covers the whole Compose surface,
@@ -2924,7 +2924,7 @@ async function scenario_dd_snippet_insert(page) {
   await page.keyboard.press('j');
   await sleep(150);
   const stillOpenB6 = await snippetPickerOpen(page);
-  const searchValB6 = await page.$eval('input[placeholder="Search snippets"]', (el) => el.value);
+  const searchValB6 = await page.$eval('input[aria-label="Search snippets"]', (el) => el.value);
   record(
     'TC-DD-B6',
     stillOpenB6 && searchValB6 === 'j' ? 'PASS' : 'FAIL',

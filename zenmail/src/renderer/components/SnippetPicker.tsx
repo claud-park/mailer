@@ -62,7 +62,7 @@ export function SnippetPicker({
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search snippets"
+          placeholder="Search snippets…" aria-label="Search snippets"
           className="mb-1 w-full rounded border border-bg-border bg-bg px-2 py-1 text-[12px] text-text-primary outline-none"
         />
         {snippets.length === 0 ? (

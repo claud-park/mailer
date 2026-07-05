@@ -42,6 +42,6 @@
 - [x] 기존 npm test/tsc 게이트 앞 배선
 
 ## CP6. 마무리 (Goal 5~8)
-- [ ] /react-best-practices + web-design-guidelines 감사(피커·매니저·배너)
-- [ ] /code-review low → 커밋 → push
-- [ ] DEV_WORKFLOW/TODO 스냅샷 + Obsidian 체크포인트
+- [x] /react-best-practices(위반 없음) + web-design-guidelines 감사 — 피커 검색 input aria-label·placeholder 말줄임 2건 수정
+- [x] /code-review low (CP별 diff 리뷰, findings 없음) → 커밋 → push
+- [x] DEV_WORKFLOW/TODO 스냅샷 + Obsidian 체크포인트
