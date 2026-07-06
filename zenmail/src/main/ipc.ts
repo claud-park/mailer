@@ -140,7 +140,51 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:fetch-threads', async (_e, req: FetchThreadsRequest) => {
-    const res = await requireProvider().listThreads(req);
+    const p = requireProvider();
+
+    // SWR cache-first cold read (F6 CP6, D11 sibling of fetch-thread). Only plain label reads are
+    // eligible: search (q) must hit the provider FTS, and pagination (pageToken) must stay strictly
+    // sequential — both bypass the cache and take the direct flow below.
+    const swrEligible = !req.q && !req.pageToken;
+    if (swrEligible) {
+      const cached = cache.getThreads(req.labelIds?.[0]);
+      if (cached.length > 0) {
+        // Warm cache: return the cached page immediately, then revalidate in the background and ship
+        // a pure diff (renderer merges via applyThreadsDiff, zero refetch).
+        void (async () => {
+          try {
+            const fresh = await p.listThreads(req);
+            cache.upsertThreads(fresh.threads);
+            // Per-thread JSON diff vs what we just returned — new/changed summaries become upserts.
+            // JSON.stringify is acceptable at page size (≤50 rows); the cache row order (rowToSummary)
+            // and the provider summary order match, so an unchanged page yields zero upserts (no send).
+            //
+            // removals are deliberately NOT computed: a ≤50-row page can't tell "archived elsewhere"
+            // from "beyond this page", and applyThreadsDiff already drops any upsert whose fresh
+            // labelIds no longer include the current view label (label-change removal). A genuine
+            // server-side delete is rare and converges via the 60s poll (needsRefetch). D1's removals[]
+            // stays reserved for that daemon-origin path.
+            //
+            // Real-account risk (D14 backlog): an eventually-consistent fresh page could momentarily
+            // re-upsert a just-archived thread. The mock provider is synchronous (modifyThread updates
+            // its own store before this refetch), so E2E is unaffected.
+            const prev = new Map(cached.map((t) => [t.id, JSON.stringify(t)]));
+            const upserts = fresh.threads.filter((t) => prev.get(t.id) !== JSON.stringify(t));
+            if (upserts.length > 0) {
+              notifyThreadsChanged(getWindow, { upserts, removals: [], needsRefetch: false });
+            }
+          } catch (err) {
+            // offline/transient — the cached list is already on screen, so stay quiet. Still an
+            // attempt-based signal (D9): flip online=false, but never throw out of the background task.
+            if (classifyError(err) === 'transient') setOnline(false, () => emitSyncState(getWindow));
+          }
+        })();
+        return { threads: cached };
+      }
+    }
+
+    // Cold miss / search / pagination — fetch from the provider, cache it, return (unchanged flow).
+    const res = await p.listThreads(req);
     cache.upsertThreads(res.threads);
     return res;
   });
@@ -220,6 +264,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
             addLabelIds: [],
             removeLabelIds: ['INBOX'],
           });
+          // Keep the cache consistent with this main-side archive (D3). Unlike manual archive
+          // (attemptOrEnqueue → applyLabelDelta), send&archive mutates the provider directly, so
+          // without this the thread's cache row keeps INBOX. F6 CP6 made fetch-threads a cache-first
+          // SWR read, and upsertThreads(fresh) can only heal *appearing* threads (re-writes rows) —
+          // it never deletes, so a "should-disappear" archive left stale here would resurface on a
+          // warm-cache read. Removing INBOX from the cache row now makes getThreads exclude it.
+          cache.applyLabelDelta(req.threadId, [], ['INBOX']);
         }
         // Send completion is rare (≤1 per sent mail, 10s after the click) and mutates state the
         // renderer can't diff locally: a freshly-created thread id (archive) and a main-side followup

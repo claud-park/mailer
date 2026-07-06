@@ -43,9 +43,9 @@
 - [x] 커밋 → push (react-best-practices/code-review는 CP8 일괄 — TSX 변경 없음, useThreads 훅만)
 
 ## CP6. fetch-threads cold-read SWR (읽기 경로 2)
-- [ ] fetch-threads: 캐시 히트 즉시 반환(초기/라벨전환/검색) + 백그라운드 revalidate → diff push
-- [ ] 렌더러 2단 병합의 order/selectedIndex 안정성 — 기존 order TC로 검증
-- [ ] tsc + npm test + E2E 전체
+- [x] fetch-threads: 캐시 히트 즉시 반환(초기/라벨전환/검색) + 백그라운드 revalidate → diff push
+- [x] 렌더러 2단 병합의 order/selectedIndex 안정성 — 기존 order TC로 검증
+- [x] tsc + npm test + E2E 전체
 
 ## CP7. send spill + UI
 - [ ] scheduled_sends에 attempts/next_attempt_at 추가, undo-timer 발송 실패 시 spill → 데몬 재시도(D7)
