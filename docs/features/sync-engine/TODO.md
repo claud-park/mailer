@@ -24,11 +24,11 @@
 - [x] tsc + npm test + **기존 E2E 128 무회귀 1회 실행**
 
 ## CP3. 데몬 drain + debounce
-- [ ] snooze.ts 4번째 루프: next_attempt_at 도래분 drain(per-thread 순서), 성공 삭제 / 404·4xx drop + `mail:mutation-permanent-failed` / transient backoff 갱신
-- [ ] 재접속 즉시 drain 트리거(온라인 플립 시)
-- [ ] 데몬 change 발신 debounce: 틱 동안 수집 → 종료 시 1발(D12) — 이 시점엔 아직 poke(threads-updated)로
-- [ ] sync-state 발신(큐 depth 변화 시)
-- [ ] tsc + npm test
+- [x] snooze.ts 4번째 루프: next_attempt_at 도래분 drain(per-thread 순서), 성공 삭제 / 404·4xx drop + `mail:mutation-permanent-failed` / transient backoff 갱신
+- [x] 재접속 즉시 drain 트리거(온라인 플립 시)
+- [x] 데몬 change 발신 debounce: 틱 동안 수집 → 종료 시 1발(D12) — 이 시점엔 아직 poke(threads-updated)로
+- [x] sync-state 발신(큐 depth 변화 시)
+- [x] tsc + npm test
 
 ## CP4. openThread SWR (읽기 경로 1)
 - [ ] fetch-thread: 캐시 히트 즉시 반환 + 백그라운드 revalidate → `mail:thread-changed {threadId, detail}` (변경 시만)
