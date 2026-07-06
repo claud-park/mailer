@@ -173,6 +173,11 @@ export interface ZenmailApi {
   onThreadChanged(cb: (p: { threadId: string; detail: ThreadDetail }) => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;
   onFollowupFired(cb: (threadId: string) => void): () => void;
+  /** D10: sidebar sync line data push — {online, pending queue depth}. */
+  onSyncState(cb: (s: { online: boolean; pending: number }) => void): () => void;
+  /** D10: a queued mutation or send exhausted retries (or hit a permanent error) — renderer
+   *  reconciles with a refresh() + toast rather than trusting its stale optimistic state. */
+  onMutationPermanentFailed(cb: (p: { threadId: string | null; kind: string }) => void): () => void;
 
   /** E2E-only debug hooks — only present when ZENMAIL_E2E_PORT is set (see preload.ts) */
   __debugSimulateReply?(threadId: string): Promise<void>;

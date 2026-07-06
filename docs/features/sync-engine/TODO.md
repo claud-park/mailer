@@ -48,9 +48,9 @@
 - [x] tsc + npm test + E2E 전체
 
 ## CP7. send spill + UI
-- [ ] scheduled_sends에 attempts/next_attempt_at 추가, undo-timer 발송 실패 시 spill → 데몬 재시도(D7)
-- [ ] Sidebar 하단 sync 한 줄(D10) + store sync 필드(onSyncState) + mutation-permanent-failed 구독(refresh 조정+토스트)
-- [ ] tsc + npm test
+- [x] scheduled_sends에 attempts/next_attempt_at 추가, undo-timer 발송 실패 시 spill → 데몬 재시도(D7)
+- [x] Sidebar 하단 sync 한 줄(D10) + store sync 필드(onSyncState) + mutation-permanent-failed 구독(refresh 조정+토스트)
+- [x] tsc + npm test
 
 ## CP8. E2E (TC-SY-*) + 마무리 (Goal 5~8)
 - [ ] TC-SY-A~G: 오프라인 낙관 유지·drain·per-thread 순서·warm-hit<100ms·debounce 1발·재시작 cold read·drain 4xx drop

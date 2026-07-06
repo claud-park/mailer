@@ -76,6 +76,19 @@ export function openCache(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_mutations_thread ON mutations(thread_id);
   `);
+  // F6 CP7 (D7): scheduled_sends predates attempts/next_attempt_at — CREATE TABLE IF NOT EXISTS
+  // never adds columns to an already-existing table, so migrate via ALTER TABLE, swallowing the
+  // "duplicate column" error a repeat openCache() would otherwise throw.
+  for (const stmt of [
+    'ALTER TABLE scheduled_sends ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE scheduled_sends ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0',
+  ]) {
+    try {
+      db.exec(stmt);
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err))) throw err;
+    }
+  }
   return db;
 }
 
@@ -303,15 +316,34 @@ export function addScheduledSend(id: string, payload: SendRequest, sendAt: numbe
     .run(id, JSON.stringify(payload), sendAt);
 }
 
-export function dueScheduledSends(now: number): { id: string; payload: SendRequest }[] {
+export function dueScheduledSends(now: number): { id: string; payload: SendRequest; attempts: number }[] {
   const rows = openCache()
-    .prepare('SELECT id, payload FROM scheduled_sends WHERE send_at <= ?')
-    .all(now) as { id: string; payload: string }[];
-  return rows.map((r) => ({ id: r.id, payload: JSON.parse(r.payload) as SendRequest }));
+    .prepare('SELECT id, payload, attempts FROM scheduled_sends WHERE send_at <= ? AND next_attempt_at <= ?')
+    .all(now, now) as { id: string; payload: string; attempts: number }[];
+  return rows.map((r) => ({ id: r.id, payload: JSON.parse(r.payload) as SendRequest, attempts: r.attempts }));
 }
 
 export function removeScheduledSend(id: string): void {
   openCache().prepare('DELETE FROM scheduled_sends WHERE id = ?').run(id);
+}
+
+/**
+ * F6 CP7 (D7): records a failed scheduled-send retry with exponential backoff — mirrors
+ * bumpMutationAttempt but for the send-spill queue (no last_error column needed here).
+ */
+export function bumpScheduledSendAttempt(id: string, now: number): void {
+  const d = openCache();
+  const row = d.prepare('SELECT attempts FROM scheduled_sends WHERE id = ?').get(id) as
+    | { attempts: number }
+    | undefined;
+  if (!row) return;
+  const attempts = row.attempts + 1;
+  const nextAttemptAt = now + backoffDelayMs(attempts);
+  d.prepare('UPDATE scheduled_sends SET attempts = ?, next_attempt_at = ? WHERE id = ?').run(
+    attempts,
+    nextAttemptAt,
+    id
+  );
 }
 
 // --- splits ---
@@ -498,5 +530,14 @@ export function hasPendingMutations(threadId: string): boolean {
 
 export function mutationQueueDepth(): number {
   const row = openCache().prepare('SELECT COUNT(*) AS n FROM mutations').get() as { n: number };
+  return row.n;
+}
+
+/** Sends that are due (spilled retries or overdue schedules) — counted as pending sync work.
+ *  Future-dated user schedules are intentionally excluded (they are not "syncing"). */
+export function overdueScheduledSendCount(now: number): number {
+  const row = openCache()
+    .prepare('SELECT COUNT(*) AS n FROM scheduled_sends WHERE send_at <= ?')
+    .get(now) as { n: number };
   return row.n;
 }

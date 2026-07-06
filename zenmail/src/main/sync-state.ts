@@ -45,7 +45,7 @@ export function setOnline(v: boolean, notify?: () => void): void {
 export function emitSyncState(getWindow: () => BrowserWindow | null): void {
   getWindow()?.webContents.send('mail:sync-state', {
     online,
-    pending: cache.mutationQueueDepth(),
+    pending: cache.mutationQueueDepth() + cache.overdueScheduledSendCount(Date.now()),
   });
 }
 

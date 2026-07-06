@@ -252,8 +252,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const sendAt = Date.now() + UNDO_WINDOW_MS;
     const timer = setTimeout(async () => {
       pendingSends.delete(sendId);
+      let result;
       try {
-        const result = await p.send(req);
+        result = await p.send(req);
+      } catch (err) {
+        // F6 CP7 (D7): send spill. The message never actually left on a transient failure, so it's
+        // safe to hand off to scheduled_sends for the daemon to retry (immediate due — see D7 note
+        // on at-least-once). A permanent failure keeps the pre-CP7 console.error and additionally
+        // tells the renderer so it can reconcile (no optimistic send-state to roll back today, but
+        // the compose UI already closed — surface it via the shared permanent-failure channel).
+        if (classifyError(err) === 'transient') {
+          cache.addScheduledSend(sendId, req, Date.now());
+          setOnline(false);
+          emitSyncState(getWindow);
+        } else {
+          console.error('[send] failed', err);
+          getWindow()?.webContents.send('mail:mutation-permanent-failed', {
+            threadId: req.threadId ?? null,
+            kind: 'send',
+          });
+        }
+        return;
+      }
+      try {
         // 등록은 send 성공 직후 — 뒤따르는 archive가 실패해도 리마인더는 유실되지 않아야 한다
         if (req.remindDays) {
           cache.addFollowup(result.threadId, Date.now(), Date.now() + req.remindDays * DAY_MS);
@@ -279,6 +300,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         // this preserves the old threads-updated→refreshFollowups coupling exactly.
         notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
       } catch (err) {
+        // send itself succeeded — a failure here (followup/archive) must NOT spill to
+        // scheduled_sends (that would re-send and double-deliver the message).
         console.error('[send] failed', err);
       }
     }, UNDO_WINDOW_MS);

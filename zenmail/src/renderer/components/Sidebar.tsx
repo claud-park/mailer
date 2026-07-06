@@ -53,6 +53,7 @@ export function Sidebar() {
   const setActiveLabel = useMailStore((s) => s.setActiveLabel);
   const account = useMailStore((s) => s.account);
   const signOut = useMailStore((s) => s.signOut);
+  const sync = useMailStore((s) => s.sync);
 
   const byId = new Map(labels.map((l) => [l.id, l]));
   const userLabels = labels.filter(
@@ -100,6 +101,11 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-bg-border p-2">
+        {sync.pending > 0 && (
+          <div className="px-1 pb-1 text-[11px] text-text-muted" aria-live="polite">
+            {sync.online ? `Syncing ${sync.pending}…` : `Offline — ${sync.pending} pending`}
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="truncate text-[11px] text-text-muted" title={account?.email}>
             {account?.demo ? 'demo mode' : account?.email}

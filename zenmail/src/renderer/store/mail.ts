@@ -69,6 +69,8 @@ interface MailState {
   pendingSend: PendingSend | null;
   toast: string | null;
   snippets: SnippetRecord[];
+  /** D10: sidebar sync line data — set from useThreads' onSyncState subscription. */
+  sync: { online: boolean; pending: number };
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -249,6 +251,7 @@ export const useMailStore = create<MailState>((set, get) => {
     pendingSend: null,
     toast: null,
     snippets: [],
+    sync: { online: true, pending: 0 },
 
     async init() {
       api().onFollowupFired((threadId) => {

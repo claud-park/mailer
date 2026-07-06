@@ -32,6 +32,17 @@ export function useThreads(): void {
     });
     const offSnooze = window.zenmail.onSnoozeFired(() => showToast('A snoozed thread is back'));
 
+    // D10: sidebar sync line data — pure state mirror, no derived logic on the renderer side.
+    const offSyncState = window.zenmail.onSyncState((s) => {
+      useMailStore.setState({ sync: s });
+    });
+    // D10: a queued mutation/send exhausted retries — the renderer's optimistic state may be
+    // stale (the server never got it), so reconcile with a real refresh() rather than trust it.
+    const offMutationPermanentFailed = window.zenmail.onMutationPermanentFailed(() => {
+      showToast('Sync failed — changes reverted');
+      void refresh();
+    });
+
     // SWR revalidate merge (F6 CP4, D11): apply the fresh detail only if it's still the open
     // thread — never re-fetch (the payload is authoritative). Stale pushes are dropped by the guard.
     const offThreadChanged = window.zenmail.onThreadChanged((p) => {
@@ -50,6 +61,8 @@ export function useThreads(): void {
       offChanged();
       offSnooze();
       offThreadChanged();
+      offSyncState();
+      offMutationPermanentFailed();
       clearInterval(poll);
       window.removeEventListener('online', onOnline);
     };

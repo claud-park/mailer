@@ -63,6 +63,16 @@ const api: ZenmailApi = {
     ipcRenderer.on('mail:followup-fired', listener);
     return () => ipcRenderer.removeListener('mail:followup-fired', listener);
   },
+  onSyncState: (cb: (s: { online: boolean; pending: number }) => void) => {
+    const listener = (_e: unknown, s: { online: boolean; pending: number }) => cb(s);
+    ipcRenderer.on('mail:sync-state', listener);
+    return () => ipcRenderer.removeListener('mail:sync-state', listener);
+  },
+  onMutationPermanentFailed: (cb: (p: { threadId: string | null; kind: string }) => void) => {
+    const listener = (_e: unknown, p: { threadId: string | null; kind: string }) => cb(p);
+    ipcRenderer.on('mail:mutation-permanent-failed', listener);
+    return () => ipcRenderer.removeListener('mail:mutation-permanent-failed', listener);
+  },
 };
 
 // E2E-only debug hooks — main이 ZENMAIL_E2E_PORT일 때 additionalArguments로 전달한 플래그로 판별.

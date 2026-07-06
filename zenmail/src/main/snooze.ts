@@ -4,6 +4,7 @@ import {
   addFollowup,
   addSnooze,
   bumpMutationAttempt,
+  bumpScheduledSendAttempt,
   dueFollowups,
   dueScheduledSends,
   dueSnoozes,
@@ -64,16 +65,30 @@ export function startSnoozeDaemon(
         }
       }
 
-      for (const { id, payload } of dueScheduledSends(now)) {
+      for (const { id, payload, attempts } of dueScheduledSends(now)) {
         try {
           const result = await provider.send(payload);
+          // at-least-once (D7): remove only *after* send succeeds. A response lost between the
+          // provider call resolving and this line would leave the row and retry — an accepted
+          // duplicate-send risk (no Gmail idempotency key, Sent-folder dedup is out of scope).
           removeScheduledSend(id);
           if (payload.remindDays) {
             addFollowup(result.threadId, now, now + payload.remindDays * DAY_MS);
           }
           changed = true;
         } catch (err) {
-          console.error('[snooze] scheduled send failed', id, err);
+          const cls = classifyError(err);
+          if (cls === 'transient' && !isExhausted(attempts + 1)) {
+            bumpScheduledSendAttempt(id, now);
+          } else {
+            console.error('[snooze] scheduled send failed permanently', id, err);
+            removeScheduledSend(id);
+            getWindow()?.webContents.send('mail:mutation-permanent-failed', {
+              threadId: payload.threadId ?? null,
+              kind: 'send',
+            });
+            changed = true;
+          }
         }
       }
 
