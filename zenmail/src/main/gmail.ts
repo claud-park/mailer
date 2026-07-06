@@ -533,6 +533,14 @@ export class MockGmailProvider implements GmailProvider {
   private senders: Contact[];
   /** F6 CP2/D13 offline simulation — when true, network-shaped methods coded-throw ECONNRESET. */
   offline = false;
+  /** E2E-only (TC-SY-B5): one-shot — makes the next modifyThread for this exact threadId throw a
+   *  permanent (coded {status:400}) error. Unlike ipc.ts's debugFailNextModify (scoped to the
+   *  modify-labels/snooze IPC handlers), this fires *inside the provider*, so it also reaches the
+   *  daemon drain loop (snooze.ts calls provider.modifyThread directly) — the only place a queued
+   *  offline mutation can hit a permanent 4xx and get dropped. Consumed on the matching call. */
+  private failModifyForThread: string | null = null;
+  /** E2E-only (TC-SY-D1): per-method invocation counters, read via mail:debug-provider-calls. */
+  readonly callCounts: Record<string, number> = {};
 
   constructor() {
     const data = buildDemoData();
@@ -543,6 +551,11 @@ export class MockGmailProvider implements GmailProvider {
 
   setOffline(v: boolean): void {
     this.offline = v;
+  }
+
+  /** E2E-only (TC-SY-B5): arm a one-shot permanent (4xx) failure for the next modifyThread on `id`. */
+  failNextModifyForThread(id: string): void {
+    this.failModifyForThread = id;
   }
 
   /** After the round-trip delay, throw a transient coded error so classifyError → 'transient'. */
@@ -558,6 +571,7 @@ export class MockGmailProvider implements GmailProvider {
   }
 
   async listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse> {
+    this.callCounts.listThreads = (this.callCounts.listThreads ?? 0) + 1;
     await this.delay();
     this.failIfOffline();
     let rows = this.threads.filter((t) => !t.summary.labelIds.includes('TRASH') || req.labelIds?.includes('TRASH'));
@@ -579,6 +593,7 @@ export class MockGmailProvider implements GmailProvider {
   }
 
   async getThread(threadId: string): Promise<ThreadDetail> {
+    this.callCounts.getThread = (this.callCounts.getThread ?? 0) + 1;
     await this.delay();
     this.failIfOffline();
     const t = this.threads.find((t) => t.summary.id === threadId);
@@ -597,6 +612,7 @@ export class MockGmailProvider implements GmailProvider {
   }
 
   async send(req: SendRequest): Promise<SendResult> {
+    this.callCounts.send = (this.callCounts.send ?? 0) + 1;
     await this.delay();
     this.failIfOffline();
     const id = `demo_sent_${Date.now()}`;
@@ -671,7 +687,14 @@ export class MockGmailProvider implements GmailProvider {
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {
+    this.callCounts.modifyThread = (this.callCounts.modifyThread ?? 0) + 1;
     await this.delay();
+    if (this.failModifyForThread && req.threadId === this.failModifyForThread) {
+      this.failModifyForThread = null;
+      const e = new Error('permanent modify failure (mock 400)') as Error & { status: number };
+      e.status = 400;
+      throw e;
+    }
     this.failIfOffline();
     const t = this.threads.find((t) => t.summary.id === req.threadId);
     if (!t) return;

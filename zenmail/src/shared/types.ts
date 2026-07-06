@@ -187,10 +187,16 @@ export interface ZenmailApi {
   __debugAddFollowupDueNow?(threadId: string): Promise<void>;
   /** E2E-only: makes the next mail:modify-labels or mail:snooze call throw (one-shot, consumed on use). */
   __debugFailNextModify?(): Promise<void>;
+  /** E2E-only (TC-SY-B5): one-shot permanent (4xx) failure for the next modifyThread on `threadId`,
+   *  fired inside the provider so it also reaches the daemon drain loop (queued-mutation drop path). */
+  __debugFailNextModifyForThread?(threadId: string): Promise<void>;
   /** E2E-only: toggle simulated connectivity — false makes the mock provider coded-throw ECONNRESET (D13). */
   __debugSetOnline?(v: boolean): Promise<void>;
   /** E2E-only: current mutation-queue depth. */
   __debugQueueDepth?(): Promise<number>;
+  /** E2E-only: MockGmailProvider network-method call counts (e.g. listThreads) — used to prove
+   *  a mutation's diff-push does NOT trigger a list refetch (TC-SY-D1). */
+  __debugProviderCalls?(): Promise<Record<string, number>>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';

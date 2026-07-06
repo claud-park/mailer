@@ -469,6 +469,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       debugFailNextModify = true;
     });
 
+    // TC-SY-B5: arm a one-shot permanent (4xx) failure for the next modifyThread on a specific
+    // thread — reaches the daemon drain loop (unlike debugFailNextModify, which is scoped to the
+    // modify-labels/snooze IPC handlers), so a queued offline mutation can be dropped on drain.
+    ipcMain.handle('mail:debug-fail-next-modify-for-thread', async (_e, threadId: string) => {
+      if (provider instanceof MockGmailProvider) provider.failNextModifyForThread(threadId);
+    });
+
     // D13: offline simulation is a *coded* throw (ECONNRESET) from the mock provider, distinct from
     // the generic (permanent) debug-fail injection above. Toggling this is the only way the write
     // path diverges from its pre-CP2 behavior.
@@ -480,6 +487,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     ipcMain.handle('mail:debug-queue-depth', async (): Promise<number> => {
       return cache.mutationQueueDepth();
+    });
+
+    // TC-SY-D1: expose the mock provider's network-method call counters so E2E can prove that a
+    // mutation's diff-push (notifyThreadsChanged upsert) never triggers a list refetch.
+    ipcMain.handle('mail:debug-provider-calls', async (): Promise<Record<string, number>> => {
+      if (provider instanceof MockGmailProvider) return { ...provider.callCounts };
+      return {};
     });
   }
 }

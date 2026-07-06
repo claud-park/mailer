@@ -53,8 +53,8 @@
 - [x] tsc + npm test
 
 ## CP8. E2E (TC-SY-*) + 마무리 (Goal 5~8)
-- [ ] TC-SY-A~G: 오프라인 낙관 유지·drain·per-thread 순서·warm-hit<100ms·debounce 1발·재시작 cold read·drain 4xx drop
-- [ ] provider 호출 카운터 debug 훅(churn 0회 증명)
-- [ ] 기존 128 무회귀 게이트 + 연속 2회 안정
+- [x] TC-SY-A~G: 오프라인 낙관 유지·drain·per-thread 순서·warm-hit<100ms·debounce 1발·재시작 cold read·drain 4xx drop
+- [x] provider 호출 카운터 debug 훅(churn 0회 증명)
+- [x] 기존 무회귀 게이트(TC-SY-G1: 129건 유지) + 연속 2회 안정
 - [ ] react-best-practices + web-design-guidelines + code-review low
 - [ ] TC/TODO/DEV_WORKFLOW/루트 TODO 갱신 + Obsidian

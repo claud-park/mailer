@@ -51,6 +51,7 @@
 
 ### D13. 오프라인 시뮬레이션은 기존 실패 훅과 분리 (A+B 합의)
 - `maybeInjectDebugFailure`(generic Error, 400ms)는 **영구-롤백 경로 전용으로 불변** — TC-SP 보존. 오프라인은 신규 `debug-set-online(false)` → Mock provider modify/send가 `{code:'ECONNRESET'}` coded-throw. 주입 방식이 시맨틱을 자연 분기.
+- **CP8 보강**: 기존 주입은 IPC 핸들러에서만 소비되어 **데몬 drain 경로(provider.modifyThread 직접 호출)에는 도달하지 않음** — TC-SY-B5(drain 중 영구 실패)를 위해 thread-targeted 일회성 `{status:400}` 훅(`__debugFailNextModifyForThread`)을 별도 신설(ZENMAIL_E2E_PORT 게이트). thread-targeting으로 tick 선행 루프의 오소비를 차단해 결정론 확보.
 
 ### D14. 범위 외 명시
 - undo-window 중 크래시 시 send 유실(기존 갭), draft 동기화, openThread:content hard 게이트 승격(F6 후 데이터 축적 뒤), Real Gmail eventual-consistency flicker 실측(diff-push로 구조적 완화, 실계정 검증은 OAuth E2E 백로그와 함께).
