@@ -1539,11 +1539,15 @@ async function scenario_followup_C(page) {
   // TC-FUP-C1: reply arrives before the due tick -> quiet removal, no resurface/toast
   const c1ThreadId = await threadIdOfRowContaining(page, 'Sent you the empty-state illustrations');
   await debugAddFollowupDueNow(page, c1ThreadId);
+  // deliberate gap: the daemon's reply check is strict (`m.date > baselineAt`), and both
+  // debug calls stamp Date.now() — same-millisecond collision makes the reply invisible
+  await sleep(10);
   await debugSimulateReply(page, c1ThreadId);
   await debugTick(page);
-  await sleep(300);
-  const afterC1 = await listFollowups(page);
-  const c1Gone = !afterC1.some((f) => f.threadId === c1ThreadId);
+  const c1Gone = await waitFor(
+    async () => !(await listFollowups(page)).some((f) => f.threadId === c1ThreadId),
+    { timeout: 3000, desc: 'C1 followup quietly removed' }
+  ).then(() => true, () => false);
   const noToastC1 = !(await bodyText(page)).includes('No reply yet');
   if (c1Gone && noToastC1) {
     record('TC-FUP-C1', 'PASS', 'a reply present at due-tick time removes the followup quietly — no resurfacing, no toast');
@@ -1610,9 +1614,13 @@ async function scenario_followup_D(page) {
 
   const bt = await bodyText(page);
   const toastShownD1 = bt.includes('No reply yet') && bt.includes('keyboard shortcut audit');
+  // poll: background revalidate (F6 SWR) can transiently reorder before the pin settles
+  const isTopPinned = await waitFor(
+    async () => (await rowsInfo(page)).findIndex((r) => r.text.includes('keyboard shortcut audit')) === 0,
+    { timeout: 3000, desc: 'fired followup pinned to top' }
+  ).then(() => true, () => false);
   const rowsNow = await rowsInfo(page);
   const rowIdxD1 = rowsNow.findIndex((r) => r.text.includes('keyboard shortcut audit'));
-  const isTopPinned = rowIdxD1 === 0;
   const chipShownD1 = rowIdxD1 >= 0 && rowsNow[rowIdxD1].text.includes('No reply');
   const isUnreadAfter = await isThreadRowUnread(page, d1ThreadId);
 
@@ -1635,9 +1643,10 @@ async function scenario_followup_D(page) {
   await sleep(300);
   const openedPinned = (await bodyText(page)).includes('keyboard shortcut audit');
   await page.keyboard.press('e'); // archive the open (pinned) thread via kbar
-  await sleep(400);
-  const afterArchiveRows = await rowsInfo(page);
-  const archivedGone = !afterArchiveRows.some((r) => r.text.includes('keyboard shortcut audit'));
+  const archivedGone = await waitFor(
+    async () => !(await rowsInfo(page)).some((r) => r.text.includes('keyboard shortcut audit')),
+    { timeout: 5000, desc: 'pinned row gone after archive' }
+  ).then(() => true, () => false);
   if (openedPinned && archivedGone) {
     record('TC-FUP-D4', 'PASS', 'j/k/Enter/archive act correctly on the pinned row — selection re-anchoring holds with a pin present');
   } else {

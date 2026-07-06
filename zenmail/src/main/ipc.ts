@@ -9,6 +9,7 @@ import type {
   SendRequest,
   SnoozeRequest,
   SplitDefinition,
+  ThreadDetail,
 } from '../shared/types';
 import { classifyError } from '../shared/sync';
 import * as auth from './auth';
@@ -140,20 +141,45 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('mail:fetch-thread', async (_e, threadId: string) => {
     const p = requireProvider();
-    const detail = await p.getThread(threadId);
-    cache.cacheThreadDetail(detail);
 
-    // opportunistic follow-up resolution (D7): reuse the detail we just fetched,
-    // no extra API call.
-    const followup = cache.getFollowup(threadId);
-    if (followup && followup.status === 'pending') {
-      const meEmail = p.email.toLowerCase();
-      const replied = detail.messages.some(
-        (m) => m.date > followup.baselineAt && m.from.email.toLowerCase() !== meEmail
-      );
-      if (replied) cache.removeFollowup(threadId);
+    // opportunistic follow-up resolution (D7): reuse an already-fetched detail, no extra API call.
+    const resolveFollowup = (detail: ThreadDetail) => {
+      const followup = cache.getFollowup(threadId);
+      if (followup && followup.status === 'pending') {
+        const meEmail = p.email.toLowerCase();
+        const replied = detail.messages.some(
+          (m) => m.date > followup.baselineAt && m.from.email.toLowerCase() !== meEmail
+        );
+        if (replied) cache.removeFollowup(threadId);
+      }
+    };
+
+    const cached = cache.getCachedThreadDetail(threadId);
+    if (cached) {
+      // SWR cache-hit (D11): return the cached detail immediately, revalidate in the background.
+      void (async () => {
+        try {
+          const fresh = await p.getThread(threadId);
+          cache.cacheThreadDetail(fresh);
+          resolveFollowup(fresh);
+          // JSON.stringify diff is acceptable at detail size (tens of messages); push
+          // mail:thread-changed only when the fresh detail actually differs from what we returned.
+          if (JSON.stringify(fresh) !== JSON.stringify(cached)) {
+            getWindow()?.webContents.send('mail:thread-changed', { threadId, detail: fresh });
+          }
+        } catch (err) {
+          // offline etc. — the cached detail is already in the UI, so stay quiet. A transient
+          // failure is still an attempt-based signal (D9): flip online=false, but never throw.
+          if (classifyError(err) === 'transient') setOnline(false, () => emitSyncState(getWindow));
+        }
+      })();
+      return cached;
     }
 
+    // cold miss — fetch from the provider, cache it, resolve the follow-up, return (unchanged flow).
+    const detail = await p.getThread(threadId);
+    cache.cacheThreadDetail(detail);
+    resolveFollowup(detail);
     return detail;
   });
 

@@ -162,6 +162,8 @@ export interface ZenmailApi {
   notifyOnline(): Promise<void>;
 
   onThreadsUpdated(cb: () => void): () => void;
+  /** SWR revalidate push (F6 CP4, D11): main sends the fresh detail when a cache-hit read diverged. */
+  onThreadChanged(cb: (p: { threadId: string; detail: ThreadDetail }) => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;
   onFollowupFired(cb: (threadId: string) => void): () => void;
 

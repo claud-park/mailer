@@ -31,9 +31,9 @@
 - [x] tsc + npm test
 
 ## CP4. openThread SWR (읽기 경로 1)
-- [ ] fetch-thread: 캐시 히트 즉시 반환 + 백그라운드 revalidate → `mail:thread-changed {threadId, detail}` (변경 시만)
-- [ ] 렌더러 onThreadChanged: activeThreadId 일치 시만 set(기존 stale 가드 재사용)
-- [ ] tsc + npm test + E2E 스모크(openThread 관련 기존 TC)
+- [x] fetch-thread: 캐시 히트 즉시 반환 + 백그라운드 revalidate → `mail:thread-changed {threadId, detail}` (변경 시만)
+- [x] 렌더러 onThreadChanged: activeThreadId 일치 시만 set(기존 stale 가드 재사용)
+- [x] tsc + npm test + E2E 스모크(openThread 관련 기존 TC)
 
 ## CP5. diff-push 전환 (최고 위험 — D1)
 - [ ] `mail:threads-changed {upserts, removals}` 이벤트 + 뮤테이션 성공·데몬·revalidate 발신부 전환, threads-updated 발신 제거

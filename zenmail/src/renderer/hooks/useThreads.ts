@@ -19,6 +19,15 @@ export function useThreads(): void {
       void refreshFollowups();
     });
     const offSnooze = window.zenmail.onSnoozeFired(() => showToast('A snoozed thread is back'));
+
+    // SWR revalidate merge (F6 CP4, D11): apply the fresh detail only if it's still the open
+    // thread — never re-fetch (the payload is authoritative). Stale pushes are dropped by the guard.
+    const offThreadChanged = window.zenmail.onThreadChanged((p) => {
+      if (useMailStore.getState().activeThreadId === p.threadId) {
+        useMailStore.setState({ activeThread: p.detail });
+      }
+    });
+
     const poll = setInterval(() => void refresh(), POLL_MS);
 
     // D9 accelerator: regaining connectivity forces an immediate drain instead of waiting for the poll.
@@ -28,6 +37,7 @@ export function useThreads(): void {
     return () => {
       offUpdated();
       offSnooze();
+      offThreadChanged();
       clearInterval(poll);
       window.removeEventListener('online', onOnline);
     };

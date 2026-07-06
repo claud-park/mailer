@@ -5,6 +5,7 @@ import type {
   SendRequest,
   SnoozeRequest,
   SplitDefinition,
+  ThreadDetail,
   ZenmailApi,
 } from '../shared/types';
 
@@ -40,6 +41,11 @@ const api: ZenmailApi = {
     const listener = () => cb();
     ipcRenderer.on('mail:threads-updated', listener);
     return () => ipcRenderer.removeListener('mail:threads-updated', listener);
+  },
+  onThreadChanged: (cb: (p: { threadId: string; detail: ThreadDetail }) => void) => {
+    const listener = (_e: unknown, p: { threadId: string; detail: ThreadDetail }) => cb(p);
+    ipcRenderer.on('mail:thread-changed', listener);
+    return () => ipcRenderer.removeListener('mail:thread-changed', listener);
   },
   onSnoozeFired: (cb: (threadId: string) => void) => {
     const listener = (_e: unknown, threadId: string) => cb(threadId);
