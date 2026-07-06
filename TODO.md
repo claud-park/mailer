@@ -92,4 +92,4 @@ Last updated: 2026-07-04
 - [x] F3 `keyboard-mastery` — 인터랙티브 튜토리얼·단축키 힌트·숙련도 통계 (wow #2) — 2026-07-04 완료, E2E 93건 90 PASS·0 FAIL·3 SKIP(F1 기존) (docs/features/keyboard-mastery/)
 - [x] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1) — 2026-07-04 완료, E2E 112건 109 PASS·0 FAIL·3 SKIP(F1 기존), burst p50 ~13ms (docs/features/speed-instrumentation/)
 - [x] F5 `detail-density` — Snippets(⌘; 피커)+Instant Intro, read-status 기각 (wow #5) — 2026-07-05 완료, E2E 128건 125 PASS·0 FAIL·3 SKIP(F1 기존) (docs/features/detail-density/)
-- [ ] F6 `sync-engine` — 오프라인-퍼스트 전면화 (wow #6)
+- [x] F6 `sync-engine` — 오프라인-퍼스트 전면화 (wow #6) — 2026-07-06 완료, E2E 142건 136 PASS·0 FAIL·5 SKIP(기존3+사유2), warm-hit p50 ~14-21ms (docs/features/sync-engine/) — **v1.x 로드맵 F1~F6 완주**

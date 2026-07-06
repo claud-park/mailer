@@ -107,7 +107,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       setOnline(true, () => emitSyncState(getWindow));
       pushThreadUpsert(threadId);
     } catch (err) {
-      if (classifyError(err) === 'permanent') throw err;
+      if (classifyError(err) === 'permanent') {
+        // The renderer rolls its store back on reject (F4) — mirror that in the cache, or a
+        // cold read after a permanent failure would paint the never-applied optimistic state (D3).
+        cache.applyLabelDelta(threadId, removeLabelIds, addLabelIds);
+        throw err;
+      }
       onEnqueue?.();
       cache.enqueueMutation(kind, threadId, payload, Date.now());
       setOnline(false);

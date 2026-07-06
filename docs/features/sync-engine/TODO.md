@@ -56,5 +56,5 @@
 - [x] TC-SY-A~G: 오프라인 낙관 유지·drain·per-thread 순서·warm-hit<100ms·debounce 1발·재시작 cold read·drain 4xx drop
 - [x] provider 호출 카운터 debug 훅(churn 0회 증명)
 - [x] 기존 무회귀 게이트(TC-SY-G1: 129건 유지) + 연속 2회 안정
-- [ ] react-best-practices + web-design-guidelines + code-review low
-- [ ] TC/TODO/DEV_WORKFLOW/루트 TODO 갱신 + Obsidian
+- [x] react-best-practices(클린) + web-design-guidelines(Sidebar sync 줄 pass) + 최종 code-review(permanent 실패 시 캐시 역델타 결함 발견·수정)
+- [x] TC/TODO/DEV_WORKFLOW/루트 TODO 갱신 + Obsidian
