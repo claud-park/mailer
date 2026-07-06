@@ -21,10 +21,15 @@ export function useThreads(): void {
     const offSnooze = window.zenmail.onSnoozeFired(() => showToast('A snoozed thread is back'));
     const poll = setInterval(() => void refresh(), POLL_MS);
 
+    // D9 accelerator: regaining connectivity forces an immediate drain instead of waiting for the poll.
+    const onOnline = () => void window.zenmail.notifyOnline?.();
+    window.addEventListener('online', onOnline);
+
     return () => {
       offUpdated();
       offSnooze();
       clearInterval(poll);
+      window.removeEventListener('online', onOnline);
     };
   }, [signedIn]);
 }

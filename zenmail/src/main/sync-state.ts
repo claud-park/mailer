@@ -1,0 +1,49 @@
+// Connectivity + queue-depth state for the sync engine (F6 CP2).
+//
+// Attempt-based authority (D9): a transient write failure flips online=false; a success flips
+// it back. `navigator.onLine` in the renderer is only a *drain accelerator* (mail:renderer-online),
+// never the sole authority. The single sidebar line (D10) is driven by mail:sync-state events
+// carrying {online, pending}. No side effects beyond the electron send.
+
+import type { BrowserWindow } from 'electron';
+import * as cache from './cache';
+
+let online = true;
+let reconnectHook: (() => void) | null = null;
+
+export function isOnline(): boolean {
+  return online;
+}
+
+/**
+ * Registers the offline→online drain trigger. CP3's daemon registers here; until then it stays
+ * unset and the flip/accelerator paths are no-ops beyond state updates + sync-state emission.
+ */
+export function onReconnect(hook: () => void): void {
+  reconnectHook = hook;
+}
+
+/** Forces the reconnect drain trigger (D9 renderer accelerator), independent of a state flip. */
+export function triggerReconnect(): void {
+  reconnectHook?.();
+}
+
+/**
+ * Sets connectivity. `notify` fires only on an actual value flip (not on a redundant set), so the
+ * online happy path stays silent. An offline→online flip additionally fires the reconnect drain
+ * trigger (D9).
+ */
+export function setOnline(v: boolean, notify?: () => void): void {
+  if (online === v) return;
+  online = v;
+  notify?.();
+  if (v) reconnectHook?.();
+}
+
+/** Emits the sidebar sync line's data (D10): {online, pending queue depth}. */
+export function emitSyncState(getWindow: () => BrowserWindow | null): void {
+  getWindow()?.webContents.send('mail:sync-state', {
+    online,
+    pending: cache.mutationQueueDepth(),
+  });
+}

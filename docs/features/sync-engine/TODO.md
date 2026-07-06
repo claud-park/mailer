@@ -16,12 +16,12 @@
 - [x] tsc + npm test (기존 96 유지 + 신규)
 
 ## CP2. 쓰기 경로 배선 (오프라인 미토글 시 행동 불변)
-- [ ] main online-flag 모듈 + `mail:sync-state {online, pending}` 이벤트 발신기
-- [ ] `attemptOrEnqueue` 래퍼: 캐시 델타(원자, D3) → 장벽(hasPending→enqueue, D6) → 직행 → classify 분기(transient=큐 잔류·resolve / permanent=rethrow)
-- [ ] modify-labels/snooze 핸들러 래핑 (기존 maybeInjectDebugFailure는 래퍼 안쪽에서 generic throw 유지 — TC-SP 보존 확인)
-- [ ] Mock provider coded-throw(`{code:'ECONNRESET'}`) 분기 + `mail:debug-set-online` 디버그 IPC(ZENMAIL_E2E_PORT 게이트)
-- [ ] 렌더러 online 이벤트 → main 전달 IPC(가속기, D9)
-- [ ] tsc + npm test + **기존 E2E 128 무회귀 1회 실행**
+- [x] main online-flag 모듈 + `mail:sync-state {online, pending}` 이벤트 발신기
+- [x] `attemptOrEnqueue` 래퍼: 캐시 델타(원자, D3) → 장벽(hasPending→enqueue, D6) → 직행 → classify 분기(transient=큐 잔류·resolve / permanent=rethrow)
+- [x] modify-labels/snooze 핸들러 래핑 (기존 maybeInjectDebugFailure는 래퍼 안쪽에서 generic throw 유지 — TC-SP 보존 확인)
+- [x] Mock provider coded-throw(`{code:'ECONNRESET'}`) 분기 + `mail:debug-set-online` 디버그 IPC(ZENMAIL_E2E_PORT 게이트)
+- [x] 렌더러 online 이벤트 → main 전달 IPC(가속기, D9)
+- [x] tsc + npm test + **기존 E2E 128 무회귀 1회 실행**
 
 ## CP3. 데몬 drain + debounce
 - [ ] snooze.ts 4번째 루프: next_attempt_at 도래분 drain(per-thread 순서), 성공 삭제 / 404·4xx drop + `mail:mutation-permanent-failed` / transient backoff 갱신

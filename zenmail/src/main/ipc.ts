@@ -10,10 +10,12 @@ import type {
   SnoozeRequest,
   SplitDefinition,
 } from '../shared/types';
+import { classifyError } from '../shared/sync';
 import * as auth from './auth';
 import * as cache from './cache';
 import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
 import { runDaemonTickNow } from './snooze';
+import { emitSyncState, setOnline, triggerReconnect } from './sync-state';
 
 const UNDO_WINDOW_MS = 10_000;
 const DAY_MS = 86_400_000;
@@ -60,6 +62,51 @@ function requireProvider(): GmailProvider {
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   const notifyThreadsUpdated = () =>
     getWindow()?.webContents.send('mail:threads-updated');
+
+  /**
+   * Write-path core (F6 CP2, D3/D4/D5/D6/D9). Optimistically applies the label delta to the cache,
+   * then either goes direct-to-provider (online happy path) or spills to the mutation queue:
+   *  1. cache.applyLabelDelta — always, so cold-restart reads reflect the mutation (D3).
+   *  2. per-thread FIFO barrier (D6): if a mutation is already queued for this thread we enqueue
+   *     behind it (order-preserving) even while online, and resolve.
+   *  3. direct call — the debug failure injection stays *inside* doProvider (unchanged position);
+   *     success flips online=true and pokes the renderer exactly as before.
+   *  4. catch — classifyError(err): 'permanent' (incl. the generic debug-injected failure, D5/D13)
+   *     rethrows onto the existing renderer-rollback path; 'transient' spills to the queue, flips
+   *     online=false, and resolves so the renderer keeps its optimistic UI (D4/D9).
+   * onEnqueue runs on the two enqueue paths only (barrier + transient) — never on permanent
+   * failure — letting snooze persist its local truth (addSnooze) without polluting the rollback.
+   */
+  async function attemptOrEnqueue(
+    kind: string,
+    threadId: string,
+    addLabelIds: string[],
+    removeLabelIds: string[],
+    payload: object,
+    doProvider: () => Promise<void>,
+    onEnqueue?: () => void
+  ): Promise<void> {
+    cache.applyLabelDelta(threadId, addLabelIds, removeLabelIds);
+
+    if (cache.hasPendingMutations(threadId)) {
+      onEnqueue?.();
+      cache.enqueueMutation(kind, threadId, payload, Date.now());
+      emitSyncState(getWindow);
+      return;
+    }
+
+    try {
+      await doProvider();
+      setOnline(true, () => emitSyncState(getWindow));
+      notifyThreadsUpdated();
+    } catch (err) {
+      if (classifyError(err) === 'permanent') throw err;
+      onEnqueue?.();
+      cache.enqueueMutation(kind, threadId, payload, Date.now());
+      setOnline(false);
+      emitSyncState(getWindow);
+    }
+  }
 
   ipcMain.handle('auth:get-account', async (): Promise<AccountInfo | null> => {
     if (provider) return { email: provider.email, demo: provider.demo };
@@ -164,22 +211,45 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle('mail:modify-labels', async (_e, req: ModifyLabelsRequest) => {
-    await maybeInjectDebugFailure();
-    await requireProvider().modifyThread(req);
-    notifyThreadsUpdated();
+    await attemptOrEnqueue(
+      'modifyLabels',
+      req.threadId,
+      req.addLabelIds,
+      req.removeLabelIds,
+      { threadId: req.threadId, addLabelIds: req.addLabelIds, removeLabelIds: req.removeLabelIds },
+      async () => {
+        await maybeInjectDebugFailure();
+        await requireProvider().modifyThread(req);
+      }
+    );
   });
 
   ipcMain.handle('mail:snooze', async (_e, req: SnoozeRequest) => {
-    await maybeInjectDebugFailure();
-    const p = requireProvider();
-    const snoozeLabel = await p.snoozeLabelId();
-    await p.modifyThread({
-      threadId: req.threadId,
-      addLabelIds: [snoozeLabel],
-      removeLabelIds: ['INBOX'],
-    });
-    cache.addSnooze(req.threadId, new Date(req.until).getTime());
-    notifyThreadsUpdated();
+    const until = new Date(req.until).getTime();
+    await attemptOrEnqueue(
+      'snooze',
+      req.threadId,
+      // snooze label id is unknown until the provider resolves it (may fail offline), so the
+      // optimistic cache delta only removes INBOX here (D3 note); drain re-resolves the label.
+      [],
+      ['INBOX'],
+      // store the original SnoozeRequest — drain re-interprets it (label resolution + addSnooze).
+      req,
+      async () => {
+        await maybeInjectDebugFailure();
+        const p = requireProvider();
+        const snoozeLabel = await p.snoozeLabelId();
+        await p.modifyThread({
+          threadId: req.threadId,
+          addLabelIds: [snoozeLabel],
+          removeLabelIds: ['INBOX'],
+        });
+        cache.addSnooze(req.threadId, until);
+      },
+      // snooze time is local truth — persist it on the queue paths too (transient/barrier), but
+      // not on permanent failure (rethrow happens before onEnqueue), preserving TC-SP rollback.
+      () => cache.addSnooze(req.threadId, until)
+    );
   });
 
   ipcMain.handle('mail:search-local', async (_e, q: string) => {
@@ -257,6 +327,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return cache.listFollowups();
   });
 
+  // D9 accelerator: the renderer's `online` event forces an immediate drain attempt (CP3 daemon
+  // registers the reconnect hook) and marks us online, rather than waiting for the 60s backstop.
+  ipcMain.handle('mail:renderer-online', async () => {
+    setOnline(true, () => emitSyncState(getWindow));
+    triggerReconnect();
+  });
+
   // E2E-only debug IPC — never registered unless ZENMAIL_E2E_PORT is set (see e2e/).
   if (process.env.ZENMAIL_E2E_PORT) {
     ipcMain.handle('mail:debug-simulate-reply', async (_e, threadId: string) => {
@@ -277,6 +354,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     ipcMain.handle('mail:debug-fail-next-modify', async () => {
       debugFailNextModify = true;
+    });
+
+    // D13: offline simulation is a *coded* throw (ECONNRESET) from the mock provider, distinct from
+    // the generic (permanent) debug-fail injection above. Toggling this is the only way the write
+    // path diverges from its pre-CP2 behavior.
+    ipcMain.handle('mail:debug-set-online', async (_e, v: boolean) => {
+      if (provider instanceof MockGmailProvider) provider.setOffline(!v);
+      setOnline(v, () => emitSyncState(getWindow));
+      emitSyncState(getWindow);
+    });
+
+    ipcMain.handle('mail:debug-queue-depth', async (): Promise<number> => {
+      return cache.mutationQueueDepth();
     });
   }
 }

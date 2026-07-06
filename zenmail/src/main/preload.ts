@@ -34,6 +34,8 @@ const api: ZenmailApi = {
   dismissFollowup: (threadId: string) => ipcRenderer.invoke('mail:dismiss-followup', threadId),
   listFollowups: () => ipcRenderer.invoke('mail:list-followups'),
 
+  notifyOnline: () => ipcRenderer.invoke('mail:renderer-online'),
+
   onThreadsUpdated: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on('mail:threads-updated', listener);
@@ -59,6 +61,8 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugAddFollowupDueNow = (threadId: string) =>
     ipcRenderer.invoke('mail:debug-add-followup-due-now', threadId);
   api.__debugFailNextModify = () => ipcRenderer.invoke('mail:debug-fail-next-modify');
+  api.__debugSetOnline = (v: boolean) => ipcRenderer.invoke('mail:debug-set-online', v);
+  api.__debugQueueDepth = () => ipcRenderer.invoke('mail:debug-queue-depth');
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);

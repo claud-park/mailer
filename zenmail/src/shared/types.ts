@@ -158,6 +158,9 @@ export interface ZenmailApi {
   dismissFollowup(threadId: string): Promise<void>;
   listFollowups(): Promise<FollowupInfo[]>;
 
+  /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
+  notifyOnline(): Promise<void>;
+
   onThreadsUpdated(cb: () => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;
   onFollowupFired(cb: (threadId: string) => void): () => void;
@@ -170,6 +173,10 @@ export interface ZenmailApi {
   __debugAddFollowupDueNow?(threadId: string): Promise<void>;
   /** E2E-only: makes the next mail:modify-labels or mail:snooze call throw (one-shot, consumed on use). */
   __debugFailNextModify?(): Promise<void>;
+  /** E2E-only: toggle simulated connectivity — false makes the mock provider coded-throw ECONNRESET (D13). */
+  __debugSetOnline?(v: boolean): Promise<void>;
+  /** E2E-only: current mutation-queue depth. */
+  __debugQueueDepth?(): Promise<number>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';

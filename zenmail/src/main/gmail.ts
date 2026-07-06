@@ -531,6 +531,8 @@ export class MockGmailProvider implements GmailProvider {
   private threads: MockThread[];
   private labels: Label[];
   private senders: Contact[];
+  /** F6 CP2/D13 offline simulation — when true, network-shaped methods coded-throw ECONNRESET. */
+  offline = false;
 
   constructor() {
     const data = buildDemoData();
@@ -539,12 +541,25 @@ export class MockGmailProvider implements GmailProvider {
     this.senders = data.senders;
   }
 
+  setOffline(v: boolean): void {
+    this.offline = v;
+  }
+
+  /** After the round-trip delay, throw a transient coded error so classifyError → 'transient'. */
+  private failIfOffline(): void {
+    if (!this.offline) return;
+    const e = new Error('offline (mock)') as Error & { code: string };
+    e.code = 'ECONNRESET';
+    throw e;
+  }
+
   private async delay(): Promise<void> {
     await new Promise((r) => setTimeout(r, 120));
   }
 
   async listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse> {
     await this.delay();
+    this.failIfOffline();
     let rows = this.threads.filter((t) => !t.summary.labelIds.includes('TRASH') || req.labelIds?.includes('TRASH'));
     if (req.labelIds?.length) {
       rows = rows.filter((t) => req.labelIds!.every((l) => t.summary.labelIds.includes(l)));
@@ -565,6 +580,7 @@ export class MockGmailProvider implements GmailProvider {
 
   async getThread(threadId: string): Promise<ThreadDetail> {
     await this.delay();
+    this.failIfOffline();
     const t = this.threads.find((t) => t.summary.id === threadId);
     if (!t) throw new Error(`Unknown thread ${threadId}`);
     return JSON.parse(JSON.stringify(t.detail));
@@ -582,6 +598,7 @@ export class MockGmailProvider implements GmailProvider {
 
   async send(req: SendRequest): Promise<SendResult> {
     await this.delay();
+    this.failIfOffline();
     const id = `demo_sent_${Date.now()}`;
     const from = { name: 'You', email: this.email };
     const to = req.to.map((e) => ({ name: e, email: e }));
@@ -655,6 +672,7 @@ export class MockGmailProvider implements GmailProvider {
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {
     await this.delay();
+    this.failIfOffline();
     const t = this.threads.find((t) => t.summary.id === req.threadId);
     if (!t) return;
     const set = new Set(t.summary.labelIds);
