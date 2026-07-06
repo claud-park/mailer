@@ -16,7 +16,7 @@ import * as auth from './auth';
 import * as cache from './cache';
 import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
 import { runDaemonTickNow } from './snooze';
-import { emitSyncState, setOnline, triggerReconnect } from './sync-state';
+import { emitSyncState, notifyThreadsChanged, setOnline, triggerReconnect } from './sync-state';
 
 const UNDO_WINDOW_MS = 10_000;
 const DAY_MS = 86_400_000;
@@ -61,8 +61,14 @@ function requireProvider(): GmailProvider {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
-  const notifyThreadsUpdated = () =>
-    getWindow()?.webContents.send('mail:threads-updated');
+  // F6 CP5 (D1): mutation-origin diff push. Re-read the affected row from cache (its optimistic
+  // label delta already applied) and ship it as an upsert. The renderer decides upsert-vs-remove
+  // against its *current* view label, so main never needs to know which list is on screen. A thread
+  // absent from cache is skipped (60s poll converges). removals[] is reserved for server-vanished ids.
+  const pushThreadUpsert = (threadId: string) => {
+    const summary = cache.getThreadSummary(threadId);
+    if (summary) notifyThreadsChanged(getWindow, { upserts: [summary], removals: [] });
+  };
 
   /**
    * Write-path core (F6 CP2, D3/D4/D5/D6/D9). Optimistically applies the label delta to the cache,
@@ -99,7 +105,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     try {
       await doProvider();
       setOnline(true, () => emitSyncState(getWindow));
-      notifyThreadsUpdated();
+      pushThreadUpsert(threadId);
     } catch (err) {
       if (classifyError(err) === 'permanent') throw err;
       onEnqueue?.();
@@ -215,7 +221,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
             removeLabelIds: ['INBOX'],
           });
         }
-        notifyThreadsUpdated();
+        // Send completion is rare (≤1 per sent mail, 10s after the click) and mutates state the
+        // renderer can't diff locally: a freshly-created thread id (archive) and a main-side followup
+        // registration (remindDays) that the followup banner reads from listFollowups. So take the
+        // needsRefetch path (refresh + refreshFollowups) rather than a pure diff — off the hot path,
+        // this preserves the old threads-updated→refreshFollowups coupling exactly.
+        notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
       } catch (err) {
         console.error('[send] failed', err);
       }
@@ -365,7 +376,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ipcMain.handle('mail:debug-simulate-reply', async (_e, threadId: string) => {
       if (provider instanceof MockGmailProvider) {
         provider.simulateReply(threadId);
-        notifyThreadsUpdated();
+        // the new inbound message lives only in the mock provider, not the cache — the renderer
+        // must refetch to see it (needsRefetch), same as the daemon-origin path.
+        notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
       }
     });
 

@@ -6,6 +6,7 @@
 // carrying {online, pending}. No side effects beyond the electron send.
 
 import type { BrowserWindow } from 'electron';
+import type { ThreadSummary } from '../shared/types';
 import * as cache from './cache';
 
 let online = true;
@@ -46,4 +47,23 @@ export function emitSyncState(getWindow: () => BrowserWindow | null): void {
     online,
     pending: cache.mutationQueueDepth(),
   });
+}
+
+export interface ThreadsChangedPayload {
+  upserts: ThreadSummary[];
+  removals: string[];
+  /** daemon-origin ticks (D1 compromise): renderer does a full refresh() instead of a pure diff merge. */
+  needsRefetch?: boolean;
+}
+
+/**
+ * The single change-propagation channel (F6 CP5, D1): replaces the old data-less `mail:threads-updated`
+ * poke. Mutation-origin sends carry a pure diff (renderer merges, zero refetch); daemon-origin sends set
+ * needsRefetch so the renderer refreshes (bounded to ≤1/min — churn is harmless, D1 compromise).
+ */
+export function notifyThreadsChanged(
+  getWindow: () => BrowserWindow | null,
+  payload: ThreadsChangedPayload
+): void {
+  getWindow()?.webContents.send('mail:threads-changed', payload);
 }

@@ -14,9 +14,21 @@ export function useThreads(): void {
     if (!signedIn) return;
     const { refresh, showToast, refreshFollowups } = useMailStore.getState();
 
-    const offUpdated = window.zenmail.onThreadsUpdated(() => {
-      void refresh();
-      void refreshFollowups();
+    // F6 CP5 (D1): the sole change channel. Mutation-origin pushes carry a diff we merge into the
+    // store with zero refetch; daemon-origin pushes (needsRefetch) trigger a full refresh instead.
+    const offChanged = window.zenmail.onThreadsChanged((p) => {
+      if (p.needsRefetch) {
+        void refresh();
+        void refreshFollowups();
+      } else {
+        useMailStore.getState().applyThreadsDiff(p.upserts, p.removals);
+        // both cheap local (non-network) reads, kept on the diff path to preserve the old
+        // threads-updated coupling: loadLabels → sidebar unread badges; refreshFollowups → the
+        // banner/pin state, which a mutation can flip main-side (e.g. markRead-on-open triggers
+        // fetch-thread's opportunistic followup resolution — see TC-FUP-C2).
+        void useMailStore.getState().loadLabels();
+        void refreshFollowups();
+      }
     });
     const offSnooze = window.zenmail.onSnoozeFired(() => showToast('A snoozed thread is back'));
 
@@ -35,7 +47,7 @@ export function useThreads(): void {
     window.addEventListener('online', onOnline);
 
     return () => {
-      offUpdated();
+      offChanged();
       offSnooze();
       offThreadChanged();
       clearInterval(poll);

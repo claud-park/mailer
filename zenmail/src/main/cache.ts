@@ -141,6 +141,18 @@ export function getThreads(labelId: string | undefined, limit = 50): ThreadSumma
   return rows.map(rowToSummary);
 }
 
+/**
+ * Single-thread summary reader for diff-push (F6 CP5, D1): after an optimistic label delta,
+ * the write path re-reads the affected row to ship it as a `mail:threads-changed` upsert.
+ * Returns null if the thread isn't cached (caller skips the push — 60s poll converges).
+ */
+export function getThreadSummary(threadId: string): ThreadSummary | null {
+  const row = openCache()
+    .prepare('SELECT * FROM threads WHERE id = ?')
+    .get(threadId) as Record<string, unknown> | undefined;
+  return row ? rowToSummary(row) : null;
+}
+
 export function cacheThreadDetail(detail: ThreadDetail): void {
   const d = openCache();
   const up = d.prepare(

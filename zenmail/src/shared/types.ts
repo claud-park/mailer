@@ -161,7 +161,14 @@ export interface ZenmailApi {
   /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
   notifyOnline(): Promise<void>;
 
-  onThreadsUpdated(cb: () => void): () => void;
+  /**
+   * The single change-propagation channel (F6 CP5, D1): main pushes a thread-list diff. Mutation-origin
+   * payloads carry {upserts, removals} the renderer merges without any refetch; daemon-origin payloads
+   * set needsRefetch so the renderer does a full refresh() instead.
+   */
+  onThreadsChanged(
+    cb: (p: { upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }) => void
+  ): () => void;
   /** SWR revalidate push (F6 CP4, D11): main sends the fresh detail when a cache-hit read diverged. */
   onThreadChanged(cb: (p: { threadId: string; detail: ThreadDetail }) => void): () => void;
   onSnoozeFired(cb: (threadId: string) => void): () => void;

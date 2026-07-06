@@ -79,6 +79,7 @@ interface MailState {
   loadThreads(): Promise<void>;
   loadMore(): Promise<void>;
   refresh(): Promise<void>;
+  applyThreadsDiff(upserts: ThreadSummary[], removals: string[]): void;
 
   setActiveLabel(id: string): void;
   toggleSplit(): void;
@@ -349,6 +350,35 @@ export const useMailStore = create<MailState>((set, get) => {
 
     async refresh() {
       await Promise.all([get().loadThreads(), get().loadLabels()]);
+    },
+
+    /**
+     * F6 CP5 (D1): merges a mutation-origin diff push straight into store.threads — never refetches.
+     * removals drop the ids. Each upsert is resolved against the *current view label* (main doesn't
+     * know the view): present + still in view → replace in place; present + label gone → drop (archive
+     * lands here); absent + in view → insert at date-sorted position. Search results are a static
+     * snapshot, so diffs are ignored while a search is active. selectedIndex is re-clamped after.
+     */
+    applyThreadsDiff(upserts, removals) {
+      set((st) => {
+        if (st.searchQuery) return {}; // search results are a frozen snapshot — ignore live diffs
+        const viewLabel = st.activeLabelId || 'INBOX';
+        const rm = new Set(removals);
+        let threads = st.threads.filter((t) => !rm.has(t.id));
+        for (const u of upserts) {
+          const exists = threads.some((t) => t.id === u.id);
+          const inView = u.labelIds.includes(viewLabel);
+          if (exists) {
+            threads = inView
+              ? threads.map((t) => (t.id === u.id ? u : t))
+              : threads.filter((t) => t.id !== u.id);
+          } else if (inView) {
+            threads = [...threads, u].sort((a, b) => b.date - a.date);
+          }
+        }
+        const next = { ...st, threads };
+        return { threads, selectedIndex: clampSelection(next) };
+      });
     },
 
     setActiveLabel(id) {
@@ -691,7 +721,7 @@ export const useMailStore = create<MailState>((set, get) => {
         setTimeout(() => {
           if (get().pendingSend?.sendId === receipt.sendId) set({ pendingSend: null });
           // archive-on-send is applied by the main process after the undo window;
-          // the follow-up threads-updated event refreshes the list
+          // the follow-up mail:threads-changed (needsRefetch) event refreshes the list
         }, receipt.sendAt - Date.now());
       }
     },

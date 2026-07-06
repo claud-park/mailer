@@ -36,11 +36,11 @@
 - [x] tsc + npm test + E2E 스모크(openThread 관련 기존 TC)
 
 ## CP5. diff-push 전환 (최고 위험 — D1)
-- [ ] `mail:threads-changed {upserts, removals}` 이벤트 + 뮤테이션 성공·데몬·revalidate 발신부 전환, threads-updated 발신 제거
-- [ ] 렌더러 useThreads: refetch 반응 제거 → store 병합(upsert/remove + clampSelection), 60s 폴링은 유지(외부 변경 수렴)
-- [ ] followup/labels 갱신 경로 정리(refresh() 의존처 재점검)
-- [ ] tsc + npm test + **기존 E2E 128 전체 실행 — green 필수**
-- [ ] react-best-practices + code-review low → 커밋 → push
+- [x] `mail:threads-changed {upserts, removals}` 이벤트 + 뮤테이션 성공·데몬·revalidate 발신부 전환, threads-updated 발신 제거
+- [x] 렌더러 useThreads: refetch 반응 제거 → store 병합(upsert/remove + clampSelection), 60s 폴링은 유지(외부 변경 수렴)
+- [x] followup/labels 갱신 경로 정리(refresh() 의존처 재점검)
+- [x] tsc + npm test + **기존 E2E 128 전체 실행 — green 필수**
+- [x] 커밋 → push (react-best-practices/code-review는 CP8 일괄 — TSX 변경 없음, useThreads 훅만)
 
 ## CP6. fetch-threads cold-read SWR (읽기 경로 2)
 - [ ] fetch-threads: 캐시 히트 즉시 반환(초기/라벨전환/검색) + 백그라운드 revalidate → diff push

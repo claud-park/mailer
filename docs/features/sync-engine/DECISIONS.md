@@ -8,6 +8,7 @@
 - **결정**: 기존 `threads-updated`(데이터 없는 poke → 렌더러 full refetch)를 diff payload 이벤트로 대체. 렌더러는 이벤트에 **재fetch로 절대 반응하지 않고** store 병합만.
 - **이유**: (a) SWR을 poke 위에 얹으면 revalidate 완료→poke→refetch→또 revalidate의 **무한 재검증 루프**(A 검증 — 이 승격은 선택이 아니라 SWR의 성립 조건). (b) 아카이브 1회 = list 1 + metadata get ×50이던 churn이 0호출로. (c) full-relist의 eventual-consistency 재유입 flicker가 구조적으로 소멸(push는 main이 아는 델타만).
 - **B와의 충돌 해소**: B는 drain 후 poke→refresh로 LWW 수렴을 삼았으나, drain 발신부도 payload로 전환(main이 델타를 앎). 서버측 외부 변경의 수렴은 기존 60s 폴링(이미 존재)이 담당.
+- **CP5 구현 절충(채택)**: 순수 diff는 **뮤테이션발(hot path)만**. 데몬 틱말·send 완료(10s 후)·debug-simulate-reply는 `needsRefetch: true` 플래그로 기존 refresh 유지 — (a) send의 remindDays followup 등록은 main측 상태라 refreshFollowups 결합이 필요(끊으면 TC-FUP-A2 회귀 실증), (b) 데몬은 분당 최대 1회라 churn 무해. D1의 목적(뮤테이션당 ~50콜 제거)은 hot path에서 달성. 뮤테이션발 diff 경로에도 `loadLabels`·`refreshFollowups`(로컬 캐시 1콜)는 유지 — TC-FUP-C2의 open-clear 결합 보존.
 
 ### D2. 렌더러 store.threads는 뷰 캐시로 유지 — 캐시 투영 강등 기각 (A)
 - **이유**: store 낙관·롤백에 F4 액션 전부와 E2E 209 어서션이 묶여 있음. 두 낙관(store/cache)은 동일 델타의 멱등 중복 적용이라 발산하지 않음 — 중복이 아니라 계층(즉시성 vs 영속성). diff 도착 시 캐시(서버 반영)가 최종 승자.

@@ -16,7 +16,7 @@ import {
   setFollowupFired,
 } from './cache';
 import { classifyError, isExhausted } from '../shared/sync';
-import { emitSyncState, onReconnect, setOnline } from './sync-state';
+import { emitSyncState, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
 
 const TICK_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -29,8 +29,8 @@ let tickInFlight = false;
  * Background daemon: every minute, wake snoozed threads whose time has come
  * (re-apply INBOX, drop zenmail/snoozed), fire scheduled sends, resurface
  * follow-up reminders that got no reply in time, and drain the offline
- * mutation queue (F6 CP3). All `mail:threads-updated` pokes emitted by these
- * four loops are collapsed into a single end-of-tick send (D12).
+ * mutation queue (F6 CP3). All change signals emitted by these four loops are
+ * collapsed into a single end-of-tick `mail:threads-changed` (needsRefetch) send (D12).
  */
 export function startSnoozeDaemon(
   getProvider: () => GmailProvider | null,
@@ -160,7 +160,11 @@ export function startSnoozeDaemon(
       }
       if (mutationQueueDepth() !== depthBefore) emitSyncState(getWindow);
 
-      if (changed) getWindow()?.webContents.send('mail:threads-updated');
+      // Daemon-origin change (D1 compromise): the wake/send/followup/drain loops touch threads that
+      // may not be in the renderer's current list (other labels), and the new server state isn't in
+      // the cache summaries — so ship a single needsRefetch (≤1/min) rather than a diff. This keeps
+      // pure diff-push (0 refetch) for the hot mutation path while the daemon stays refetch-based.
+      if (changed) notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
     } finally {
       tickInFlight = false;
     }
