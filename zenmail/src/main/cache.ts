@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { app } from 'electron';
 import Database from 'better-sqlite3';
@@ -10,6 +11,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
 } from '../shared/types';
+import { backoffDelayMs } from '../shared/sync';
 
 let db: Database.Database | null = null;
 
@@ -66,6 +68,13 @@ export function openCache(): Database.Database {
       status      TEXT NOT NULL DEFAULT 'pending',
       created_at  INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS mutations (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
+      thread_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_mutations_thread ON mutations(thread_id);
   `);
   return db;
 }
@@ -123,6 +132,15 @@ export function upsertThreads(threads: ThreadSummary[]): void {
   })();
 }
 
+/** Cache reader for the split-inbox lists — mirrors the Gmail `labelIds` filter semantics. */
+export function getThreads(labelId: string | undefined, limit = 50): ThreadSummary[] {
+  const label = labelId ?? 'INBOX';
+  const rows = openCache()
+    .prepare('SELECT * FROM threads WHERE label_ids LIKE ? ORDER BY date DESC LIMIT ?')
+    .all(`%"${label}"%`, limit) as Record<string, unknown>[];
+  return rows.map(rowToSummary);
+}
+
 export function cacheThreadDetail(detail: ThreadDetail): void {
   const d = openCache();
   const up = d.prepare(
@@ -142,14 +160,77 @@ export function cacheThreadDetail(detail: ThreadDetail): void {
   })();
 }
 
-export function getCachedThreadDetail(threadId: string): MessageDetail[] {
+/**
+ * Reassembles a full ThreadDetail from the cache for SWR cache-hit reads (D11): threads row
+ * supplies subject/labelIds, messages table supplies the message bodies. Returns null if the
+ * thread row or any cached messages are missing (cold miss — caller falls back to network).
+ */
+export function getCachedThreadDetail(threadId: string): ThreadDetail | null {
   const d = openCache();
+  const threadRow = d
+    .prepare('SELECT subject, label_ids FROM threads WHERE id = ?')
+    .get(threadId) as { subject: string; label_ids: string } | undefined;
+  if (!threadRow) return null;
   const rows = d
     .prepare('SELECT payload FROM messages WHERE thread_id = ?')
     .all(threadId) as { payload: string }[];
-  return rows
+  if (rows.length === 0) return null;
+  const messages = rows
     .map((r) => JSON.parse(r.payload) as MessageDetail)
     .sort((a, b) => a.date - b.date);
+  return {
+    id: threadId,
+    subject: threadRow.subject,
+    labelIds: JSON.parse(threadRow.label_ids),
+    messages,
+  };
+}
+
+/**
+ * Pure label_ids merge — extracted so the idempotency of add/remove can be unit-tested
+ * without a live DB. add: dedupes against current + itself. remove: filters out.
+ */
+export function mergeLabelIds(
+  current: string[],
+  addLabelIds: string[],
+  removeLabelIds: string[]
+): string[] {
+  const removed = current.filter((id) => !removeLabelIds.includes(id));
+  const merged = [...removed];
+  for (const id of addLabelIds) {
+    if (!merged.includes(id)) merged.push(id);
+  }
+  return merged.filter((id) => !removeLabelIds.includes(id));
+}
+
+/**
+ * Applies an optimistic label delta straight to the threads cache row (D3: enqueue + cache
+ * write are meant to be atomic with the queue insert at the IPC call site). Idempotent: a
+ * label already present/absent is a no-op for that label. `unread` is re-derived from the
+ * UNREAD label so it stays consistent with labelIds. No-op if the thread isn't cached.
+ *
+ * Note: if INBOX is removed here the row is NOT deleted — label-filtered readers (getThreads)
+ * naturally exclude it, and keeping the row lets warm-cache reads/undo still resolve it.
+ */
+export function applyLabelDelta(
+  threadId: string,
+  addLabelIds: string[],
+  removeLabelIds: string[]
+): void {
+  const d = openCache();
+  const row = d.prepare('SELECT label_ids FROM threads WHERE id = ?').get(threadId) as
+    | { label_ids: string }
+    | undefined;
+  if (!row) return;
+  const current = JSON.parse(row.label_ids) as string[];
+  const next = mergeLabelIds(current, addLabelIds, removeLabelIds);
+  const unread = next.includes('UNREAD');
+  d.prepare('UPDATE threads SET label_ids = ?, unread = ?, updated_at = ? WHERE id = ?').run(
+    JSON.stringify(next),
+    unread ? 1 : 0,
+    Date.now(),
+    threadId
+  );
 }
 
 export function searchLocal(q: string): ThreadSummary[] {
@@ -333,4 +414,77 @@ export function getFollowup(
 
 export function clearFollowups(): void {
   openCache().prepare('DELETE FROM followups').run();
+}
+
+// --- mutation queue (offline-write spill, D3/D4/D6) ---
+
+export interface QueuedMutation {
+  id: string;
+  kind: string;
+  payload: unknown;
+  threadId: string;
+  createdAt: number;
+  attempts: number;
+  nextAttemptAt: number;
+  lastError: string | null;
+}
+
+export function enqueueMutation(kind: string, threadId: string, payload: object, now: number): string {
+  const id = crypto.randomUUID();
+  openCache()
+    .prepare(
+      `INSERT INTO mutations (id, kind, payload, thread_id, created_at, attempts, next_attempt_at, last_error)
+       VALUES (?, ?, ?, ?, ?, 0, 0, NULL)`
+    )
+    .run(id, kind, JSON.stringify(payload), threadId, now);
+  return id;
+}
+
+export function listDrainableMutations(now: number): QueuedMutation[] {
+  const rows = openCache()
+    .prepare('SELECT * FROM mutations WHERE next_attempt_at <= ? ORDER BY created_at ASC')
+    .all(now) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: r.id as string,
+    kind: r.kind as string,
+    payload: JSON.parse(r.payload as string),
+    threadId: r.thread_id as string,
+    createdAt: r.created_at as number,
+    attempts: r.attempts as number,
+    nextAttemptAt: r.next_attempt_at as number,
+    lastError: (r.last_error as string | null) ?? null,
+  }));
+}
+
+/** Records a failed drain attempt and reschedules via shared/sync's exponential backoff. */
+export function bumpMutationAttempt(id: string, now: number, error: string): void {
+  const d = openCache();
+  const row = d.prepare('SELECT attempts FROM mutations WHERE id = ?').get(id) as
+    | { attempts: number }
+    | undefined;
+  if (!row) return;
+  const attempts = row.attempts + 1;
+  const nextAttemptAt = now + backoffDelayMs(attempts);
+  d.prepare('UPDATE mutations SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?').run(
+    attempts,
+    nextAttemptAt,
+    error,
+    id
+  );
+}
+
+export function removeMutation(id: string): void {
+  openCache().prepare('DELETE FROM mutations WHERE id = ?').run(id);
+}
+
+export function hasPendingMutations(threadId: string): boolean {
+  const row = openCache()
+    .prepare('SELECT 1 FROM mutations WHERE thread_id = ? LIMIT 1')
+    .get(threadId);
+  return !!row;
+}
+
+export function mutationQueueDepth(): number {
+  const row = openCache().prepare('SELECT COUNT(*) AS n FROM mutations').get() as { n: number };
+  return row.n;
 }

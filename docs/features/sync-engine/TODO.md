@@ -8,12 +8,12 @@
 - [x] PRD/TODO/TC/DECISIONS 작성
 
 ## CP1. 순수 코어 + 캐시 계층 (dead-code additive, 배선 없음)
-- [ ] `mutations` 테이블 + CRUD(enqueue/listDrainable/markAttempt/remove/hasPendingMutations/queueDepth) — scheduled_sends 패턴
-- [ ] 캐시 리더: `getThreads(query)` · `getCachedThreadDetail`(threads row + messages 조인으로 ThreadDetail 조립)
-- [ ] 캐시 델타 writer: `applyLabelDelta(threadId, add, remove)` · `removeThreadFromCache`(FTS 동기 포함)
-- [ ] `src/renderer/lib/sync.ts`(또는 shared) — `classifyError(err): 'transient'|'permanent'`(D5 규칙) 순수 + vitest(coded/status/미분류 경계)
-- [ ] backoff 계산 순수 함수(base 10s·2^n·cap 15m·jitter) + vitest
-- [ ] tsc + npm test (기존 96 유지 + 신규)
+- [x] `mutations` 테이블 + CRUD(enqueue/listDrainable/markAttempt/remove/hasPendingMutations/queueDepth) — scheduled_sends 패턴
+- [x] 캐시 리더: `getThreads(query)` · `getCachedThreadDetail`(threads row + messages 조인으로 ThreadDetail 조립)
+- [x] 캐시 델타 writer: `applyLabelDelta(threadId, add, remove)` · `removeThreadFromCache`(FTS 동기 포함)
+- [x] `src/renderer/lib/sync.ts`(또는 shared) — `classifyError(err): 'transient'|'permanent'`(D5 규칙) 순수 + vitest(coded/status/미분류 경계)
+- [x] backoff 계산 순수 함수(base 10s·2^n·cap 15m·jitter) + vitest
+- [x] tsc + npm test (기존 96 유지 + 신규)
 
 ## CP2. 쓰기 경로 배선 (오프라인 미토글 시 행동 불변)
 - [ ] main online-flag 모듈 + `mail:sync-state {online, pending}` 이벤트 발신기
