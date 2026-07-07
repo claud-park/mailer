@@ -8,6 +8,8 @@ export function LabelPicker() {
   const labels = useMailStore((s) => s.labels);
   const applyLabel = useMailStore((s) => s.applyLabel);
   const setActiveLabel = useMailStore((s) => s.setActiveLabel);
+  const bulkSelectedIds = useMailStore((s) => s.bulkSelectedIds);
+  const applyLabelSelected = useMailStore((s) => s.applyLabelSelected);
 
   const [filter, setFilter] = useState('');
   const [highlighted, setHighlighted] = useState(0);
@@ -61,7 +63,8 @@ export function LabelPicker() {
                 setActiveLabel(candidates[highlighted].id);
                 close();
               } else {
-                void applyLabel(candidates[highlighted].id);
+                const id = candidates[highlighted].id;
+                void (bulkSelectedIds.size > 0 ? applyLabelSelected(id) : applyLabel(id));
               }
             }
           }}
@@ -72,7 +75,7 @@ export function LabelPicker() {
           {candidates.map((l, i) => (
             <li key={l.id}>
               <button
-                onClick={() => void applyLabel(l.id)}
+                onClick={() => void (bulkSelectedIds.size > 0 ? applyLabelSelected(l.id) : applyLabel(l.id))}
                 className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] ${
                   i === highlighted ? 'bg-bg-border' : 'hover:bg-bg-border/50'
                 }`}

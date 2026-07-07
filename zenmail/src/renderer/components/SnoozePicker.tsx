@@ -45,6 +45,8 @@ export function SnoozePicker() {
   const open = useMailStore((s) => s.snoozePickerOpen);
   const close = useMailStore((s) => s.closeSnoozePicker);
   const snoozeThread = useMailStore((s) => s.snoozeThread);
+  const bulkSelectedIds = useMailStore((s) => s.bulkSelectedIds);
+  const snoozeSelected = useMailStore((s) => s.snoozeSelected);
   const [custom, setCustom] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -78,7 +80,7 @@ export function SnoozePicker() {
           return (
             <button
               key={p.label}
-              onClick={() => void snoozeThread(at)}
+              onClick={() => void (bulkSelectedIds.size > 0 ? snoozeSelected(at) : snoozeThread(at))}
               className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-text-primary hover:bg-bg-border"
             >
               {p.label}
@@ -95,7 +97,11 @@ export function SnoozePicker() {
           />
           <button
             disabled={!custom}
-            onClick={() => void snoozeThread(new Date(custom))}
+            onClick={() =>
+              void (bulkSelectedIds.size > 0
+                ? snoozeSelected(new Date(custom))
+                : snoozeThread(new Date(custom)))
+            }
             className="rounded bg-accent px-2 py-1 text-[12px] text-white disabled:opacity-40"
           >
             Set

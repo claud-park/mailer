@@ -21,9 +21,9 @@
 - [x] tsc + npm test
 
 ## CP3. 피커 bulk 분기
-- [ ] `SnoozePicker.tsx` — bulk 모드면 onConfirm이 snoozeSelected(until) 호출
-- [ ] `LabelPicker.tsx`(또는 동등 컴포넌트) — bulk 모드면 onConfirm이 applyLabelSelected(labelId) 호출
-- [ ] tsc + npm test
+- [x] `SnoozePicker.tsx` — bulk 모드면 onConfirm이 snoozeSelected(until) 호출
+- [x] `LabelPicker.tsx`(또는 동등 컴포넌트) — bulk 모드면 onConfirm이 applyLabelSelected(labelId) 호출
+- [x] tsc + npm test
 
 ## CP4. E2E + 마무리
 - [ ] TC-SA-* (select-all 진입, 아카이브 일괄, 라벨/스누즈 일괄, 집계 토스트, Esc 취소, 타이핑 중 미발화, 모달 중 미발화)
