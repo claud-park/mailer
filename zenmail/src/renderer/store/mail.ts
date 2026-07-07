@@ -71,6 +71,7 @@ interface MailState {
   snippets: SnippetRecord[];
   /** D10: sidebar sync line data — set from useThreads' onSyncState subscription. */
   sync: { online: boolean; pending: number };
+  bulkSelectedIds: Set<string>;
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -103,11 +104,19 @@ interface MailState {
   nextThread(): void;
   prevThread(): void;
 
-  archiveThread(threadId?: string): Promise<void>;
-  trashThread(threadId?: string): Promise<void>;
-  markRead(threadId?: string, read?: boolean): Promise<void>;
-  applyLabel(labelId: string, threadId?: string): Promise<void>;
-  snoozeThread(until: Date, threadId?: string): Promise<void>;
+  archiveThread(threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+  trashThread(threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+  markRead(threadId?: string, read?: boolean, opts?: { silent?: boolean }): Promise<void>;
+  applyLabel(labelId: string, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+  snoozeThread(until: Date, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+
+  selectAllVisible(): void;
+  clearBulkSelection(): void;
+  archiveSelected(): Promise<void>;
+  trashSelected(): Promise<void>;
+  markReadSelected(read: boolean): Promise<void>;
+  applyLabelSelected(labelId: string): Promise<void>;
+  snoozeSelected(until: Date): Promise<void>;
 
   openCompose(init?: Partial<ComposeInit>): void;
   openReply(all?: boolean): void;
@@ -252,6 +261,7 @@ export const useMailStore = create<MailState>((set, get) => {
     toast: null,
     snippets: [],
     sync: { online: true, pending: 0 },
+    bulkSelectedIds: new Set(),
 
     async init() {
       api().onFollowupFired((threadId) => {
@@ -510,7 +520,7 @@ export const useMailStore = create<MailState>((set, get) => {
       get().moveSelection(-1);
     },
 
-    async archiveThread(threadId) {
+    async archiveThread(threadId, opts) {
       const done = instrument('archive');
       const s = get();
       const id = targetThreadId(s, threadId);
@@ -535,11 +545,11 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      get().showToast('Archived');
+      if (!opts?.silent) get().showToast('Archived');
       useCoachStore.getState().bumpStat('archive');
     },
 
-    async trashThread(threadId) {
+    async trashThread(threadId, opts) {
       const done = instrument('trash');
       const s = get();
       const id = targetThreadId(s, threadId);
@@ -564,11 +574,11 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      get().showToast('Moved to trash');
+      if (!opts?.silent) get().showToast('Moved to trash');
       useCoachStore.getState().bumpStat('trash');
     },
 
-    async markRead(threadId, read = true) {
+    async markRead(threadId, read = true, _opts) {
       const done = instrument('markRead');
       const s = get();
       const id = targetThreadId(s, threadId);
@@ -603,7 +613,7 @@ export const useMailStore = create<MailState>((set, get) => {
       void get().loadLabels();
     },
 
-    async applyLabel(labelId, threadId) {
+    async applyLabel(labelId, threadId, opts) {
       const done = instrument('applyLabel');
       const s = get();
       const id = targetThreadId(s, threadId);
@@ -629,10 +639,10 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      get().showToast('Label applied');
+      if (!opts?.silent) get().showToast('Label applied');
     },
 
-    async snoozeThread(until, threadId) {
+    async snoozeThread(until, threadId, opts) {
       const done = instrument('snooze');
       const s = get();
       const id = targetThreadId(s, threadId);
@@ -658,7 +668,7 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      get().showToast(`Snoozed until ${until.toLocaleString()}`);
+      if (!opts?.silent) get().showToast(`Snoozed until ${until.toLocaleString()}`);
       useCoachStore.getState().bumpStat('snooze');
     },
 
@@ -874,6 +884,64 @@ export const useMailStore = create<MailState>((set, get) => {
     async saveSnippets(list) {
       set({ snippets: list });
       await api().setSetting(SNIPPETS_KEY, JSON.stringify(list));
+    },
+
+    selectAllVisible() {
+      set((s) => ({ bulkSelectedIds: new Set(visibleThreads(s).map((t) => t.id)) }));
+    },
+
+    clearBulkSelection() {
+      set({ bulkSelectedIds: new Set() });
+    },
+
+    async archiveSelected() {
+      const ids = Array.from(get().bulkSelectedIds);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await get().archiveThread(id, { silent: true });
+      }
+      get().showToast(`${ids.length}개 아카이브됨`);
+      get().clearBulkSelection();
+    },
+
+    async trashSelected() {
+      const ids = Array.from(get().bulkSelectedIds);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await get().trashThread(id, { silent: true });
+      }
+      get().showToast(`${ids.length}개 트래시로 이동`);
+      get().clearBulkSelection();
+    },
+
+    async markReadSelected(read) {
+      const ids = Array.from(get().bulkSelectedIds);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await get().markRead(id, read, { silent: true });
+      }
+      get().showToast(`${ids.length}개 읽음 처리됨`);
+      get().clearBulkSelection();
+    },
+
+    async applyLabelSelected(labelId) {
+      const ids = Array.from(get().bulkSelectedIds);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await get().applyLabel(labelId, id, { silent: true });
+      }
+      get().showToast(`${ids.length}개 라벨 적용됨`);
+      get().clearBulkSelection();
+    },
+
+    async snoozeSelected(until) {
+      const ids = Array.from(get().bulkSelectedIds);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await get().snoozeThread(until, id, { silent: true });
+      }
+      get().showToast(`${ids.length}개 스누즈됨`);
+      get().clearBulkSelection();
     },
   };
 });
