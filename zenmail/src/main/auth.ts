@@ -79,7 +79,16 @@ function keytarStore(): TokenStore | null {
     const keytar = require('keytar') as typeof import('keytar');
     return {
       async get(account) {
-        return keytar.getPassword(SERVICE, account);
+        try {
+          return await keytar.getPassword(SERVICE, account);
+        } catch (err) {
+          // A native Keychain read failure (e.g. ACL/signature mismatch after a rebuild,
+          // a locked keychain, a denied access prompt) must degrade to "no credential
+          // found", not crash the startup auth:get-account check — same fallback
+          // philosophy as require()-time keytar unavailability above.
+          console.warn('[auth] keychain read failed, treating as signed out:', err);
+          return null;
+        }
       },
       async set(account, value) {
         await keytar.setPassword(SERVICE, account, value);

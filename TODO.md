@@ -81,7 +81,7 @@ Last updated: 2026-07-04
 ## 사용자 후속 액션 (릴리즈 전)
 - [x] Google Cloud Console Desktop-app OAuth Client + Gmail API enable (dreamus.io Internal) — 2026-07-07 확인: Keychain refresh token 유효, labels.list 30개 응답
 - [x] 실계정 OAuth 플로우 E2E 확인 — 2026-07-07: 세션 자동 복원(로그인 화면 없음), yr.park@dreamus.io 사이드바 표시, 실 인박스 26행·스플릿 탭 실데이터 렌더 (읽기 전용 검증)
-- [x] `npm run make` DMG/ZIP 패키징 — 2026-07-07: ZenMail-1.0.0-arm64.dmg(116M)+zip(128M), 프로젝트 트리 밖 스모크(윈도우·헬퍼·격리 프로필) 통과. 수정 2건: forge vite 템플릿이 externals를 asar에 미포함(packageAfterCopy 폐쇄 복사 훅), fuses 플립이 adhoc 서명 파손(resetAdHocDarwinSignature). 정식 배포 시 osxSign+공증 필요
+- [x] `npm run make` DMG/ZIP 패키징 — 2026-07-07: ZenMail-1.0.0-arm64.dmg(116M)+zip(128M), 프로젝트 트리 밖 스모크(윈도우·헬퍼·격리 프로필) 통과. 수정 3건: ① forge vite 템플릿이 externals를 asar에 미포함(packageAfterCopy 폐쇄 복사 훅) ② fuses 플립이 adhoc 서명 파손(resetAdHocDarwinSignature) ③ 실사용 버그: 기본(공유) 프로필에서 Keychain ACL 실패(errSecAuthFailed -25293, ad-hoc 서명 불안정)가 auth:get-account를 크래시시켜 첫 화면에 IPC 에러 노출 → keytarStore.get()에 try/catch 추가해 '로그인 필요' 상태로 우아하게 강등(auth.ts). 정식 배포 시 osxSign+공증 필요(부수 효과: Keychain ACL도 안정화됨)
 
 ## v1.x Feature 로드맵 (2026-07-03 확정 — 상세: docs/DEV_WORKFLOW.md)
 
