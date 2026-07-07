@@ -85,6 +85,16 @@ export function useKeyboard(): void {
         useCoachStore.getState().recordEfficient('switchTab');
         return;
       }
+
+      // ⌘A — select all visible threads for bulk actions (isTyping already
+      // filtered out above, and the modal guard above already returned early
+      // while a modal is open, so this can't fire over a text field or modal)
+      if (e.metaKey && !e.shiftKey && !e.altKey && e.code === 'KeyA') {
+        e.preventDefault();
+        s.selectAllVisible();
+        return;
+      }
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       switch (e.key) {
@@ -112,6 +122,7 @@ export function useKeyboard(): void {
           s.prevThread();
           break;
         case 'Escape':
+          if (s.bulkSelectedIds.size > 0) { s.clearBulkSelection(); break; }
           if (s.activeThreadId) s.closeThread();
           else s.clearSearch();
           break;

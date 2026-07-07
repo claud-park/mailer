@@ -14,10 +14,11 @@
 - [x] tsc + npm test
 
 ## CP2. 단축키 배선 + 시각 표시
-- [ ] `useKeyboard.ts` — ⌘A(isTyping 뒤, 모달가드 뒤, switch 앞) → selectAllVisible(). bulk 모드일 때 e/#/I/U가 대응 Selected 액션 호출하도록 분기. Escape가 bulk 모드면 clearBulkSelection 우선.
-- [ ] `ThreadRow.tsx` — `bulkSelectedIds.has(thread.id)` prop → 배경 `bg-accent/10` + 언리드 도트 자리 체크 아이콘
-- [ ] `components/BulkActionBanner.tsx`(신규) — 리스트 상단, "N selected — E archive · # trash · Esc cancel"
-- [ ] tsc + npm test
+- [x] `useKeyboard.ts` — ⌘A(모디파이어 콤보이므로 useKeyboard 소유, isTyping 뒤·모달가드 뒤 배치) → selectAllVisible(). Escape가 bulk 모드면 clearBulkSelection 우선(액션 없음).
+- [x] `CommandPalette.tsx` — e/#/I/U는 **kbar 소유 단일키**(CLAUDE.md 단축키 소유권 규약, useKeyboard 아님) — 해당 4개 액션의 `perform`에서 `useMailStore.getState().bulkSelectedIds.size > 0`면 archiveSelected()/trashSelected()/markReadSelected(true)/markReadSelected(false)를, 아니면 기존 단일 액션을 호출하도록 분기.
+- [x] `ThreadRow.tsx` — `bulkSelectedIds.has(thread.id)` prop → 배경 `bg-accent/10` + 언리드 도트 자리 체크 아이콘
+- [x] `components/BulkActionBanner.tsx`(신규) — 리스트 상단, "N selected — E archive · # trash · Esc cancel"
+- [x] tsc + npm test
 
 ## CP3. 피커 bulk 분기
 - [ ] `SnoozePicker.tsx` — bulk 모드면 onConfirm이 snoozeSelected(until) 호출

@@ -4,6 +4,7 @@ import { useMailStore } from '../store/mail';
 import { useCoachStore } from '../store/coach';
 import { selectVisibleThreads, INBOX_TAB } from '../lib/splits';
 import { SplitTabBar } from './SplitTabBar';
+import { BulkActionBanner } from './BulkActionBanner';
 import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../shared/types';
 
 const ROW_HEIGHT = 56;
@@ -36,11 +37,13 @@ function formatDate(ms: number): string {
 function ThreadRow({
   thread,
   selected,
+  bulkSelected,
   labelsById,
   followup,
 }: {
   thread: ThreadSummary;
   selected: boolean;
+  bulkSelected: boolean;
   labelsById: Map<string, Label>;
   followup?: FollowupInfo;
 }) {
@@ -105,12 +108,18 @@ function ThreadRow({
       data-thread-id={thread.id}
       style={{ transform: offset ? `translateX(${offset}px)` : undefined }}
       className={`flex h-full w-full items-center gap-3 border-b border-bg-border/60 px-4 text-left transition-transform ${
-        selected ? 'bg-bg-subtle' : 'hover:bg-bg-subtle/50'
+        bulkSelected ? 'bg-accent/10' : selected ? 'bg-bg-subtle' : 'hover:bg-bg-subtle/50'
       }`}
     >
-      <span
-        className={`h-2 w-2 shrink-0 rounded-full ${thread.unread ? 'bg-accent' : 'bg-transparent'}`}
-      />
+      {bulkSelected ? (
+        <span className="flex h-2 w-2 shrink-0 items-center justify-center text-[11px] leading-none text-accent">
+          ✓
+        </span>
+      ) : (
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${thread.unread ? 'bg-accent' : 'bg-transparent'}`}
+        />
+      )}
       <span
         className={`w-40 shrink-0 truncate text-[13px] ${
           thread.unread ? 'font-medium text-text-primary' : 'text-text-secondary'
@@ -169,6 +178,7 @@ export function ThreadList() {
   const loadMore = useMailStore((s) => s.loadMore);
   const activeThreadId = useMailStore((s) => s.activeThreadId);
   const followups = useMailStore((s) => s.followups);
+  const bulkSelectedIds = useMailStore((s) => s.bulkSelectedIds);
 
   const useSplit = splitInbox && activeLabelId === 'INBOX' && !searchQuery;
 
@@ -210,6 +220,7 @@ export function ThreadList() {
 
   return (
     <>
+      <BulkActionBanner />
       {useSplit && <SplitTabBar />}
       {emptyState ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-muted">
@@ -248,6 +259,7 @@ export function ThreadList() {
                   <ThreadRow
                     thread={thread}
                     selected={vi.index === selectedIndex}
+                    bulkSelected={bulkSelectedIds.has(thread.id)}
                     labelsById={labelsById}
                     followup={followups.get(thread.id)}
                   />

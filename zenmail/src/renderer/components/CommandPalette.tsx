@@ -54,16 +54,56 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
     const s = useMailStore.getState;
     return [
       { id: 'compose', name: 'Compose', shortcut: ['c'], section: 'Actions', perform: () => s().openCompose() },
-      { id: 'archive', name: 'Archive', shortcut: ['e'], section: 'Actions', perform: () => void s().archiveThread() },
+      {
+        id: 'archive',
+        name: 'Archive',
+        shortcut: ['e'],
+        section: 'Actions',
+        perform: () => {
+          const st = s();
+          if (st.bulkSelectedIds.size > 0) void st.archiveSelected();
+          else void st.archiveThread();
+        },
+      },
       { id: 'reply', name: 'Reply', shortcut: ['r'], section: 'Actions', perform: () => s().openReply(false) },
       { id: 'replyAll', name: 'Reply all', shortcut: ['a'], section: 'Actions', perform: () => s().openReply(true) },
       { id: 'forward', name: 'Forward', shortcut: ['f'], section: 'Actions', perform: () => s().openForward() },
       { id: 'label', name: 'Apply label…', shortcut: ['l'], section: 'Actions', perform: () => s().openLabelPicker() },
       { id: 'snooze', name: 'Snooze…', shortcut: ['b'], section: 'Actions', perform: () => s().openSnoozePicker() },
       { id: 'remindMe', name: 'Remind me…', shortcut: ['h'], section: 'Actions', perform: () => s().openFollowupPicker() },
-      { id: 'trash', name: 'Move to trash', shortcut: ['#'], section: 'Actions', perform: () => void s().trashThread() },
-      { id: 'markRead', name: 'Mark as read', shortcut: ['I'], section: 'Actions', perform: () => void s().markRead(undefined, true) },
-      { id: 'markUnread', name: 'Mark as unread', shortcut: ['U'], section: 'Actions', perform: () => void s().markRead(undefined, false) },
+      {
+        id: 'trash',
+        name: 'Move to trash',
+        shortcut: ['#'],
+        section: 'Actions',
+        perform: () => {
+          const st = s();
+          if (st.bulkSelectedIds.size > 0) void st.trashSelected();
+          else void st.trashThread();
+        },
+      },
+      {
+        id: 'markRead',
+        name: 'Mark as read',
+        shortcut: ['I'],
+        section: 'Actions',
+        perform: () => {
+          const st = s();
+          if (st.bulkSelectedIds.size > 0) void st.markReadSelected(true);
+          else void st.markRead(undefined, true);
+        },
+      },
+      {
+        id: 'markUnread',
+        name: 'Mark as unread',
+        shortcut: ['U'],
+        section: 'Actions',
+        perform: () => {
+          const st = s();
+          if (st.bulkSelectedIds.size > 0) void st.markReadSelected(false);
+          else void st.markRead(undefined, false);
+        },
+      },
       { id: 'search', name: 'Search mail', shortcut: ['/'], section: 'Navigation', perform: () => s().focusSearch() },
       { id: 'inbox', name: 'Go to inbox', shortcut: ['g', 'i'], section: 'Navigation', perform: () => s().setActiveLabel('INBOX') },
       { id: 'sent', name: 'Go to sent', shortcut: ['g', 's'], section: 'Navigation', perform: () => s().setActiveLabel('SENT') },
