@@ -77,28 +77,47 @@ function keytarStore(): TokenStore | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const keytar = require('keytar') as typeof import('keytar');
+    // A native Keychain call can fail at RUNTIME for reasons unrelated to keytar being
+    // installed at all — ACL/signature mismatch after a rebuild, a locked keychain, a denied
+    // access prompt. Every operation degrades to the file store rather than letting an
+    // uncaught native rejection crash its caller (auth:get-account, sign-in's token save,
+    // sign-out's token delete). The file store is created lazily and lives for the process
+    // lifetime, so a set() that falls back is later found by a get() that also falls back.
+    const fallback = fileStore();
     return {
       async get(account) {
         try {
-          return await keytar.getPassword(SERVICE, account);
+          const v = await keytar.getPassword(SERVICE, account);
+          if (v !== null) return v;
         } catch (err) {
-          // A native Keychain read failure (e.g. ACL/signature mismatch after a rebuild,
-          // a locked keychain, a denied access prompt) must degrade to "no credential
-          // found", not crash the startup auth:get-account check — same fallback
-          // philosophy as require()-time keytar unavailability above.
-          console.warn('[auth] keychain read failed, treating as signed out:', err);
-          return null;
+          console.warn('[auth] keychain read failed, falling back to file store:', err);
         }
+        return fallback.get(account);
       },
       async set(account, value) {
-        await keytar.setPassword(SERVICE, account, value);
+        try {
+          await keytar.setPassword(SERVICE, account, value);
+        } catch (err) {
+          console.warn('[auth] keychain write failed, falling back to file store:', err);
+          await fallback.set(account, value);
+        }
       },
       async del(account) {
-        await keytar.deletePassword(SERVICE, account);
+        try {
+          await keytar.deletePassword(SERVICE, account);
+        } catch (err) {
+          console.warn('[auth] keychain delete failed, falling back to file store:', err);
+        }
+        await fallback.del(account);
       },
       async list() {
-        const creds = await keytar.findCredentials(SERVICE);
-        return creds.map((c) => c.account);
+        try {
+          const creds = await keytar.findCredentials(SERVICE);
+          return creds.map((c) => c.account);
+        } catch (err) {
+          console.warn('[auth] keychain list failed, falling back to file store:', err);
+          return fallback.list();
+        }
       },
     };
   } catch (err) {
