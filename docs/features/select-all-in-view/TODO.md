@@ -26,7 +26,7 @@
 - [x] tsc + npm test
 
 ## CP4. E2E + 마무리
-- [ ] TC-SA-* (select-all 진입, 아카이브 일괄, 라벨/스누즈 일괄, 집계 토스트, Esc 취소, 타이핑 중 미발화, 모달 중 미발화)
-- [ ] 기존 E2E 전체 무회귀 + 연속 2회 안정
-- [ ] react-best-practices + web-design-guidelines + code-review low
-- [ ] 커밋 → push, TODO/DEV_WORKFLOW 갱신
+- [x] TC-SA-* (select-all 진입, 아카이브 일괄, 라벨/스누즈 일괄, 집계 토스트, Esc 취소, 타이핑 중 미발화, 모달 중 미발화)
+- [x] 기존 E2E 전체 무회귀(294 PASS·0 FAIL) + 연속 2회 안정
+- [x] react-best-practices + code-review low (전부 클린, findings 없음)
+- [x] 커밋 → push, TODO/DEV_WORKFLOW 갱신

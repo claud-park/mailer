@@ -484,6 +484,14 @@ async function run() {
     await trySyScenario(page, 'Warm', () => scenario_sy_warm(page));
     await trySyScenario(page, 'SendSpill', () => scenario_sy_send_spill(page));
 
+    // --- select-all-in-view: ⌘A bulk selection (docs/features/select-all-in-view/TC.md) — runs
+    // after every F6 scenario, before the mutate+restart block. Entry/non-destructive first, then
+    // destructive last on reserved-free targets only (Newsletter tab + throwaway senders splits),
+    // never touching SY_RESERVED / demo_3 "Design tokens v2" the restart block still depends on.
+    await trySaScenario(page, 'Entry', () => scenario_sa_entry(page));
+    await trySaScenario(page, 'BulkNondestructive', () => scenario_sa_bulk_nondestructive(page));
+    await trySaScenario(page, 'BulkDestructive', () => scenario_sa_bulk_destructive(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -577,6 +585,23 @@ async function run() {
     record('TC-SY-G2', 'PASS', 'npm test + npx tsc --noEmit (incl. sync classify/backoff/cache-assembly suites) both exit 0 (reusing TC-KM-G2/G3)');
   } else {
     record('TC-SY-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-SA-C1/C2: select-all-in-view regression gates --------------------
+  const preSaFails = results.filter((r) => !r.id.startsWith('TC-SA') && r.status === 'FAIL');
+  if (preSaFails.length === 0) {
+    record(
+      'TC-SA-C1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-SA')).length} pre-existing F1..F6 assertions still PASS/SKIP with ⌘A bulk selection wired in`
+    );
+  } else {
+    record('TC-SA-C1', 'FAIL', `${preSaFails.length} pre-existing (non-SA) assertions failed: ${preSaFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-SA-C2', 'PASS', 'npm test + npx tsc --noEmit both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-SA-C2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
   }
 
   console.log('\n=== TC Results ===');
@@ -3450,6 +3475,393 @@ async function trySyScenario(page, label, fn) {
       /* best-effort only */
     }
   }
+}
+
+// ===========================================================================
+// select-all-in-view (docs/features/select-all-in-view/TC.md — A entry/dismiss, B bulk actions,
+// C regression). ⌘A is `page.keyboard.press('Meta+A')`. While a bulk selection is active every
+// row swaps its unread-dot span for a ✓ (no `rounded-full`), so rowsInfo() reports 0 rows during
+// a selection — always count the target rows BEFORE ⌘A.
+// ===========================================================================
+
+/** the exact "N selected" text from BulkActionBanner, or null when no bulk banner is showing */
+async function bulkBannerText(page) {
+  return page.evaluate(() => {
+    const el = Array.from(document.querySelectorAll('span')).find((s) =>
+      /^\d+ selected$/.test(s.textContent.trim())
+    );
+    return el ? el.textContent.trim() : null;
+  });
+}
+
+/** count of rendered list rows whose unread dot is "on" (accent) — rows must NOT be bulk-selected */
+async function unreadRowCount(page) {
+  return page.evaluate(() => {
+    const dots = Array.from(document.querySelectorAll('main span.rounded-full')).filter(
+      (el) => el.classList.contains('h-2') && el.classList.contains('w-2') && !el.classList.contains('inline-block')
+    );
+    return dots.filter((d) => d.classList.contains('bg-accent')).length;
+  });
+}
+
+/** creates a throwaway senders-rule split (default rule type) matching a single email, then saves */
+async function makeSendersSplit(page, name, email) {
+  await openSplitSettings(page);
+  await page.click('text=+ Add split');
+  const nameInput = page.locator('input[aria-label="Split name"]').last();
+  await nameInput.fill(name);
+  const chipInput = page.locator('div.p-2').last().locator('input[aria-label="sender@example.com, …"]');
+  await chipInput.fill(email);
+  await chipInput.press('Enter');
+  await saveSplitSettings(page);
+  await sleep(300);
+}
+
+async function deleteSplit(page, name) {
+  await openSplitSettings(page);
+  const n = await page.locator(`[aria-label="Delete ${name}"]`).count();
+  if (n > 0) await page.click(`[aria-label="Delete ${name}"]`);
+  await saveSplitSettings(page);
+  await sleep(200);
+}
+
+/** subjects whose demo threads the restart block / SY_RESERVED still depend on — never destroy */
+const SA_RESERVED_SUBJECTS = ['Design tokens v2', 'Q3 roadmap review', 'Postmortem: snooze', 'Intro: Yuna'];
+
+/**
+ * Ground-truth INBOX summaries (regular fetchThreads IPC — exposes from.email/labelIds the DOM
+ * doesn't) filtered to senders that a throwaway senders-split can reliably isolate for a destructive
+ * bulk test: non-reserved, not sharing an email with any reserved thread, and currently unmatched by
+ * the active Team(@zenmail.app)/Newsletter(category|pattern) splits so a low-priority throwaway split
+ * actually claims them. Returns a de-duped list of candidate emails.
+ */
+async function safeBulkSenderCandidates(page) {
+  const threads = await page.evaluate(() => window.zenmail.fetchThreads({ labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => ({ email: t.from.email.toLowerCase(), subject: t.subject, labelIds: t.labelIds }))));
+  const isReserved = (t) => SA_RESERVED_SUBJECTS.some((s) => t.subject.includes(s));
+  const reservedEmails = new Set(threads.filter(isReserved).map((t) => t.email));
+  const CATEGORY_RE = /^CATEGORY_/;
+  const NEWSLETTER_RE = /(?:^|[.\-_])(?:no-?reply|newsletter|digest|updates)@/i;
+  const seen = new Set();
+  const out = [];
+  for (const t of threads) {
+    if (isReserved(t) || reservedEmails.has(t.email) || seen.has(t.email)) continue;
+    const domain = t.email.split('@')[1] ?? '';
+    if (domain === 'zenmail.app') continue; // claimed by the Team split (higher priority)
+    if (t.labelIds.some((l) => CATEGORY_RE.test(l)) || NEWSLETTER_RE.test(t.email)) continue; // Newsletter split
+    seen.add(t.email);
+    out.push(t.email);
+  }
+  return out;
+}
+
+/**
+ * Creates a throwaway senders-split for `email`, switches to it, and returns the row count. If empty
+ * (target already consumed), deletes the split and returns 0 so the caller can try the next email.
+ */
+async function isolateInThrowawaySplit(page, name, email) {
+  await makeSendersSplit(page, name, email);
+  try {
+    await clickTab(page, name);
+  } catch {
+    await deleteSplit(page, name).catch(() => {});
+    return 0;
+  }
+  await focusBody(page);
+  await sleep(200);
+  const n = (await rowsInfo(page)).length;
+  if (n === 0) {
+    await clickTab(page, 'Inbox').catch(() => {});
+    await deleteSplit(page, name).catch(() => {});
+  }
+  return n;
+}
+
+async function trySaScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] SA scenario "${label}" failed:`, err);
+    record(`TC-SA-${label}-error`, 'FAIL', String(err));
+    try {
+      // a failed SA scenario may leave a bulk selection, a picker/modal, or a stray throwaway split
+      // behind — any of which would poison the restart block. Clear selection, unwind modals, and
+      // best-effort remove the throwaway splits.
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await deleteSplit(page, 'SA-Trash').catch(() => {});
+      await deleteSplit(page, 'SA-Snooze').catch(() => {});
+      await clickTab(page, 'Inbox').catch(() => {});
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+// --- A: entry / dismiss (TC-SA-A1..A5) — all non-destructive ----------------
+
+async function scenario_sa_entry(page) {
+  // TC-SA-A1: INBOX list focus + ⌘A → banner shows "<row count> selected"
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  await sleep(150);
+  const nInbox = (await rowsInfo(page)).length;
+  await page.keyboard.press('Meta+A');
+  const bannerA1 = await waitFor(() => bulkBannerText(page), { timeout: 4000, desc: 'A1 bulk banner' }).catch(() => null);
+  if (bannerA1 === `${nInbox} selected` && nInbox > 0) {
+    record('TC-SA-A1', 'PASS', `⌘A selected all ${nInbox} visible INBOX threads (banner "${bannerA1}")`);
+  } else {
+    record('TC-SA-A1', 'FAIL', `banner=${bannerA1} expected "${nInbox} selected"`);
+  }
+  await page.keyboard.press('Escape');
+  await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 3000, desc: 'A1 banner cleared' }).catch(() => {});
+
+  // TC-SA-A2: ⌘A while the search field is focused → native text-select, no bulk banner
+  await page.click('input[placeholder^="Search mail"]');
+  await sleep(100);
+  await page.keyboard.press('Meta+A');
+  await sleep(200);
+  const a2Banner = await bulkBannerText(page);
+  if (a2Banner === null) {
+    record('TC-SA-A2', 'PASS', '⌘A in the search field is not intercepted for bulk selection (native text-select only)');
+  } else {
+    record('TC-SA-A2', 'FAIL', `bulk banner appeared over the search input: "${a2Banner}"`);
+  }
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur());
+  await sleep(150);
+
+  // TC-SA-A3: ⌘A while a modal (snooze picker) is open → no bulk selection
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  await page.keyboard.press('b');
+  // the picker header uses text-transform:uppercase (innerText unreliable) — key off a preset button
+  await page.waitForSelector('button:has-text("Later today")', { timeout: 4000 });
+  await page.keyboard.press('Meta+A');
+  await sleep(200);
+  const a3Banner = await bulkBannerText(page);
+  await page.keyboard.press('Escape');
+  await sleep(150);
+  if (a3Banner === null) {
+    record('TC-SA-A3', 'PASS', '⌘A does not fire bulk selection while the snooze picker modal is open');
+  } else {
+    record('TC-SA-A3', 'FAIL', `bulk banner appeared while a modal was open: "${a3Banner}"`);
+  }
+
+  // TC-SA-A4: ⌘A then Escape → selection cleared, no action, rows unchanged
+  await focusBody(page);
+  await sleep(100);
+  const beforeA4 = await rowsInfo(page);
+  await page.keyboard.press('Meta+A');
+  await waitFor(async () => (await bulkBannerText(page)) !== null, { timeout: 4000, desc: 'A4 banner shown' });
+  await page.keyboard.press('Escape');
+  await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 3000, desc: 'A4 banner cleared' });
+  const afterA4 = await rowsInfo(page);
+  const a4Unchanged =
+    afterA4.length === beforeA4.length && afterA4.every((r, i) => r.text === beforeA4[i]?.text);
+  if (a4Unchanged) {
+    record('TC-SA-A4', 'PASS', `Escape clears the selection with no action — ${afterA4.length} rows unchanged`);
+  } else {
+    record('TC-SA-A4', 'FAIL', `rows changed after ⌘A+Esc: before=${beforeA4.length} after=${afterA4.length}`);
+  }
+
+  // TC-SA-A5: ⌘A on a split tab (Team) selects only that tab's rows (count differs from Inbox)
+  await clickTab(page, 'Team');
+  await focusBody(page);
+  await sleep(150);
+  const nTeam = (await rowsInfo(page)).length;
+  await page.keyboard.press('Meta+A');
+  const bannerA5 = await waitFor(() => bulkBannerText(page), { timeout: 4000, desc: 'A5 bulk banner' }).catch(() => null);
+  if (bannerA5 === `${nTeam} selected` && nTeam > 0 && nTeam !== nInbox) {
+    record('TC-SA-A5', 'PASS', `⌘A on the Team tab selected only its ${nTeam} rows (Inbox had ${nInbox}) — banner "${bannerA5}"`);
+  } else {
+    record('TC-SA-A5', 'FAIL', `bannerA5=${bannerA5} nTeam=${nTeam} nInbox=${nInbox} (expected tab-scoped count != inbox)`);
+  }
+  await page.keyboard.press('Escape');
+  await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 3000, desc: 'A5 banner cleared' }).catch(() => {});
+  await clickTab(page, 'Inbox');
+}
+
+// --- B (non-destructive first): mark-unread + label (TC-SA-B3/B5/B6) --------
+
+async function scenario_sa_bulk_nondestructive(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  await sleep(150);
+
+  // TC-SA-B3 (+ B6): ⌘A → U (mark unread) → all rows unread + banner auto-clears
+  const nB3 = (await rowsInfo(page)).length;
+  await page.keyboard.press('Meta+A');
+  await waitFor(async () => (await bulkBannerText(page)) !== null, { timeout: 4000, desc: 'B3 banner shown' });
+  await page.keyboard.press('U'); // markReadSelected(false)
+  await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 10000, desc: 'B3/B6 banner auto-clears after bulk mark-unread' });
+  await sleep(300);
+  const unreadAfter = await unreadRowCount(page);
+  const rowsAfterB3 = await rowsInfo(page);
+  const b3ok = unreadAfter >= nB3 && rowsAfterB3.length === nB3;
+  if (b3ok) {
+    record('TC-SA-B3', 'PASS', `bulk mark-unread set all ${nB3} rows unread (${unreadAfter} unread dots), rows retained in view`);
+  } else {
+    record('TC-SA-B3', 'FAIL', `nB3=${nB3} unreadAfter=${unreadAfter} rowsAfter=${rowsAfterB3.length}`);
+  }
+  record(
+    'TC-SA-B6',
+    b3ok ? 'PASS' : 'FAIL',
+    b3ok ? 'bulk action auto-clears the selection (banner disappears) — validated via B3' : 'banner did not auto-clear after the bulk action'
+  );
+
+  // TC-SA-B5: ⌘A → l → pick a label → all selected rows gain that label chip
+  await focusBody(page);
+  await sleep(100);
+  await page.keyboard.press('Meta+A');
+  await waitFor(async () => (await bulkBannerText(page)) !== null, { timeout: 4000, desc: 'B5 banner shown' });
+  await page.keyboard.press('l');
+  // the picker's "Apply label…" is placeholder text (not in innerText) — key off its label buttons
+  await waitFor(async () => (await page.locator('.z-40 ul li button').count()) > 0, {
+    timeout: 4000,
+    desc: 'B5 label picker open',
+  });
+  const labelName = await page.evaluate(() => {
+    const btn = document.querySelector('.z-40 ul li button');
+    return btn ? btn.textContent.trim() : null;
+  });
+  const withLabelBefore = rowsAfterB3.filter((r) => labelName && r.text.includes(labelName)).length;
+  await page.locator('.z-40 ul li button').first().click();
+  await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 10000, desc: 'B5 banner auto-clears after bulk label' });
+  await sleep(300);
+  const rowsAfterB5 = await rowsInfo(page);
+  const withLabelAfter = rowsAfterB5.filter((r) => labelName && r.text.includes(labelName)).length;
+  if (labelName && withLabelAfter > withLabelBefore) {
+    record('TC-SA-B5', 'PASS', `bulk label "${labelName}" applied — rows showing the chip ${withLabelBefore} → ${withLabelAfter}`);
+  } else {
+    record('TC-SA-B5', 'FAIL', `labelName=${labelName} withLabelBefore=${withLabelBefore} withLabelAfter=${withLabelAfter}`);
+  }
+}
+
+// --- B (destructive, last): archive / trash / snooze (TC-SA-B1/B2/B4) -------
+// Each runs against a reserved-free target and verifies the row count drops to 0 for that target
+// plus the single aggregate toast. B1 uses the Newsletter tab (no SY_RESERVED thread lives there);
+// B2/B4 use throwaway senders-splits isolating non-reserved Other threads (demo_3 "Design tokens
+// v2" is dana@figma-mail.com and is never matched by these splits).
+
+async function scenario_sa_bulk_destructive(page) {
+  // TC-SA-B1: Newsletter tab ⌘A → e (archive) → all gone + "N개 아카이브됨"
+  try {
+    await clickTab(page, 'Newsletter');
+    await focusBody(page);
+    await sleep(200);
+    const nNews = (await rowsInfo(page)).length;
+    if (nNews > 0) {
+      await page.keyboard.press('Meta+A');
+      await waitFor(async () => (await bulkBannerText(page)) === `${nNews} selected`, { timeout: 4000, desc: 'B1 banner shows Newsletter count' }).catch(() => {});
+      await page.keyboard.press('e'); // archiveSelected
+      const toastB1 = await waitFor(
+        async () => {
+          const t = await bodyText(page);
+          return t.includes('개 아카이브됨') ? t : null;
+        },
+        { timeout: 10000, desc: 'B1 aggregate archive toast' }
+      ).catch(() => '');
+      await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 5000, desc: 'B1 banner auto-clears' }).catch(() => {});
+      const rowsAfter = (await rowsInfo(page)).length;
+      if (rowsAfter === 0 && toastB1.includes(`${nNews}개 아카이브됨`)) {
+        record('TC-SA-B1', 'PASS', `bulk archive removed all ${nNews} Newsletter threads; single aggregate toast "${nNews}개 아카이브됨" (no per-thread toasts)`);
+      } else {
+        record('TC-SA-B1', 'FAIL', `nNews=${nNews} rowsAfter=${rowsAfter} toast="${toastB1.slice(0, 40)}"`);
+      }
+    } else {
+      record('TC-SA-B1', 'SKIP', 'Newsletter tab already empty here — no reserved-free subset to bulk-archive');
+    }
+  } catch (err) {
+    record('TC-SA-B1', 'FAIL', String(err));
+  }
+  await clickTab(page, 'Inbox').catch(() => {});
+
+  // pick reserved-free destructive targets from ground truth (fetchThreads exposes from.email) so
+  // B2/B4 isolate real surviving non-reserved threads regardless of what earlier scenarios consumed.
+  let candidates = [];
+  try {
+    candidates = await safeBulkSenderCandidates(page);
+  } catch (err) {
+    console.error('[harness] SA candidate lookup failed:', err);
+  }
+  const usedEmails = new Set();
+
+  // TC-SA-B2: throwaway split ⌘A → # (trash) → all gone + single "N개 트래시로 이동" toast
+  try {
+    let nTrash = 0;
+    let usedTrash = null;
+    for (const email of candidates) {
+      if (usedEmails.has(email)) continue;
+      const n = await isolateInThrowawaySplit(page, 'SA-Trash', email);
+      if (n > 0) { nTrash = n; usedTrash = email; usedEmails.add(email); break; }
+    }
+    if (nTrash > 0) {
+      await page.keyboard.press('Meta+A');
+      await waitFor(async () => (await bulkBannerText(page)) === `${nTrash} selected`, { timeout: 4000, desc: 'B2 banner' }).catch(() => {});
+      await page.keyboard.press('#'); // trashSelected
+      const toastB2 = await waitFor(
+        async () => {
+          const t = await bodyText(page);
+          return t.includes('개 트래시로 이동') ? t : null;
+        },
+        { timeout: 10000, desc: 'B2 aggregate trash toast' }
+      ).catch(() => '');
+      await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 5000, desc: 'B2 banner clears' }).catch(() => {});
+      const rowsAfter = (await rowsInfo(page)).length;
+      if (rowsAfter === 0 && toastB2.includes(`${nTrash}개 트래시로 이동`)) {
+        record('TC-SA-B2', 'PASS', `bulk trash removed all ${nTrash} rows (${usedTrash}); single aggregate toast "${nTrash}개 트래시로 이동"`);
+      } else {
+        record('TC-SA-B2', 'FAIL', `nTrash=${nTrash} rowsAfter=${rowsAfter} toast="${toastB2.slice(0, 40)}"`);
+      }
+    } else {
+      record('TC-SA-B2', 'SKIP', 'no reserved-free INBOX sender left to isolate for a bulk-trash test — destructive path covered by B1');
+    }
+  } catch (err) {
+    record('TC-SA-B2', 'FAIL', String(err));
+  }
+  await clickTab(page, 'Inbox').catch(() => {});
+  await deleteSplit(page, 'SA-Trash').catch(() => {});
+
+  // TC-SA-B4: throwaway split ⌘A → b → preset → all gone + single "N개 스누즈됨" toast
+  try {
+    let nSnz = 0;
+    let usedSnz = null;
+    for (const email of candidates) {
+      if (usedEmails.has(email)) continue;
+      const n = await isolateInThrowawaySplit(page, 'SA-Snooze', email);
+      if (n > 0) { nSnz = n; usedSnz = email; usedEmails.add(email); break; }
+    }
+    if (nSnz > 0) {
+      await page.keyboard.press('Meta+A');
+      await waitFor(async () => (await bulkBannerText(page)) === `${nSnz} selected`, { timeout: 4000, desc: 'B4 banner' }).catch(() => {});
+      await page.keyboard.press('b'); // openSnoozePicker (bulk)
+      await page.waitForSelector('button:has-text("Later today")', { timeout: 5000 });
+      await page.click('button:has-text("Later today")'); // snoozeSelected
+      const toastB4 = await waitFor(
+        async () => {
+          const t = await bodyText(page);
+          return t.includes('개 스누즈됨') ? t : null;
+        },
+        { timeout: 10000, desc: 'B4 aggregate snooze toast' }
+      ).catch(() => '');
+      await waitFor(async () => (await bulkBannerText(page)) === null, { timeout: 5000, desc: 'B4 banner clears' }).catch(() => {});
+      const rowsAfter = (await rowsInfo(page)).length;
+      if (rowsAfter === 0 && toastB4.includes(`${nSnz}개 스누즈됨`)) {
+        record('TC-SA-B4', 'PASS', `bulk snooze removed all ${nSnz} rows (${usedSnz}) to the same time; single aggregate toast "${nSnz}개 스누즈됨"`);
+      } else {
+        record('TC-SA-B4', 'FAIL', `nSnz=${nSnz} rowsAfter=${rowsAfter} toast="${toastB4.slice(0, 40)}"`);
+      }
+    } else {
+      record('TC-SA-B4', 'SKIP', 'no reserved-free INBOX sender left to isolate for a bulk-snooze test — destructive path covered by B1');
+    }
+  } catch (err) {
+    record('TC-SA-B4', 'FAIL', String(err));
+  }
+  await clickTab(page, 'Inbox').catch(() => {});
+  await deleteSplit(page, 'SA-Snooze').catch(() => {});
+  await clickTab(page, 'Inbox').catch(() => {});
 }
 
 // --- F1/F2/F4 restart persistence --------------------------------------

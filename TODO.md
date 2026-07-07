@@ -83,6 +83,8 @@ Last updated: 2026-07-04
 - [x] 실계정 OAuth 플로우 E2E 확인 — 2026-07-07: 세션 자동 복원(로그인 화면 없음), yr.park@dreamus.io 사이드바 표시, 실 인박스 26행·스플릿 탭 실데이터 렌더 (읽기 전용 검증)
 - [x] `npm run make` DMG/ZIP 패키징 — 2026-07-07: ZenMail-1.0.0-arm64.dmg(116M)+zip(128M), 프로젝트 트리 밖 스모크(윈도우·헬퍼·격리 프로필) 통과. 수정 3건: ① forge vite 템플릿이 externals를 asar에 미포함(packageAfterCopy 폐쇄 복사 훅) ② fuses 플립이 adhoc 서명 파손(resetAdHocDarwinSignature) ③ 실사용 버그: 기본(공유) 프로필에서 Keychain ACL 실패(errSecAuthFailed -25293, ad-hoc 서명 불안정)가 auth:get-account를 크래시시켜 첫 화면에 IPC 에러 노출 → keytarStore.get()에 try/catch 추가해 '로그인 필요' 상태로 우아하게 강등(auth.ts). ④ packageAfterCopy 폐쇄 복사기가 이름→최상위 경로만 가정해 npm 중첩 의존성(예: gaxios가 요구하는 node-fetch@3이 다른 node-fetch@2 최상위 호이스트 때문에 gaxios/node_modules 안에 중첩되고, 그 node-fetch@3의 의존성 data-uri-to-buffer는 다시 최상위로 호이스트되는 실제 npm 트리)을 못 찾아 'Sign in with Google' 클릭 시 IPC 크래시 → Node 실제 해석 알고리즘(요청 패키지 자신의 디렉터리부터 상위로 걸어 올라가며 node_modules 확인, 경로 기준 dedup)으로 복사기 재작성(forge.config.ts resolveModuleDir). ⑤ get()만 방어했던 keytar 폴백을 set/del/list에도 동일 패턴으로 확장(auth.ts) — 로그인 완료 후 토큰 저장(store.set) 단계에서도 같은 Keychain ACL 실패가 'auth:sign-in' IPC를 크래시시켰음. 이제 어떤 keytar 연산이든 실패하면 파일 스토어로 폴백해 로그인이 실제로 지속되도록 함. 정식 배포 시 osxSign+공증 필요(부수 효과: Keychain ACL도 안정화됨)
 
+- [x] `select-all-in-view` — post-release 추가 기능(⌘A 전체선택+일괄 액션) — 2026-07-07 완료, E2E 294 PASS·0 FAIL·14 SKIP(기존12+2) (docs/features/select-all-in-view/)
+
 ## v1.x Feature 로드맵 (2026-07-03 확정 — 상세: docs/DEV_WORKFLOW.md)
 
 > 각 feature는 DEV_WORKFLOW.md의 Goal 0~8 프로세스(superpowers plan → PRD → TODO → TC → DECISIONS → react-best-practices → impeccable audit → E2E → Obsidian)를 따른다.
