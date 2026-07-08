@@ -65,6 +65,7 @@ const config: ForgeConfig = {
     asar: true,
     name: 'ZenMail',
     appBundleId: 'io.zenmail.app',
+    icon: './assets/icon', // extension omitted — packager appends .icns (mac) / .ico (win) per platform
   },
   hooks: {
     packageAfterCopy: async (_config, buildPath) => {
