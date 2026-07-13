@@ -39,6 +39,28 @@ export interface InviteInfo {
   method: string;
 }
 
+export type RsvpResponse = 'accepted' | 'tentative' | 'declined';
+
+export interface CalendarEvent {
+  id: string;
+  iCalUID?: string;
+  summary: string;
+  /** ISO 8601 시작 */
+  startISO: string;
+  endISO?: string;
+  allDay: boolean;
+  organizer?: string;
+}
+
+export interface CreateEventInput {
+  summary: string;
+  /** ISO 8601 */
+  startISO: string;
+  endISO: string;
+  /** 참석자 이메일 목록 (본인 제외) */
+  attendees: string[];
+}
+
 export interface MessageDetail {
   id: string;
   threadId: string;
