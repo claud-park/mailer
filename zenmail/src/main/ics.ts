@@ -73,6 +73,12 @@ function normalizeDate(value: string, params: string): string | undefined {
 
 export function parseIcs(raw: string): IcsFields {
   const fields: IcsFields = {};
+  // Component scoping: METHOD lives at the VCALENDAR level; event fields are captured only
+  // inside the FIRST VEVENT (not in its sub-components such as VALARM, and not after
+  // END:VEVENT). Without this, a VTIMEZONE's STANDARD/DAYLIGHT DTSTART (no Z, no TZID —
+  // common in Outlook/Exchange invites) would clobber an already-parsed VEVENT DTSTART.
+  const stack: string[] = [];
+  let veventDone = false;
   for (const line of unfoldIcs(raw)) {
     const colon = line.indexOf(':');
     if (colon < 0) continue;
@@ -81,8 +87,22 @@ export function parseIcs(raw: string): IcsFields {
     const semi = left.indexOf(';');
     const name = (semi < 0 ? left : left.slice(0, semi)).toUpperCase();
     const params = semi < 0 ? '' : left.slice(semi + 1);
+    if (name === 'BEGIN') {
+      stack.push(value.trim().toUpperCase());
+      continue;
+    }
+    if (name === 'END') {
+      if (stack[stack.length - 1] === 'VEVENT') veventDone = true;
+      stack.pop();
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (name === 'METHOD') {
+      if (top === 'VCALENDAR') fields.method = value.trim().toUpperCase();
+      continue;
+    }
+    if (top !== 'VEVENT' || veventDone) continue;
     switch (name) {
-      case 'METHOD': fields.method = value.trim().toUpperCase(); break;
       case 'UID': fields.uid = value.trim(); break;
       case 'SUMMARY': fields.summary = unescapeText(value); break;
       case 'DTSTART': fields.dtstart = normalizeDate(value.trim(), params); break;
