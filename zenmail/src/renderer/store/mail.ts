@@ -971,7 +971,7 @@ export const useMailStore = create<MailState>((set, get) => {
 
     openEventComposer() {
       const s = get();
-      if (!targetThreadId(s)) return; // 스레드 선택 컨텍스트 필요 (targetThreadId 가드)
+      if (!s.activeThread) return; // 프리필 소스(activeThread)와 가드 일치 — 열려 있는 메일이 전제
       if (!s.account?.calendarReady) {
         s.showToast(CALENDAR_REAUTH_MSG);
         return;
