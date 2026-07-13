@@ -492,6 +492,11 @@ async function run() {
     await trySaScenario(page, 'BulkNondestructive', () => scenario_sa_bulk_nondestructive(page));
     await trySaScenario(page, 'BulkDestructive', () => scenario_sa_bulk_destructive(page));
 
+    // --- light-mode: TC-LM-A1/A2 (docs/features/light-mode/TC.md) — runs after every
+    // pre-existing scenario (none of them touch theme) and before the mutate+restart block, so
+    // TC-LM-A3's restart-persistence check can piggyback on the existing F1/F2/F4 restart cycle.
+    await tryLmScenario(page, 'A1A2', () => scenario_lm_a1_a2(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -506,12 +511,32 @@ async function run() {
   try {
     ({ browser, page } = await connectPage(PORT));
     await scenario_verify_restart_state(page);
+    // TC-LM-A3: dark theme (toggled via TC-LM-A2 pre-restart) survived this same restart cycle.
+    await tryLmScenario(page, 'A3', () => scenario_lm_a3_verify(page));
+    // TC-LM-B1: with a thread open, toggling theme flips the iframe body color immediately — this
+    // also toggles dark->light, satisfying TC-LM-A4's "toggle back to light" precondition.
+    await tryLmScenario(page, 'B1', () => scenario_lm_b1(page));
   } catch (err) {
     console.error('[harness] scenario error (post-restart):', err);
     record('TC-F1', 'FAIL', String(err));
     record('TC-F2', 'FAIL', String(err));
     record('TC-F4', 'FAIL', String(err));
     record('TC-FUP-E1', 'FAIL', String(err));
+  }
+
+  await browser?.close().catch(() => {});
+  await killApp();
+
+  // relaunch a second time (same user-data dir) to verify TC-LM-A4: light theme, toggled back to
+  // at the end of TC-LM-B1, survives its own restart independent of the F1/F2/F4 restart above.
+  launchApp(PORT, USERDATA);
+  try {
+    ({ browser, page } = await connectPage(PORT));
+    await demoLogin(page);
+    await scenario_lm_a4_verify(page);
+  } catch (err) {
+    console.error('[harness] scenario error (LM A4 restart):', err);
+    record('TC-LM-A4', 'FAIL', String(err));
   }
 
   await browser?.close().catch(() => {});
@@ -4034,6 +4059,106 @@ async function scenario_verify_restart_state(page) {
     }
   } catch (err) {
     record('TC-KM-D4', 'FAIL', String(err));
+  }
+}
+
+// --- light-mode: TC-LM-A1..A4/B1 (docs/features/light-mode/TC.md) ----------
+
+async function tryLmScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] LM scenario "${label}" failed:`, err);
+    record(`TC-LM-${label}-error`, 'FAIL', String(err));
+  }
+}
+
+/** `document.documentElement.dataset.theme` + body computed bg — the renderer store is not
+ *  exposed on window by design, so theme is only observable/drivable through the DOM/kbar. */
+async function themeState(page) {
+  return page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme ?? null,
+    bg: getComputedStyle(document.body).backgroundColor,
+  }));
+}
+
+/** drives toggleTheme() via the kbar action (Task 3) — same command-palette pattern used
+ *  elsewhere in this harness (e.g. openSplitSettings' palette fallback). */
+async function toggleThemeViaKbar(page) {
+  await focusBody(page);
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('Toggle light/dark');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+}
+
+async function iframeBodyColor(page) {
+  return page.evaluate(() => {
+    const ifr = document.querySelector('iframe');
+    if (!ifr || !ifr.contentDocument) return null;
+    return getComputedStyle(ifr.contentDocument.body).color;
+  });
+}
+
+/** TC-LM-A1 (fresh boot -> light default) + TC-LM-A2 (toggleTheme() via kbar -> dark) */
+async function scenario_lm_a1_a2(page) {
+  const before = await themeState(page);
+  if (before.theme === null && before.bg === 'rgb(255, 255, 255)') {
+    record('TC-LM-A1', 'PASS', `dataset.theme unset (light default), body bg=${before.bg}`);
+  } else {
+    record('TC-LM-A1', 'FAIL', `theme=${before.theme} bg=${before.bg}`);
+  }
+
+  await toggleThemeViaKbar(page);
+  const after = await themeState(page);
+  if (after.theme === 'dark' && after.bg === 'rgb(15, 15, 15)') {
+    record('TC-LM-A2', 'PASS', `toggleTheme() via kbar -> dataset.theme=dark, body bg=${after.bg}`);
+  } else {
+    record('TC-LM-A2', 'FAIL', `theme=${after.theme} bg=${after.bg}`);
+  }
+}
+
+/** TC-LM-A3: dark theme (set in TC-LM-A2, pre-restart) survives a full app restart. Runs inside
+ *  the same post-restart try block as scenario_verify_restart_state, right after it. */
+async function scenario_lm_a3_verify(page) {
+  const st = await themeState(page);
+  if (st.theme === 'dark' && st.bg === 'rgb(15, 15, 15)') {
+    record('TC-LM-A3', 'PASS', `dark theme persisted across a full app restart (theme=${st.theme}, bg=${st.bg})`);
+  } else {
+    record('TC-LM-A3', 'FAIL', `theme=${st.theme} bg=${st.bg}`);
+  }
+}
+
+/** TC-LM-B1: with a thread open (iframe srcDoc rendered), toggling theme flips the iframe body's
+ *  computed color immediately (no re-open required). Also toggles dark->light, which is TC-LM-A4's
+ *  "toggle back to light" precondition — its persistence is verified by a follow-up restart. */
+async function scenario_lm_b1(page) {
+  await clickTab(page, 'Inbox').catch(() => {});
+  await focusBody(page);
+  await page.keyboard.press('Enter'); // open whatever is currently selected (index 0) — non-destructive
+  await waitFor(async () => (await iframeBodyColor(page)) !== null, { timeout: 5000, desc: 'thread iframe rendered' });
+  const colorBefore = await iframeBodyColor(page);
+  await toggleThemeViaKbar(page); // dark -> light
+  await sleep(300);
+  const colorAfter = await iframeBodyColor(page);
+  await page.keyboard.press('Escape'); // close reading pane
+  if (colorBefore && colorAfter && colorBefore !== colorAfter && colorAfter === 'rgb(24, 24, 27)') {
+    record('TC-LM-B1', 'PASS', `iframe body color updated immediately on toggle (no re-open): ${colorBefore} -> ${colorAfter}`);
+  } else {
+    record('TC-LM-B1', 'FAIL', `colorBefore=${colorBefore} colorAfter=${colorAfter}`);
+  }
+}
+
+/** TC-LM-A4: light theme (toggled back to at the end of TC-LM-B1) survives its own full app
+ *  restart — run against a second, independent relaunch of the same --user-data-dir. */
+async function scenario_lm_a4_verify(page) {
+  const st = await themeState(page);
+  if (st.theme === null && st.bg === 'rgb(255, 255, 255)') {
+    record('TC-LM-A4', 'PASS', `light theme persisted across a second restart after toggling back (theme=${st.theme}, bg=${st.bg})`);
+  } else {
+    record('TC-LM-A4', 'FAIL', `theme=${st.theme} bg=${st.bg}`);
   }
 }
 
