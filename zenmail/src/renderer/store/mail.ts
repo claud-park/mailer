@@ -3,6 +3,7 @@ import {
   type AccountInfo,
   type FollowupInfo,
   type Label,
+  type RsvpResponse,
   type SendRequest,
   type SnippetRecord,
   type SplitDefinition,
@@ -18,6 +19,7 @@ import { instrument, recordRollback } from './latency';
 
 const api = () => window.zenmail;
 const DAY_MS = 86_400_000;
+export const CALENDAR_REAUTH_MSG = '캘린더 권한 필요 — 다시 로그인';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
 
@@ -73,6 +75,8 @@ interface MailState {
   sync: { online: boolean; pending: number };
   bulkSelectedIds: Set<string>;
   theme: 'light' | 'dark';
+  /** iCalUID → 현재 RSVP 응답 상태(낙관 반영). 초대 배너가 읽는다. */
+  rsvpStatus: Map<string, RsvpResponse>;
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -140,6 +144,7 @@ interface MailState {
   cancelFollowup(threadId?: string): Promise<void>;
   dismissFollowup(threadId?: string): Promise<void>;
   showToast(msg: string): void;
+  respondToInvite(iCalUID: string, response: RsvpResponse): Promise<void>;
 
   loadSnippets(): Promise<void>;
   saveSnippets(list: SnippetRecord[]): Promise<void>;
@@ -267,6 +272,7 @@ export const useMailStore = create<MailState>((set, get) => {
     sync: { online: true, pending: 0 },
     bulkSelectedIds: new Set(),
     theme: 'light',
+    rsvpStatus: new Map(),
 
     async init() {
       // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false)
@@ -881,6 +887,34 @@ export const useMailStore = create<MailState>((set, get) => {
       setTimeout(() => {
         if (get().toast === msg) set({ toast: null });
       }, 2500);
+    },
+
+    async respondToInvite(iCalUID, response) {
+      if (!get().account?.calendarReady) {
+        get().showToast(CALENDAR_REAUTH_MSG);
+        return;
+      }
+      const done = instrument('rsvp');
+      const previous = get().rsvpStatus.get(iCalUID);
+      set((st) => {
+        const rsvpStatus = new Map(st.rsvpStatus);
+        rsvpStatus.set(iCalUID, response);
+        return { rsvpStatus };
+      });
+      done();
+      try {
+        await api().respondToEvent(iCalUID, response);
+      } catch (err) {
+        console.error('respondToInvite failed', err);
+        set((st) => {
+          const rsvpStatus = new Map(st.rsvpStatus);
+          if (previous) rsvpStatus.set(iCalUID, previous);
+          else rsvpStatus.delete(iCalUID);
+          return { rsvpStatus };
+        });
+        recordRollback('rsvp');
+        get().showToast('RSVP failed — restored');
+      }
     },
 
     async loadSnippets() {

@@ -15,7 +15,8 @@ export type LatencyAction =
   | 'followup:cancel'
   | 'followup:dismiss'
   | 'openThread:select'
-  | 'openThread:content';
+  | 'openThread:content'
+  | 'rsvp';
 
 /** Budget for mutation actions and the thread-select paint (ms). */
 export const BUDGET_MS = 100;

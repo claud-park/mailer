@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
-import { useMailStore, quoteHtml } from '../store/mail';
-import type { MessageDetail } from '../../shared/types';
+import { useMailStore, quoteHtml, CALENDAR_REAUTH_MSG } from '../store/mail';
+import type { MessageDetail, InviteInfo, RsvpResponse } from '../../shared/types';
 import { labelChipFallback } from '../lib/theme';
 
 const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
@@ -211,6 +211,70 @@ function FollowupBanner({ threadId }: { threadId: string }) {
   );
 }
 
+const RSVP_LABEL: Record<RsvpResponse, string> = {
+  accepted: '수락됨',
+  tentative: '미정',
+  declined: '거절됨',
+};
+
+function InviteBanner({ invite }: { invite: InviteInfo }) {
+  const status = useMailStore((s) => s.rsvpStatus.get(invite.iCalUID));
+  const calendarReady = useMailStore((s) => s.account?.calendarReady ?? false);
+  const respondToInvite = useMailStore((s) => s.respondToInvite);
+  const showToast = useMailStore((s) => s.showToast);
+
+  const when = new Date(invite.startISO).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+
+  const onRespond = (r: RsvpResponse) => {
+    if (!calendarReady) { showToast(CALENDAR_REAUTH_MSG); return; }
+    void respondToInvite(invite.iCalUID, r);
+  };
+
+  const btns: { r: RsvpResponse; label: string }[] = [
+    { r: 'accepted', label: '수락' },
+    { r: 'tentative', label: '미정' },
+    { r: 'declined', label: '거절' },
+  ];
+
+  return (
+    <div
+      data-testid="invite-banner"
+      className="flex items-center justify-between gap-3 border-b border-bg-border/60 bg-accent/10 px-6 py-2 text-[12px]"
+    >
+      <div className="min-w-0">
+        <span className="font-medium text-text-primary">{invite.summary}</span>
+        <span className="ml-2 text-text-muted">{when}</span>
+        {invite.organizer && <span className="ml-2 text-text-muted">· {invite.organizer}</span>}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {status && <span className="mr-1 text-[11px] text-accent" data-testid="rsvp-status">응답: {RSVP_LABEL[status]}</span>}
+        {btns.map((b) => (
+          <button
+            key={b.r}
+            aria-label={b.label}
+            onClick={() => onRespond(b.r)}
+            className={`rounded px-2 py-0.5 text-[11px] font-medium ${
+              status === b.r ? 'bg-accent text-white' : 'bg-bg-border text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 스레드 내 invite가 여러 건이면 가장 최신 메시지의 invite 1건만 (동일 이벤트 업데이트 재전송). */
+function latestInvite(messages: MessageDetail[]): InviteInfo | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].invite) return messages[i].invite;
+  }
+  return undefined;
+}
+
 export function ThreadView() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
   const activeThread = useMailStore((s) => s.activeThread);
@@ -235,6 +299,10 @@ export function ThreadView() {
   return (
     <div className="zen-fade-in flex min-h-0 min-w-0 flex-1 flex-col">
       {activeThreadId && <FollowupBanner threadId={activeThreadId} />}
+      {(() => {
+        const invite = latestInvite(activeThread.messages);
+        return invite ? <InviteBanner invite={invite} /> : null;
+      })()}
       <div className="flex-1 overflow-y-auto">
         <div className="flex items-center gap-2 px-6 pt-4 pb-1">
           <h2 className="text-[15px] font-semibold text-text-primary">{activeThread.subject}</h2>
