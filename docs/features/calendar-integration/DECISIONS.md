@@ -52,3 +52,24 @@
 - **선택지**: (a) 가장 최신 메시지의 invite 1건만 노출, (b) 스레드 내 모든 invite를 나열, (c) UID로 그룹핑해 최신 UID별 1건씩 노출.
 - **선택**: (a) 최신 메시지 1건.
 - **이유**: 스펙 범위 밖으로 `METHOD:CANCEL`/`REPLY` 처리를 명시적으로 제외했기 때문에 취소/변경 이력을 추적하는 정교한 UID 그룹핑(c)은 과설계다. 실무적으로 "동일 이벤트 업데이트 재전송"이 가장 흔한 케이스이므로, 스레드에서 가장 최근에 도착한 invite가 사용자가 응답해야 할 최신 상태를 대표한다고 가정하는 것이 단순하고 안전하다. 여러 건을 모두 나열(b)하면 어느 것에 응답해야 하는지 사용자가 혼란스러울 수 있다.
+
+## D9. 구현 중 확정 — 리뷰 루프에서 내린 판정 (2026-07-13)
+
+구현(SDD) 태스크 리뷰에서 계획 문면과 어긋나거나 계획에 없던 결정 5건:
+
+- **D9-1. parseIcs 컴포넌트 스코핑**: 계획의 flat 파서는 VTIMEZONE의 DTSTART(예: DST 전환 시각)가 VEVENT 값을 덮어써 Outlook발 초대를 fail-safe로 떨어뜨림 → BEGIN/END 스택 추적으로 METHOD는 VCALENDAR 레벨, 이벤트 필드는 첫 VEVENT 안에서만 캡처. 부수 효과: extractInvite는 완전한 ICS 래퍼를 요구(실 payload는 항상 포함).
+- **D9-2. LatencyAction 유니언에 'rsvp' 추가**: 계획 코드 instrument('rsvp')의 전제가 유니언에 없었음 — 소비처 전수 확인(Partial<Record>/단순 비교뿐) 후 안전 확장.
+- **D9-3. openAgenda stale-fetch 가드를 세대 카운터로**: boolean(agendaOpen) 가드는 닫기→재열기/연타 레이스에서 이전 fetch가 새 상태를 덮어씀 → 모듈 레벨 agendaFetchSeq로 latest-wins. "닫힌 뒤 도착 응답 무시"라는 계획 의도의 더 정확한 이행.
+- **D9-4. openEventComposer 가드를 activeThread로**: 계획은 targetThreadId 가드 + activeThread 프리필로 내부 불일치(스레드 미오픈 시 빈 프리필) → 가드를 프리필 소스와 일치. "Create event from email"은 열린 메일이 전제.
+- **D9-5. 오버레이 단축키 차단 메커니즘 확인(as-designed)**: useKeyboard guard는 자기 소유 키(j/k/Enter/[/]/Esc)만 막고, kbar 소유 단일 키(e 등)는 패널 keydown stopPropagation이 차단 — CLAUDE.md에 문서화된 기존 이중 메커니즘 그대로. TC-CAL-C4가 실측 검증.
+
+## D10. E2E 캐논 재해석 — "157·0·7"의 7번째 SKIP은 런타임 유동 (2026-07-13)
+
+- **컨텍스트**: CP6 무회귀 목표를 "157+25=182 PASS·7 SKIP"으로 뒀으나 실측 183 PASS·6 SKIP(총 189).
+- **확인**: 순수 베이스 리비전 실행 대조 결과 pre-CP6 총 어서션은 164이고, TC-SA-B4(select-all destructive bulk-snooze)는 "reserved-free sender 잔존 여부"를 런타임에 판정해 실행마다 PASS/SKIP이 갈리는 pre-existing 특성(의도된 graceful-degradation). 종전 캐논 "157·0·7"은 B4가 SKIP으로 떨어진 특정 실행의 스냅샷.
+- **결정**: 이후 무회귀 기준은 고정 PASS 총계가 아니라 **"0 FAIL + SKIP 집합이 기존 집합의 부분집합(신규 SKIP 없음) + 총 어서션 = 기존 총계(164)+신규"**로 판정한다. calendar-integration 완료 시점 집계: 183 PASS·0 FAIL·6 SKIP(총 189) ×2 결정적.
+
+## D11. E2E CAL 블록 배치 — F1 직후·F2 앞 (2026-07-13)
+
+- **컨텍스트**: 계획은 select-all 뒤 배치를 지정했으나 실측 결함 2건: ① select-all의 TC-SA-B2 bulk-trash가 초대 스레드 발신자(events@calendly.example)를 동적 후보로 골라 삼킴, ② F2 뒤 배치는 CAL-E의 signOut(→cache.clearFollowups)이 TC-FUP-E1의 pending followup을 파괴.
+- **결정**: CAL을 F1 직후·F2 시작 전에 배치. F2는 자기 시작부(scenario_followup_E2)에서 signOut/재로그인을 하므로 CAL-E 잔여 상태를 흡수. E3의 로그인 관용구도 원시 IPC 대신 검증된 UI 클릭 경로(text=Sign out → demoLogin) 사용.
