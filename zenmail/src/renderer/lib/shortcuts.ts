@@ -36,8 +36,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'drafts', keys: ['g', 'd'], label: 'Go to drafts', section: 'Navigation' },
   { id: 'labelJump', keys: ['g', 'l'], label: 'Jump to label…', section: 'Navigation' },
   // Navigation — owned by useKeyboard.ts
-  { id: 'selectNext', keys: ['j'], label: 'Select next thread', section: 'Navigation' },
-  { id: 'selectPrev', keys: ['k'], label: 'Select previous thread', section: 'Navigation' },
+  { id: 'selectNext', keys: ['j', '↓'], label: 'Select next thread', section: 'Navigation' },
+  { id: 'selectPrev', keys: ['k', '↑'], label: 'Select previous thread', section: 'Navigation' },
   { id: 'openSelected', keys: ['Enter'], label: 'Open selected thread', section: 'Navigation' },
   { id: 'nextThread', keys: [']'], label: 'Next thread', section: 'Navigation' },
   { id: 'prevThread', keys: ['['], label: 'Previous thread', section: 'Navigation' },

@@ -505,6 +505,9 @@ async function run() {
     await tryRpScenario(page, 'A3', () => scenario_rp_a3(page));
     await tryRpScenario(page, 'A4', () => scenario_rp_a4(page));
 
+    // --- arrow-key navigation: ArrowDown/ArrowUp alias j/k (useKeyboard) — non-destructive
+    await tryRpScenario(page, 'NavArrows', () => scenario_nav_arrows(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -4326,6 +4329,30 @@ async function scenario_rp_a4(page) {
   }
   await page.keyboard.press('Escape'); // close — avoid polluting subsequent scenarios
   await sleep(200);
+}
+
+/** TC-NAV-A1: ArrowDown/ArrowUp mirror j/k for list navigation (useKeyboard.ts, 2026-07-13).
+ *  Non-destructive — only moves the selection with no thread open, so it leaves every later
+ *  scenario's state untouched. */
+async function scenario_nav_arrows(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  const idx = async () => (await rowsInfo(page)).findIndex((r) => r.selected);
+  const start = await idx();
+  await page.keyboard.press('ArrowDown');
+  await sleep(120);
+  await page.keyboard.press('ArrowDown');
+  await sleep(120);
+  const afterDown = await idx();
+  await page.keyboard.press('ArrowUp');
+  await sleep(120);
+  const afterUp = await idx();
+  const ok = start >= 0 && afterDown === start + 2 && afterUp === start + 1;
+  record(
+    'TC-NAV-A1',
+    ok ? 'PASS' : 'FAIL',
+    `selected ${start} -> ${afterDown} (ArrowDown x2) -> ${afterUp} (ArrowUp x1)`
+  );
 }
 
 process.on('SIGINT', async () => {

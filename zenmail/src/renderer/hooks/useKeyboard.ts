@@ -99,11 +99,13 @@ export function useKeyboard(): void {
 
       switch (e.key) {
         case 'j':
+        case 'ArrowDown':
           e.preventDefault();
           s.moveSelection(1);
           useCoachStore.getState().recordEfficient('nav');
           break;
         case 'k':
+        case 'ArrowUp':
           e.preventDefault();
           s.moveSelection(-1);
           useCoachStore.getState().recordEfficient('nav');
