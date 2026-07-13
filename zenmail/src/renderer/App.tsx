@@ -33,8 +33,10 @@ function Shell() {
         <Sidebar />
         <main className="flex min-w-0 flex-1 flex-col">
           <Toolbar />
-          <ThreadList />
-          {activeThreadId ? <ThreadView /> : null}
+          <div className="flex min-h-0 flex-1">
+            <ThreadList />
+            {activeThreadId ? <ThreadView /> : null}
+          </div>
         </main>
       </div>
       {composeOpen && <Compose />}

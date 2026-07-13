@@ -221,7 +221,11 @@ export function ThreadList() {
   const emptyTab = !threadsLoading && threads.length > 0 && visibleThreads.length === 0;
 
   return (
-    <>
+    <section
+      className={`flex min-h-0 flex-col ${
+        activeThreadId ? 'w-2/5 shrink-0 border-r border-bg-border' : 'flex-1'
+      }`}
+    >
       <BulkActionBanner />
       {useSplit && <SplitTabBar />}
       {emptyState ? (
@@ -239,10 +243,7 @@ export function ThreadList() {
           </div>
         </div>
       ) : (
-        <div
-          ref={parentRef}
-          className={`overflow-y-auto ${activeThreadId ? 'h-2/5 border-b border-bg-border' : 'flex-1'}`}
-        >
+        <div ref={parentRef} className="flex-1 overflow-y-auto">
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vi) => {
               const thread = visibleThreads[vi.index];
@@ -274,7 +275,7 @@ export function ThreadList() {
           )}
         </div>
       )}
-    </>
+    </section>
   );
 }
 

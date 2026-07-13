@@ -233,7 +233,7 @@ export function ThreadView() {
     .filter((l) => l && l.type === 'user' && l.visible);
 
   return (
-    <div className="zen-fade-in flex min-h-0 flex-1 flex-col">
+    <div className="zen-fade-in flex min-h-0 min-w-0 flex-1 flex-col">
       {activeThreadId && <FollowupBanner threadId={activeThreadId} />}
       <div className="flex-1 overflow-y-auto">
         <div className="flex items-center gap-2 px-6 pt-4 pb-1">
