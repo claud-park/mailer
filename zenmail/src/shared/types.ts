@@ -26,6 +26,19 @@ export interface ThreadSummary {
   messageCount: number;
 }
 
+export interface InviteInfo {
+  /** ICS UID — respondToEvent가 이벤트를 특정하는 키 */
+  iCalUID: string;
+  summary: string;
+  /** ISO 8601 (UTC 또는 TZID 해석 결과) */
+  startISO: string;
+  endISO?: string;
+  /** organizer 이메일 (mailto: 접두 제거) */
+  organizer?: string;
+  /** 'REQUEST'만 노출 (범위 밖 CANCEL/REPLY는 extractInvite에서 걸러짐) */
+  method: string;
+}
+
 export interface MessageDetail {
   id: string;
   threadId: string;
