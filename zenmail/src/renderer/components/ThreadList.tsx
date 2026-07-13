@@ -9,6 +9,7 @@ import { BulkActionBanner } from './BulkActionBanner';
 import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../shared/types';
 
 const ROW_HEIGHT = 56;
+const COMPACT_ROW_HEIGHT = 64;
 const SWIPE_THRESHOLD = 100;
 
 /** fired follow-up thread ids — see docs/features/follow-up-reminders/DECISIONS.md D8 */
@@ -41,12 +42,14 @@ function ThreadRow({
   bulkSelected,
   labelsById,
   followup,
+  compact,
 }: {
   thread: ThreadSummary;
   selected: boolean;
   bulkSelected: boolean;
   labelsById: Map<string, Label>;
   followup?: FollowupInfo;
+  compact: boolean;
 }) {
   const openThread = useMailStore((s) => s.openThread);
   const archiveThread = useMailStore((s) => s.archiveThread);
@@ -99,6 +102,65 @@ function ThreadRow({
     .map((id) => labelsById.get(id))
     .filter((l): l is Label => !!l && l.type === 'user' && l.visible);
 
+  const dot = bulkSelected ? (
+    <span className="flex h-2 w-2 shrink-0 items-center justify-center text-[11px] leading-none text-accent">
+      ✓
+    </span>
+  ) : (
+    <span
+      className={`h-2 w-2 shrink-0 rounded-full ${thread.unread ? 'bg-accent' : 'bg-transparent'}`}
+    />
+  );
+
+  if (compact) {
+    return (
+      <button
+        onClick={() => {
+          void openThread(thread.id);
+          useCoachStore.getState().recordMouse('openThread');
+          useCoachStore.getState().maybeHint('openThread');
+        }}
+        onWheel={onWheel}
+        data-thread-id={thread.id}
+        style={{ transform: offset ? `translateX(${offset}px)` : undefined }}
+        className={`flex h-full w-full flex-col justify-center gap-0.5 border-b border-bg-border/60 px-4 text-left transition-transform ${
+          bulkSelected ? 'bg-accent/10' : selected ? 'bg-bg-subtle' : 'hover:bg-bg-subtle/50'
+        }`}
+      >
+        <span className="flex w-full items-center gap-2">
+          {dot}
+          <span
+            className={`min-w-0 flex-1 truncate text-[13px] ${
+              thread.unread ? 'font-medium text-text-primary' : 'text-text-secondary'
+            }`}
+          >
+            {thread.from.name || thread.from.email}
+            {thread.messageCount > 1 && (
+              <span className="ml-1 text-[11px] text-text-muted">{thread.messageCount}</span>
+            )}
+          </span>
+          {followup?.status === 'fired' && (
+            <span className="shrink-0 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+              No reply
+            </span>
+          )}
+          <span className="shrink-0 text-[11px] text-text-muted">{formatDate(thread.date)}</span>
+        </span>
+        <span className="flex w-full min-w-0 items-baseline gap-2 pl-4">
+          <span
+            className={`shrink-0 truncate text-[12px] ${
+              thread.unread ? 'font-medium text-text-primary' : 'font-normal text-text-primary/80'
+            }`}
+            style={{ maxWidth: '60%' }}
+          >
+            {thread.subject}
+          </span>
+          <span className="truncate text-[11px] text-text-muted">{thread.snippet}</span>
+        </span>
+      </button>
+    );
+  }
+
   return (
     <button
       onClick={() => {
@@ -113,15 +175,7 @@ function ThreadRow({
         bulkSelected ? 'bg-accent/10' : selected ? 'bg-bg-subtle' : 'hover:bg-bg-subtle/50'
       }`}
     >
-      {bulkSelected ? (
-        <span className="flex h-2 w-2 shrink-0 items-center justify-center text-[11px] leading-none text-accent">
-          ✓
-        </span>
-      ) : (
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${thread.unread ? 'bg-accent' : 'bg-transparent'}`}
-        />
-      )}
+      {dot}
       <span
         className={`w-40 shrink-0 truncate text-[13px] ${
           thread.unread ? 'font-medium text-text-primary' : 'text-text-secondary'
@@ -191,13 +245,21 @@ export function ThreadList() {
     return selectVisibleThreads(threads, splitDefs, useSplit ? activeSplitTab : INBOX_TAB, pinned);
   }, [threads, splitDefs, useSplit, activeSplitTab, activeLabelId, searchQuery, followups]);
 
+  const compact = !!activeThreadId;
+  const rowHeight = compact ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
+
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: visibleThreads.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 12,
   });
+
+  // compact 전환 시 행 높이 재계산 — estimateSize 함수 교체만으로는 기존 측정값이 남는다
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
 
   // keep the keyboard selection in view
   useEffect(() => {
@@ -265,6 +327,7 @@ export function ThreadList() {
                     bulkSelected={bulkSelectedIds.has(thread.id)}
                     labelsById={labelsById}
                     followup={followups.get(thread.id)}
+                    compact={compact}
                   />
                 </div>
               );
