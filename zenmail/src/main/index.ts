@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { app, BrowserWindow, shell } from 'electron';
 import started from 'electron-squirrel-startup';
-import { openCache } from './cache';
+import { openCache, getSetting } from './cache';
 import { registerIpc, getProvider } from './ipc';
 import { startSnoozeDaemon, stopSnoozeDaemon } from './snooze';
 
@@ -20,7 +20,7 @@ const createWindow = () => {
     height: 840,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#0f0f0f',
+    backgroundColor: getSetting('theme') === 'dark' ? '#0f0f0f' : '#ffffff',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
