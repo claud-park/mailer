@@ -126,6 +126,12 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         perform: () => useMailStore.setState({ snippetsOpen: true }),
       },
       {
+        id: 'toggleTheme',
+        name: 'Toggle light/dark theme',
+        section: 'View',
+        perform: () => useMailStore.getState().toggleTheme(),
+      },
+      {
         id: 'cheatsheet',
         name: 'Keyboard shortcuts',
         shortcut: ['?'],
