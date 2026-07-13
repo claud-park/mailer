@@ -50,6 +50,8 @@ export interface MessageDetail {
   bodyHtml: string;
   bodyText: string;
   labelIds: string[];
+  /** METHOD:REQUEST ICS가 붙은 메시지에만 존재 (초대 배너용). extractInvite fail-safe로 파싱 실패 시 undefined. */
+  invite?: InviteInfo;
 }
 
 export interface ThreadDetail {

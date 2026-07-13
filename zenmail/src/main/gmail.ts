@@ -12,6 +12,7 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '../shared/types';
+import { extractInvite } from './ics';
 
 export interface GmailProvider {
   readonly email: string;
@@ -59,17 +60,22 @@ function decodeBody(data: string | null | undefined): string {
 function extractBodies(part: gmail_v1.Schema$MessagePart | undefined): {
   html: string;
   text: string;
+  ics: string;
 } {
   let html = '';
   let text = '';
+  let ics = '';
   const walk = (p: gmail_v1.Schema$MessagePart | undefined) => {
     if (!p) return;
-    if (p.mimeType === 'text/html' && p.body?.data) html ||= decodeBody(p.body.data);
-    else if (p.mimeType === 'text/plain' && p.body?.data) text ||= decodeBody(p.body.data);
+    const mime = (p.mimeType ?? '').toLowerCase();
+    if (mime === 'text/html' && p.body?.data) html ||= decodeBody(p.body.data);
+    else if (mime === 'text/plain' && p.body?.data) text ||= decodeBody(p.body.data);
+    else if ((mime === 'text/calendar' || mime === 'application/ics') && p.body?.data)
+      ics ||= decodeBody(p.body.data);
     p.parts?.forEach(walk);
   };
   walk(part);
-  return { html, text };
+  return { html, text, ics };
 }
 
 function toBase64Url(s: string): string {
@@ -187,6 +193,7 @@ export class RealGmailProvider implements GmailProvider {
       labelIds: [...new Set(msgs.flatMap((m) => m.labelIds ?? []))],
       messages: msgs.map((m) => {
         const bodies = extractBodies(m.payload);
+        const invite = bodies.ics ? extractInvite(bodies.ics) : undefined;
         return {
           id: m.id!,
           threadId,
@@ -198,6 +205,7 @@ export class RealGmailProvider implements GmailProvider {
           bodyHtml: bodies.html,
           bodyText: bodies.text,
           labelIds: m.labelIds ?? [],
+          ...(invite ? { invite } : {}),
         };
       }),
     };
@@ -520,6 +528,64 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
       messageCount: 1,
     },
     detail: { id: introId, subject: introSubject, labelIds: introLabelIds, messages: [introMessage] },
+  });
+
+  // calendar-integration: 초대 메일 시드. events@calendly.example 은 어떤 split 규칙에도 매칭되지
+  // 않고(도메인/VIP/newsletter 아님), 최고령 date라 기존 split 카운트/순서(F1~F6 E2E)를 건드리지 않는다.
+  const inviteFrom: Contact = { name: 'Calendly', email: 'events@calendly.example' };
+  const icsRequest = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'METHOD:REQUEST', 'BEGIN:VEVENT',
+    'UID:demo-evt-standup', 'SUMMARY:Sprint 14 planning', 'DTSTART:20260716T090000Z',
+    'DTEND:20260716T093000Z', 'ORGANIZER;CN=Ana Torres:mailto:ana@linearly.dev',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n');
+  const inviteA = extractInvite(icsRequest);
+  const calId = 'demo_cal_1';
+  const calBase = now - 118 * h;
+  const calMessages = [0, 1].map((mi) => ({
+    id: `${calId}_m${mi}`,
+    threadId: calId,
+    from: inviteFrom,
+    to: [{ name: 'You', email: 'demo@zenmail.app' }],
+    cc: [] as Contact[],
+    date: calBase + mi * h, // m1이 최신 — A3에서 최신 invite 1건만 노출
+    snippet: 'You are invited: Sprint 14 planning',
+    bodyHtml: demoBody(['You are invited to Sprint 14 planning.', mi === 1 ? '(Updated time)' : '']),
+    bodyText: 'You are invited to Sprint 14 planning.',
+    labelIds: ['INBOX'],
+    ...(inviteA ? { invite: inviteA } : {}),
+  }));
+  threads.push({
+    summary: {
+      id: calId, subject: 'Invitation: Sprint 14 planning', from: inviteFrom,
+      snippet: 'You are invited: Sprint 14 planning', date: calMessages[1].date,
+      unread: false, labelIds: ['INBOX'], messageCount: 2,
+    },
+    detail: { id: calId, subject: 'Invitation: Sprint 14 planning', labelIds: ['INBOX'], messages: calMessages },
+  });
+
+  // A4: 날짜 해석 불가 ICS — extractInvite가 undefined → invite 미노출(배너 없음), 크래시 없음.
+  const icsBad = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'METHOD:REQUEST', 'BEGIN:VEVENT',
+    'UID:demo-evt-bad', 'SUMMARY:Broken invite', 'DTSTART:not-a-real-date',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n');
+  const inviteBad = extractInvite(icsBad); // undefined
+  const badId = 'demo_cal_2';
+  const badMessage = {
+    id: `${badId}_m0`, threadId: badId, from: inviteFrom,
+    to: [{ name: 'You', email: 'demo@zenmail.app' }], cc: [] as Contact[],
+    date: now - 119 * h, snippet: 'Broken invite', bodyHtml: demoBody(['Broken invite.']),
+    bodyText: 'Broken invite.', labelIds: ['INBOX'],
+    ...(inviteBad ? { invite: inviteBad } : {}),
+  };
+  threads.push({
+    summary: {
+      id: badId, subject: 'Invitation: Broken invite', from: inviteFrom,
+      snippet: 'Broken invite', date: badMessage.date, unread: false,
+      labelIds: ['INBOX'], messageCount: 1,
+    },
+    detail: { id: badId, subject: 'Invitation: Broken invite', labelIds: ['INBOX'], messages: [badMessage] },
   });
 
   return { threads, labels, senders };
