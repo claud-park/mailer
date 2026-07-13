@@ -1,12 +1,12 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-bg: #0f0f0f;
-  --color-bg-subtle: #1a1a1a;
-  --color-bg-border: #2a2a2a;
-  --color-text-primary: #ececec;
-  --color-text-secondary: #8a8a8a;
-  --color-text-muted: #555555;
+  --color-bg: #ffffff;
+  --color-bg-subtle: #f4f4f5;
+  --color-bg-border: #e4e4e7;
+  --color-text-primary: #18181b;
+  --color-text-secondary: #71717a;
+  --color-text-muted: #a1a1aa;
   --color-accent: #6366f1;
   --color-accent-hover: #4f52d4;
   --color-label-red: #ef4444;
@@ -17,6 +17,16 @@
 
   --font-sans:
     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+
+/* dark palette — document.documentElement.dataset.theme = 'dark' 로 활성화 (store/mail.ts setTheme) */
+:root[data-theme='dark'] {
+  --color-bg: #0f0f0f;
+  --color-bg-subtle: #1a1a1a;
+  --color-bg-border: #2a2a2a;
+  --color-text-primary: #ececec;
+  --color-text-secondary: #8a8a8a;
+  --color-text-muted: #555555;
 }
 
 html,
