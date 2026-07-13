@@ -401,6 +401,80 @@ async function cancelSplitSettings(page) {
 }
 
 // ---------------------------------------------------------------------------
+// calendar-integration helpers
+// ---------------------------------------------------------------------------
+
+async function calendarState(page) {
+  return page.evaluate(() => window.zenmail.__debugCalendarState());
+}
+async function failNextCalendar(page) {
+  await page.evaluate(() => window.zenmail.__debugFailNextCalendar());
+}
+async function setCalendarReady(page, v) {
+  await page.evaluate((val) => window.zenmail.__debugSetCalendarReady(val), v);
+}
+async function accountInfo(page) {
+  return page.evaluate(() => window.zenmail.getAccount());
+}
+async function openInviteThread(page) {
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+  // "Sprint 14 planning" alone also matches demo_17 ("Sprint 14 planning — capacity check", 4h
+  // old, sorted above this 118h-old invite thread) — use the full subject to target the invite
+  // thread unambiguously.
+  await clickRowContaining(page, 'Invitation: Sprint 14 planning');
+  await waitFor(async () => (await bodyText(page)).includes('Invitation: Sprint 14 planning'), { desc: 'invite thread open' });
+  // The subject paints from the thread-list summary (already loaded) before the full detail fetch
+  // (messages[].invite, via mail:fetch-thread) resolves, so a caller reading the banner text
+  // immediately after the subject check can race a still-empty/absent banner — wait for the
+  // banner element itself too. (Playwright's page.click() on the RSVP buttons already auto-waits
+  // for the element, which is why only a bare-DOM read like TC-CAL-A1/A3's needed this.)
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="invite-banner"]')), { desc: 'invite banner rendered' });
+}
+async function inviteBannerVisible(page) {
+  return page.evaluate(() => !!document.querySelector('[data-testid="invite-banner"]'));
+}
+async function rsvpStatusText(page) {
+  return page.evaluate(() => document.querySelector('[data-testid="rsvp-status"]')?.textContent ?? null);
+}
+async function openAgenda(page) {
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="agenda-panel"]')), { desc: 'agenda open' });
+}
+
+/** mirrors EventComposer.tsx's stripSubjectPrefix() exactly, for computing the D2 expected value. */
+function stripReFwdPrefix(subject) {
+  return subject.replace(/^((re|fwd):\s*)+/i, '').trim();
+}
+
+/** Ground-truth (fetchThreads, not DOM row text) lookup for a currently-present INBOX thread whose
+ *  subject starts with "Re:"/"Fwd:" — TC-CAL-D2 needs one to meaningfully exercise prefix-stripping.
+ *  Not hardcoded to "Re: keyboard shortcut audit" (demo_2): by CP6, ~150 prior F1..F6 scenarios have
+ *  archived/trashed/relabeled a large, non-enumerable subset of the generic seed inbox (none of them
+ *  reference demo_2 by id/subject, so which specific threads survive is incidental to this feature —
+ *  same reasoning as safeBulkSenderCandidates()/syncSelectSafeRow() elsewhere in this file, which
+ *  already query live state instead of assuming a fixed seed thread survives to their point in the run). */
+async function findRePrefixedInboxSubject(page) {
+  const subjects = await page.evaluate(() =>
+    window.zenmail.fetchThreads({ labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => t.subject))
+  );
+  return subjects.find((s) => /^(re|fwd):\s/i.test(s)) ?? null;
+}
+
+async function tryCalScenario(page, name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] TC-CAL ${name} error:`, err);
+    record(`TC-CAL-${name}`, 'FAIL', String(err).slice(0, 200));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test scenarios
 // ---------------------------------------------------------------------------
 
@@ -435,10 +509,34 @@ async function run() {
     await scenario_H1(page);
     record('TC-G1', 'PASS', 'validated inline during TC-A section (VIP/Team/Newsletter each >=1 thread)');
 
+    // --- calendar-integration: TC-CAL-A~E (docs/features/calendar-integration/TC.md) — runs
+    // right after F1, BEFORE F2's own E2 sign-out. Two ordering constraints collide and this is
+    // the only slot that satisfies both:
+    //  (1) TC-CAL-E signs out and re-logs in to test the calendarReady gate surviving a real
+    //      session change (FR18) — auth:sign-out clears cache.followups() (same mechanism
+    //      TC-FUP-E2 already exercises), so ANY scenario after F2's scenario_followup_B leaves its
+    //      deliberately-pending reminder on "Design tokens v2" (demo_3, checked post-restart by
+    //      TC-FUP-E1) would wipe it out from under that check. CAL must run before F2 sets that up.
+    //  (2) select-all-in-view's destructive bulk-trash test (TC-SA-B2) claims whatever
+    //      "reserved-free" sender is left via ground-truth lookup, with no notion that
+    //      demo_cal_1/demo_cal_2 (both from events@calendly.example) matter to a feature that
+    //      hasn't registered yet — it trashed both invite threads out from under TC-CAL-A/B/E when
+    //      tried after select-all. CAL must run before select-all too.
+    // F2's own E2 (next) immediately signs out/back in again regardless, so it fully absorbs
+    // whatever CAL-E's own sign-out/re-login cycle left behind — F2 proceeds exactly as it does
+    // without CAL in the run. A~D leave the session intact; E signs out and re-logs in, so it runs
+    // LAST among CAL.
+    await tryCalScenario(page, 'A', () => scenario_cal_A(page));
+    await tryCalScenario(page, 'B', () => scenario_cal_B(page));
+    await tryCalScenario(page, 'C', () => scenario_cal_C(page));
+    await tryCalScenario(page, 'D', () => scenario_cal_D(page));
+    await tryCalScenario(page, 'E', () => scenario_cal_E(page));
+
     // --- F2 follow-up-reminders --------------------------------------------
     // E2 runs first: it signs out/back in, which re-constructs a fresh MockGmailProvider
     // (pristine demo data), so the A/B/C/D scenarios below all get untouched seed threads
-    // regardless of what F1's scenarios above archived/trashed/relabeled.
+    // regardless of what F1's scenarios above (and calendar-integration's TC-CAL block, which
+    // also signs out/back in at TC-CAL-E) archived/trashed/relabeled.
     await tryFollowupScenario(page, 'E2', () => scenario_followup_E2(page));
     await tryFollowupScenario(page, 'A', () => scenario_followup_A(page));
     await tryFollowupScenario(page, 'A4', () => scenario_followup_A4(page));
@@ -640,12 +738,283 @@ async function run() {
     record('TC-SA-C2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
   }
 
+  // --- TC-CAL-G1/G2: calendar-integration regression gates ------------------
+  const preCalFails = results.filter((r) => !r.id.startsWith('TC-CAL') && r.status === 'FAIL');
+  if (preCalFails.length === 0) {
+    record(
+      'TC-CAL-G1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-CAL')).length} pre-existing F1..select-all assertions still PASS/SKIP with calendar-integration wired in`
+    );
+  } else {
+    record('TC-CAL-G1', 'FAIL', `${preCalFails.length} pre-existing (non-CAL) assertions failed: ${preCalFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-CAL-G2', 'PASS', 'npm test + npx tsc --noEmit (incl. ics/calendar suites, TC-CAL-F1~F5) both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-CAL-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
   console.log('\n=== TC Results ===');
   for (const r of results) {
     console.log(`${r.id.padEnd(10)} ${r.status.padEnd(5)} ${r.note}`);
   }
   const failed = results.filter((r) => r.status === 'FAIL').length;
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// --- calendar-integration: TC-CAL-A~E (docs/features/calendar-integration/TC.md) -----------
+
+// --- TC-CAL-A: 초대 배너 ---
+async function scenario_cal_A(page) {
+  await openInviteThread(page);
+  const bannerText = await page.evaluate(() => document.querySelector('[data-testid="invite-banner"]')?.textContent ?? '');
+  if (bannerText.includes('Sprint 14 planning') && bannerText.includes('ana@linearly.dev')) {
+    record('TC-CAL-A1', 'PASS', 'invite banner shows summary + organizer');
+  } else {
+    record('TC-CAL-A1', 'FAIL', `banner text: ${bannerText.slice(0, 120)}`);
+  }
+
+  // A3: demo_cal_1 has 2 invite messages (same event resend) → exactly one banner shown
+  const bannerCount = await page.evaluate(() => document.querySelectorAll('[data-testid="invite-banner"]').length);
+  if (bannerCount === 1) record('TC-CAL-A3', 'PASS', 'exactly one banner for a multi-invite thread');
+  else record('TC-CAL-A3', 'FAIL', `banner count = ${bannerCount}`);
+
+  // A2: a normal thread shows no banner
+  await focusBody(page);
+  await page.keyboard.press('g'); await page.keyboard.press('i'); await sleep(200);
+  await clickRowContaining(page, 'Design tokens v2');
+  await waitFor(async () => (await bodyText(page)).includes('Design tokens'), { desc: 'normal thread open' });
+  if (!(await inviteBannerVisible(page))) record('TC-CAL-A2', 'PASS', 'no banner on a non-invite thread');
+  else record('TC-CAL-A2', 'FAIL', 'unexpected banner on normal thread');
+
+  // A4: unparseable ICS → no banner, no crash
+  await focusBody(page);
+  await page.keyboard.press('g'); await page.keyboard.press('i'); await sleep(200);
+  await clickRowContaining(page, 'Broken invite');
+  await waitFor(async () => (await bodyText(page)).includes('Broken invite'), { desc: 'bad-ics thread open' });
+  const noBanner = !(await inviteBannerVisible(page));
+  const alive = await page.evaluate(() => !!document.getElementById('root')?.children.length);
+  if (noBanner && alive) record('TC-CAL-A4', 'PASS', 'unparseable ICS → no banner, app alive (fail-safe)');
+  else record('TC-CAL-A4', 'FAIL', `noBanner=${noBanner} alive=${alive}`);
+  await page.keyboard.press('Escape');
+}
+
+// --- TC-CAL-B: RSVP 낙관 5단계 ---
+async function scenario_cal_B(page) {
+  await openInviteThread(page);
+  await page.click('[aria-label="수락"]');
+  await waitFor(async () => (await rsvpStatusText(page))?.includes('수락됨'), { desc: 'accepted optimistic' });
+  await sleep(300); // mock round-trip
+  if ((await rsvpStatusText(page))?.includes('수락됨')) record('TC-CAL-B1', 'PASS', 'accept optimistic + persists');
+  else record('TC-CAL-B1', 'FAIL', 'accept status not persisted');
+
+  await page.click('[aria-label="미정"]');
+  await waitFor(async () => (await rsvpStatusText(page))?.includes('미정'), { desc: 'tentative optimistic' });
+  record('TC-CAL-B2', 'PASS', 'tentative optimistic');
+
+  await page.click('[aria-label="거절"]');
+  await waitFor(async () => (await rsvpStatusText(page))?.includes('거절됨'), { desc: 'declined optimistic' });
+  record('TC-CAL-B3', 'PASS', 'decline optimistic');
+
+  // B5: re-change from declined → accepted
+  await page.click('[aria-label="수락"]');
+  await waitFor(async () => (await rsvpStatusText(page))?.includes('수락됨'), { desc: 're-change' });
+  await sleep(300);
+  const state = await calendarState(page);
+  if ((await rsvpStatusText(page))?.includes('수락됨') && state.responses['demo-evt-standup'] === 'accepted') {
+    record('TC-CAL-B5', 'PASS', 're-change reflected in UI + mock state');
+  } else {
+    record('TC-CAL-B5', 'FAIL', `status=${await rsvpStatusText(page)} mock=${state.responses['demo-evt-standup']}`);
+  }
+
+  // B4: inject failure → optimistic then rollback + toast
+  await failNextCalendar(page);
+  await page.click('[aria-label="거절"]');
+  await waitFor(async () => (await rsvpStatusText(page))?.includes('거절됨'), { desc: 'declined optimistic (pre-rollback)' });
+  await waitFor(async () => {
+    const t = await bodyText(page);
+    return t.includes('RSVP failed') && (await rsvpStatusText(page))?.includes('수락됨');
+  }, { timeout: 4000, desc: 'rollback to accepted + toast' });
+  record('TC-CAL-B4', 'PASS', 'RSVP failure → rollback to previous (accepted) + toast');
+  await page.keyboard.press('Escape');
+}
+
+// --- TC-CAL-C: 아젠다 패널 ---
+async function scenario_cal_C(page) {
+  await openAgenda(page);
+  record('TC-CAL-C1', 'PASS', 'g→c opens the agenda overlay');
+
+  await waitFor(async () => {
+    const rows = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-testid="agenda-panel"] .truncate')).map((el) => el.textContent)
+    );
+    return rows.length >= 3;
+  }, { desc: 'agenda events loaded' });
+  const rows = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="agenda-panel"]')).map((p) => p.textContent).join(' ')
+  );
+  if (rows.includes('오늘') && rows.includes('내일')) record('TC-CAL-C2', 'PASS', 'today (2) + tomorrow (1) events shown');
+  else record('TC-CAL-C2', 'FAIL', `agenda body: ${rows.slice(0, 160)}`);
+
+  // C4: background shortcut blocked while open
+  await page.keyboard.press('e'); await sleep(200);
+  const stillOpen = await page.evaluate(() => !!document.querySelector('[data-testid="agenda-panel"]'));
+  if (stillOpen) record('TC-CAL-C4', 'PASS', "'e' archive blocked while agenda open");
+  else record('TC-CAL-C4', 'FAIL', 'agenda closed / archive leaked');
+
+  // C3: Esc closes
+  await page.keyboard.press('Escape'); await sleep(200);
+  if (!(await page.evaluate(() => !!document.querySelector('[data-testid="agenda-panel"]')))) {
+    record('TC-CAL-C3', 'PASS', 'Esc closes agenda');
+  } else {
+    record('TC-CAL-C3', 'FAIL', 'agenda still open after Esc');
+  }
+
+  // C5: fetch failure → inline error (not a toast)
+  await failNextCalendar(page);
+  await openAgenda(page);
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="agenda-error"]')), { desc: 'inline agenda error' });
+  record('TC-CAL-C5', 'PASS', 'listEvents failure → inline panel error');
+  await page.keyboard.press('Escape');
+}
+
+// --- TC-CAL-D: 이벤트 생성 폼 ---
+async function scenario_cal_D(page) {
+  await focusBody(page);
+  await page.keyboard.press('g'); await page.keyboard.press('i'); await sleep(200);
+  // pick a live "Re:"/"Fwd:" INBOX subject via ground truth (see findRePrefixedInboxSubject) instead
+  // of hardcoding "Re: keyboard shortcut audit" — falls back to the reserved, always-present
+  // "Design tokens v2" (no Re: prefix, but stripSubjectPrefix() is a no-op on it either way) if none
+  // of the seed's Re:-prefixed threads happen to have survived every prior F1..F6 scenario intact.
+  const targetSubject = (await findRePrefixedInboxSubject(page)) ?? 'Design tokens v2';
+  const expectedSummary = stripReFwdPrefix(targetSubject);
+  await clickRowContaining(page, targetSubject);
+  await waitFor(async () => (await bodyText(page)).includes(targetSubject), { desc: 'thread open for compose' });
+
+  await page.keyboard.press('Meta+k'); await sleep(200);
+  await page.keyboard.type('Create event from email'); await sleep(200);
+  await page.keyboard.press('Enter');
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="event-composer"]')), { desc: 'composer open' });
+  record('TC-CAL-D1', 'PASS', 'kbar action opens EventComposer');
+
+  const summary = await page.evaluate(() => document.querySelector('[aria-label="Event summary"]')?.value);
+  if (summary === expectedSummary) record('TC-CAL-D2', 'PASS', `Re:/Fwd: prefix stripped ("${targetSubject}" -> "${summary}")`);
+  else record('TC-CAL-D2', 'FAIL', `summary=${summary} expected=${expectedSummary}`);
+
+  const attendees = await page.evaluate(() => document.querySelector('[aria-label="Event attendees"]')?.value ?? '');
+  if (attendees.length > 0 && !attendees.includes('demo@zenmail.app')) {
+    record('TC-CAL-D3', 'PASS', `attendees prefilled without self: ${attendees.slice(0, 60)}`);
+  } else {
+    record('TC-CAL-D3', 'FAIL', `attendees=${attendees}`);
+  }
+
+  // D4: empty start → Create disabled, createEvent not called
+  const beforeCreate = (await calendarState(page)).events.length;
+  const disabled = await page.evaluate(() => document.querySelector('[aria-label="Create event"]')?.disabled);
+  if (disabled === true) record('TC-CAL-D4', 'PASS', 'Create disabled while start empty');
+  else record('TC-CAL-D4', 'FAIL', `create disabled=${disabled}`);
+
+  // D5: fill start → success toast + form closes + event appended
+  await page.evaluate(() => {
+    const el = document.querySelector('[aria-label="Event start"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '2026-07-20T09:00');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await sleep(150);
+  await page.click('[aria-label="Create event"]');
+  await waitFor(async () => {
+    const t = await bodyText(page);
+    const closed = !(await page.evaluate(() => !!document.querySelector('[data-testid="event-composer"]')));
+    return t.includes('이벤트가 생성됐어요') && closed;
+  }, { timeout: 4000, desc: 'create success + close' });
+  const afterCreate = (await calendarState(page)).events.length;
+  if (afterCreate === beforeCreate + 1) record('TC-CAL-D5', 'PASS', 'success toast + form closed + event appended');
+  else record('TC-CAL-D5', 'FAIL', `event count ${beforeCreate}→${afterCreate}`);
+
+  // D6: inject failure → error toast + form stays open (input preserved)
+  await page.keyboard.press('Meta+k'); await sleep(200);
+  await page.keyboard.type('Create event from email'); await sleep(200);
+  await page.keyboard.press('Enter');
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="event-composer"]')), { desc: 'composer reopen' });
+  await page.evaluate(() => {
+    const el = document.querySelector('[aria-label="Event start"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '2026-07-21T10:00');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await sleep(150);
+  await failNextCalendar(page);
+  await page.click('[aria-label="Create event"]');
+  await waitFor(async () => {
+    const t = await bodyText(page);
+    const open = await page.evaluate(() => !!document.querySelector('[data-testid="event-composer"]'));
+    return t.includes('이벤트 생성 실패') && open;
+  }, { timeout: 4000, desc: 'create failure toast + form stays open' });
+  record('TC-CAL-D6', 'PASS', 'create failure → error toast + form remains open');
+  await page.keyboard.press('Escape'); await sleep(150);
+}
+
+// --- TC-CAL-E: calendarReady 게이트 ---
+async function scenario_cal_E(page) {
+  // E1: simulate calendarReady=false, reload so init() re-reads getAccount(), then the calendar
+  // actions must be gated with a re-login prompt (no calendar mutation fires).
+  await setCalendarReady(page, false);
+  await reloadApp(page);
+  const acct = await accountInfo(page);
+  if (acct?.calendarReady === false) {
+    await openInviteThread(page);
+    await page.click('[aria-label="수락"]');
+    await waitFor(async () => (await bodyText(page)).includes('캘린더 권한 필요'), { desc: 'reauth prompt on RSVP' });
+    const noStatus = (await rsvpStatusText(page)) === null;
+    // g→c must NOT open the agenda while gated
+    await page.keyboard.press('Escape');
+    await focusBody(page);
+    await page.keyboard.press('g'); await page.keyboard.press('c'); await sleep(300);
+    const agendaBlocked = !(await page.evaluate(() => !!document.querySelector('[data-testid="agenda-panel"]')));
+    if (noStatus && agendaBlocked) record('TC-CAL-E1', 'PASS', 'reauth prompt shown; RSVP + agenda gated');
+    else record('TC-CAL-E1', 'FAIL', `noStatus=${noStatus} agendaBlocked=${agendaBlocked}`);
+
+    // E2: mail features unaffected while gated — archive still works
+    await focusBody(page);
+    await page.keyboard.press('g'); await page.keyboard.press('i'); await sleep(300);
+    const beforeRows = (await rowsInfo(page)).length;
+    const firstText = (await rowsInfo(page))[0]?.text ?? '';
+    await focusBody(page);
+    await page.keyboard.press('e'); // archive top selected
+    await waitFor(async () => (await rowsInfo(page)).length === beforeRows - 1 || !(await rowsInfo(page))[0]?.text.includes(firstText.slice(0, 10)), { timeout: 4000, desc: 'archive while gated' });
+    record('TC-CAL-E2', 'PASS', 'mail archive unaffected while calendarReady=false');
+  } else {
+    record('TC-CAL-E1', 'FAIL', `calendarReady override not applied: ${JSON.stringify(acct)}`);
+    record('TC-CAL-E2', 'SKIP', 'blocked by E1');
+  }
+
+  // E3: restore readiness (sign out → demo sign in rebuilds a fresh, ready session). Mirrors
+  // scenario_followup_E2's proven idiom (UI "Sign out" click + demoLogin), NOT a raw
+  // window.zenmail.signOut() IPC call + reloadApp(): the raw IPC call only clears main-process
+  // session state — the renderer's zustand `account` never updates without going through the
+  // store's signOut() action, so a bare reload lands on the login screen while reloadApp()
+  // waits for 'Compose' (the logged-in shell) and times out, aborting E3 before demoLogin() ever
+  // runs and leaving every later scenario stuck on the login screen (observed: this exact
+  // deadlock cascaded into ~15 unrelated FAILs downstream on the first attempt).
+  await setCalendarReady(page, true);
+  await focusBody(page);
+  await page.click('text=Sign out');
+  await sleep(500);
+  await demoLogin(page);
+  const acct2 = await accountInfo(page);
+  if (acct2?.calendarReady === true) {
+    await openAgenda(page);
+    const opened = await page.evaluate(() => !!document.querySelector('[data-testid="agenda-panel"]'));
+    await page.keyboard.press('Escape');
+    if (opened) record('TC-CAL-E3', 'PASS', 're-login restores calendarReady; agenda works again');
+    else record('TC-CAL-E3', 'FAIL', 'agenda did not open after restore');
+  } else {
+    record('TC-CAL-E3', 'FAIL', `calendarReady not restored: ${JSON.stringify(acct2)}`);
+  }
 }
 
 // --- login / F3 --------------------------------------------------------
