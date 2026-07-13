@@ -497,6 +497,14 @@ async function run() {
     // TC-LM-A3's restart-persistence check can piggyback on the existing F1/F2/F4 restart cycle.
     await tryLmScenario(page, 'A1A2', () => scenario_lm_a1_a2(page));
 
+    // --- right-reading-pane: TC-RP-A1..A4 (docs/features/right-reading-pane/TC.md) — runs
+    // right after TC-LM-A1/A2 (no theme scenario touches thread-open state) and before the
+    // mutate+restart block; opens/closes threads non-destructively (Enter/j/Escape only) and
+    // ends Escaped-closed so it doesn't pollute F1/F2/F4's restart-prep mutations below.
+    await tryRpScenario(page, 'A1A2', () => scenario_rp_a1_a2(page));
+    await tryRpScenario(page, 'A3', () => scenario_rp_a3(page));
+    await tryRpScenario(page, 'A4', () => scenario_rp_a4(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -2606,9 +2614,12 @@ async function scenario_sp_rollback(page) {
   // TC-SP-C3: markRead rollback — unread dot reverts, rollbacks.markRead bumps
   const rowsBeforeC3 = await rowsInfo(page);
   const c3Text = rowsBeforeC3.find((r) => r.text !== xText)?.text ?? rowsBeforeC3[0].text;
+  // resolve the id while the list is still in its full-width (classic) layout — once the thread
+  // opens, rows switch to the compact two-line variant whose textContent (chips omitted, date
+  // repositioned) no longer contains the classic-mode capture, so includes()-matching would miss.
+  const threadIdC3 = await threadIdOfRowContaining(page, c3Text);
   await clickRowContaining(page, c3Text);
   await sleep(150);
-  const threadIdC3 = await threadIdOfRowContaining(page, c3Text);
   const unreadBeforeC3 = await isThreadRowUnread(page, threadIdC3);
   const beforeSnapC3 = await latencyState(page);
   await armFailNextModify(page);
@@ -4160,6 +4171,161 @@ async function scenario_lm_a4_verify(page) {
   } else {
     record('TC-LM-A4', 'FAIL', `theme=${st.theme} bg=${st.bg}`);
   }
+}
+
+// --- right-reading-pane: TC-RP-A1..A4 (docs/features/right-reading-pane/TC.md) ------------
+
+async function tryRpScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] RP scenario "${label}" failed:`, err);
+    record(`TC-RP-${label}-error`, 'FAIL', String(err));
+  }
+}
+
+/** left/right pane geometry — ThreadList's `<section>` (found via any `[data-thread-id]` row's
+ *  closest section) vs ThreadView's root (`.zen-fade-in` ancestor of the single `<h2>` the whole
+ *  app ever renders — ThreadView.tsx:240, unique across the tree, so no data-testid is needed).
+ *  `container` is their shared flex-row parent (App.tsx's Toolbar-below row div). */
+async function rpLayoutRects(page) {
+  return page.evaluate(() => {
+    const row = document.querySelector('main [data-thread-id]');
+    const section = row ? row.closest('section') : null;
+    const container = section ? section.parentElement : null;
+    const h2 = document.querySelector('main h2');
+    const view = h2 ? h2.closest('.zen-fade-in') : null;
+    return {
+      section: section ? section.getBoundingClientRect().toJSON() : null,
+      container: container ? container.getBoundingClientRect().toJSON() : null,
+      view: view ? view.getBoundingClientRect().toJSON() : null,
+    };
+  });
+}
+
+/** offsetHeight of the first rendered row's own button — sized by the virtualizer's
+ *  absolutely-positioned wrapper (ROW_HEIGHT=56 / COMPACT_ROW_HEIGHT=64). */
+async function rpFirstRowHeight(page) {
+  return page.evaluate(() => {
+    const row = document.querySelector('main [data-thread-id]');
+    return row ? row.offsetHeight : null;
+  });
+}
+
+/** compact-only: whether the first row is laid out as two stacked lines (sender+date on top,
+ *  subject+snippet below) — compares the two direct-child row-wrapper spans' rect.top/text. */
+async function rpFirstRowIsTwoLine(page) {
+  return page.evaluate(() => {
+    const row = document.querySelector('main [data-thread-id]');
+    if (!row || row.children.length !== 2) return null;
+    const [line1, line2] = Array.from(row.children);
+    return {
+      top1: line1.getBoundingClientRect().top,
+      top2: line2.getBoundingClientRect().top,
+      text1: line1.textContent,
+      text2: line2.textContent,
+    };
+  });
+}
+
+/** currently keyboard-selected row's subject (compact row's 2nd line, 1st child span) — DOM
+ *  textContent is untruncated even though visually CSS-truncated (maxWidth:60% + `truncate`). */
+async function rpSelectedRowSubject(page) {
+  return page.evaluate(() => {
+    const row = document.querySelector('main [data-thread-id].bg-bg-subtle');
+    const subjectEl = row?.children?.[1]?.children?.[0];
+    return subjectEl ? subjectEl.textContent : null;
+  });
+}
+
+/** TC-RP-A1 (right-side placement + 36~44% list width) + TC-RP-A2 (compact 64px 2-line row) —
+ *  same open-a-thread pattern as scenario_lm_b1 (clickTab Inbox + focusBody + Enter,
+ *  non-destructive: opens whatever is currently selected). */
+async function scenario_rp_a1_a2(page) {
+  await clickTab(page, 'Inbox').catch(() => {});
+  await focusBody(page);
+  await page.keyboard.press('Enter');
+  await waitFor(async () => (await rpLayoutRects(page)).view, {
+    timeout: 5000,
+    desc: 'ThreadView rendered for TC-RP-A1/A2',
+  });
+  await sleep(200);
+
+  const { section, container, view } = await rpLayoutRects(page);
+  const listShare = section && container ? section.width / container.width : null;
+  const rightOfList = section && view ? view.left >= section.right - 2 : false; // 2px border/rounding slack
+  if (rightOfList && listShare !== null && listShare >= 0.36 && listShare <= 0.44) {
+    record(
+      'TC-RP-A1',
+      'PASS',
+      `view.left=${view.left} >= section.right=${section.right}, listShare=${listShare.toFixed(3)}`
+    );
+  } else {
+    record(
+      'TC-RP-A1',
+      'FAIL',
+      `rightOfList=${rightOfList} listShare=${listShare} section=${JSON.stringify(section)} view=${JSON.stringify(view)}`
+    );
+  }
+
+  const rowHeight = await rpFirstRowHeight(page);
+  const twoLine = await rpFirstRowIsTwoLine(page);
+  const heightOk = rowHeight === 64;
+  const twoLineOk = !!twoLine && twoLine.top2 > twoLine.top1 && twoLine.text1 !== twoLine.text2;
+  if (heightOk && twoLineOk) {
+    record('TC-RP-A2', 'PASS', `rowHeight=${rowHeight}, line1.top=${twoLine.top1} line2.top=${twoLine.top2}`);
+  } else {
+    record('TC-RP-A2', 'FAIL', `rowHeight=${rowHeight} twoLine=${JSON.stringify(twoLine)}`);
+  }
+}
+
+/** TC-RP-A3: Escape closes the detail pane opened by scenario_rp_a1_a2 — list returns to full
+ *  container width and rows return to the default (non-compact) 56px height. */
+async function scenario_rp_a3(page) {
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const { section, container } = await rpLayoutRects(page);
+  const listShare = section && container ? section.width / container.width : null;
+  const rowHeight = await rpFirstRowHeight(page);
+  if (listShare !== null && listShare >= 0.95 && rowHeight === 56) {
+    record('TC-RP-A3', 'PASS', `listShare=${listShare.toFixed(3)} (full width), rowHeight=${rowHeight}`);
+  } else {
+    record('TC-RP-A3', 'FAIL', `listShare=${listShare} rowHeight=${rowHeight}`);
+  }
+}
+
+/** TC-RP-A4: with the detail pane re-opened (closed by TC-RP-A3 above), j x2 must keep the
+ *  ThreadView title (the single `<h2>` in the app) in sync with the newly keyboard-selected row —
+ *  a regression check for moveSelection's pre-existing auto-reading behavior (store/mail.ts, not
+ *  touched by this feature). Ends Escaped-closed to avoid polluting later scenarios. */
+async function scenario_rp_a4(page) {
+  await focusBody(page);
+  await page.keyboard.press('Enter'); // re-open — non-destructive
+  await waitFor(async () => (await rpLayoutRects(page)).view, {
+    timeout: 5000,
+    desc: 'ThreadView re-open for TC-RP-A4',
+  });
+  await sleep(200);
+  await page.keyboard.press('j');
+  await sleep(150);
+  await page.keyboard.press('j');
+  await sleep(150);
+
+  try {
+    await waitFor(
+      async () => {
+        const subject = await rpSelectedRowSubject(page);
+        const title = await page.evaluate(() => document.querySelector('main h2')?.textContent ?? null);
+        return subject && title && subject === title ? { subject, title } : null;
+      },
+      { timeout: 5000, desc: 'ThreadView title follows j x2 selection for TC-RP-A4' }
+    );
+    record('TC-RP-A4', 'PASS', 'ThreadView title tracks j x2 selection (auto-reading unregressed)');
+  } catch (err) {
+    record('TC-RP-A4', 'FAIL', String(err));
+  }
+  await page.keyboard.press('Escape'); // close — avoid polluting subsequent scenarios
+  await sleep(200);
 }
 
 process.on('SIGINT', async () => {
