@@ -71,6 +71,7 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
       { id: 'label', name: 'Apply label…', shortcut: ['l'], section: 'Actions', perform: () => s().openLabelPicker() },
       { id: 'snooze', name: 'Snooze…', shortcut: ['b'], section: 'Actions', perform: () => s().openSnoozePicker() },
       { id: 'remindMe', name: 'Remind me…', shortcut: ['h'], section: 'Actions', perform: () => s().openFollowupPicker() },
+      { id: 'createEvent', name: 'Create event from email', section: 'Actions', perform: () => s().openEventComposer() },
       {
         id: 'trash',
         name: 'Move to trash',

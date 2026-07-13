@@ -68,6 +68,7 @@ export function useKeyboard(): void {
         s.snippetsOpen ||
         s.followupPickerOpen ||
         s.agendaOpen ||
+        s.eventComposerOpen ||
         coach.cheatSheetOpen ||
         coach.statsOpen
       ) {
@@ -75,6 +76,7 @@ export function useKeyboard(): void {
           s.closeSnoozePicker();
           s.closeLabelPicker();
           if (s.agendaOpen) s.closeAgenda();
+          if (s.eventComposerOpen) s.closeEventComposer();
           if (coach.cheatSheetOpen) coach.closeCheatSheet();
           if (coach.statsOpen) coach.closeStats();
         }

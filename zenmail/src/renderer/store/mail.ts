@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   type AccountInfo,
   type CalendarEvent,
+  type CreateEventInput,
   type FollowupInfo,
   type Label,
   type RsvpResponse,
@@ -82,6 +83,7 @@ interface MailState {
   agendaEvents: CalendarEvent[];
   agendaLoading: boolean;
   agendaError: string | null;
+  eventComposerOpen: boolean;
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -152,6 +154,9 @@ interface MailState {
   respondToInvite(iCalUID: string, response: RsvpResponse): Promise<void>;
   openAgenda(): Promise<void>;
   closeAgenda(): void;
+  openEventComposer(): void;
+  closeEventComposer(): void;
+  createCalendarEvent(input: CreateEventInput): Promise<boolean>;
 
   loadSnippets(): Promise<void>;
   saveSnippets(list: SnippetRecord[]): Promise<void>;
@@ -295,6 +300,7 @@ export const useMailStore = create<MailState>((set, get) => {
     agendaEvents: [],
     agendaLoading: false,
     agendaError: null,
+    eventComposerOpen: false,
 
     async init() {
       // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false)
@@ -961,6 +967,37 @@ export const useMailStore = create<MailState>((set, get) => {
     closeAgenda() {
       agendaFetchSeq++; // in-flight fetch 무효화
       set({ agendaOpen: false });
+    },
+
+    openEventComposer() {
+      const s = get();
+      if (!targetThreadId(s)) return; // 스레드 선택 컨텍스트 필요 (targetThreadId 가드)
+      if (!s.account?.calendarReady) {
+        s.showToast(CALENDAR_REAUTH_MSG);
+        return;
+      }
+      set({ eventComposerOpen: true });
+    },
+
+    closeEventComposer() {
+      set({ eventComposerOpen: false });
+    },
+
+    async createCalendarEvent(input) {
+      if (!get().account?.calendarReady) {
+        get().showToast(CALENDAR_REAUTH_MSG);
+        return false;
+      }
+      try {
+        await api().createEvent(input);
+      } catch (err) {
+        console.error('createEvent failed', err);
+        get().showToast('이벤트 생성 실패');
+        return false; // 폼은 열린 채 유지(입력 보존)
+      }
+      set({ eventComposerOpen: false });
+      get().showToast('이벤트가 생성됐어요');
+      return true;
     },
 
     async loadSnippets() {
