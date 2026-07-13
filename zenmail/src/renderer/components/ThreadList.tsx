@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMailStore } from '../store/mail';
 import { useCoachStore } from '../store/coach';
 import { selectVisibleThreads, INBOX_TAB } from '../lib/splits';
+import { labelChipFallback } from '../lib/theme';
 import { SplitTabBar } from './SplitTabBar';
 import { BulkActionBanner } from './BulkActionBanner';
 import type { FollowupInfo, Label, SplitDefinition, ThreadSummary } from '../../shared/types';
@@ -50,6 +51,7 @@ function ThreadRow({
   const openThread = useMailStore((s) => s.openThread);
   const archiveThread = useMailStore((s) => s.archiveThread);
   const openSnoozePicker = useMailStore((s) => s.openSnoozePicker);
+  const theme = useMailStore((s) => s.theme);
   const [offset, setOffset] = useState(0);
   const swipe = useRef({ total: 0, fired: false, timer: 0 as number | ReturnType<typeof setTimeout> });
 
@@ -146,7 +148,7 @@ function ThreadRow({
           key={l.id}
           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
           style={{
-            background: `${l.color?.backgroundColor ?? '#2a2a2a'}33`,
+            background: `${l.color?.backgroundColor ?? labelChipFallback(theme)}33`,
             color: l.color?.backgroundColor ?? 'var(--color-text-secondary)',
           }}
         >

@@ -1,13 +1,14 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMailStore, quoteHtml } from '../store/mail';
 import type { MessageDetail } from '../../shared/types';
+import { labelChipFallback } from '../lib/theme';
 
 const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
 
 /** Sanitize + prepare message HTML for the sandboxed frame. */
 function prepareHtml(
   message: MessageDetail,
-  opts: { showQuoted: boolean; allowImages: boolean }
+  opts: { showQuoted: boolean; allowImages: boolean; theme: 'light' | 'dark' }
 ): { srcDoc: string; hasQuoted: boolean } {
   const raw = message.bodyHtml || `<pre style="white-space:pre-wrap">${message.bodyText}</pre>`;
   const doc = new DOMParser().parseFromString(raw, 'text/html');
@@ -30,7 +31,9 @@ function prepareHtml(
     <meta http-equiv="Content-Security-Policy" content="${csp}">
     <base target="_blank">
     <style>
-      body { margin: 0; padding: 4px 0; background: transparent; color: #ececec;
+      body { margin: 0; padding: 4px 0; background: transparent; color: ${
+        opts.theme === 'dark' ? '#ececec' : '#18181b'
+      };
              font: 13px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
              word-wrap: break-word; }
       a { color: #6366f1; }
@@ -47,9 +50,11 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
   const [height, setHeight] = useState(120);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
+  const theme = useMailStore((s) => s.theme);
+
   const { srcDoc, hasQuoted } = useMemo(
-    () => prepareHtml(message, { showQuoted, allowImages }),
-    [message, showQuoted, allowImages]
+    () => prepareHtml(message, { showQuoted, allowImages, theme }),
+    [message, showQuoted, allowImages, theme]
   );
 
   const hasRemoteImages = useMemo(
@@ -211,6 +216,7 @@ export function ThreadView() {
   const activeThread = useMailStore((s) => s.activeThread);
   const threadLoading = useMailStore((s) => s.threadLoading);
   const labels = useMailStore((s) => s.labels);
+  const theme = useMailStore((s) => s.theme);
 
   if (threadLoading && !activeThread) {
     return (
@@ -239,7 +245,7 @@ export function ThreadView() {
                   key={l.id}
                   className="rounded px-1.5 py-0.5 text-[10px] font-medium"
                   style={{
-                    background: `${l.color?.backgroundColor ?? '#2a2a2a'}33`,
+                    background: `${l.color?.backgroundColor ?? labelChipFallback(theme)}33`,
                     color: l.color?.backgroundColor ?? 'var(--color-text-secondary)',
                   }}
                 >

@@ -195,7 +195,7 @@ export function quoteHtml(detail: ThreadDetail): string {
   const when = new Date(last.date).toLocaleString();
   return `<br><br><div class="gmail_quote">On ${escapeHtml(when)}, ${escapeHtml(
     last.from.name
-  )} &lt;${escapeHtml(last.from.email)}&gt; wrote:<blockquote style="border-left:2px solid #2a2a2a;margin:0;padding-left:12px">${
+  )} &lt;${escapeHtml(last.from.email)}&gt; wrote:<blockquote style="border-left:2px solid #cccccc;margin:0;padding-left:12px">${
     last.bodyHtml || escapeHtml(last.bodyText)
   }</blockquote></div>`;
 }
