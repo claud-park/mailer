@@ -72,6 +72,7 @@ interface MailState {
   /** D10: sidebar sync line data — set from useThreads' onSyncState subscription. */
   sync: { online: boolean; pending: number };
   bulkSelectedIds: Set<string>;
+  theme: 'light' | 'dark';
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -117,6 +118,9 @@ interface MailState {
   markReadSelected(read: boolean): Promise<void>;
   applyLabelSelected(labelId: string): Promise<void>;
   snoozeSelected(until: Date): Promise<void>;
+
+  setTheme(theme: 'light' | 'dark', opts?: { persist?: boolean }): void;
+  toggleTheme(): void;
 
   openCompose(init?: Partial<ComposeInit>): void;
   openReply(all?: boolean): void;
@@ -262,8 +266,15 @@ export const useMailStore = create<MailState>((set, get) => {
     snippets: [],
     sync: { online: true, pending: 0 },
     bulkSelectedIds: new Set(),
+    theme: 'light',
 
     async init() {
+      // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false)
+      try {
+        if ((await api().getSetting('theme')) === 'dark') get().setTheme('dark', { persist: false });
+      } catch {
+        /* default light */
+      }
       api().onFollowupFired((threadId) => {
         const thread = get().threads.find((t) => t.id === threadId);
         get().showToast(
@@ -942,6 +953,16 @@ export const useMailStore = create<MailState>((set, get) => {
       }
       get().showToast(`${ids.length}개 스누즈됨`);
       get().clearBulkSelection();
+    },
+
+    setTheme(theme, opts) {
+      set({ theme });
+      document.documentElement.dataset.theme = theme;
+      if (opts?.persist !== false) void api().setSetting('theme', theme);
+    },
+
+    toggleTheme() {
+      get().setTheme(get().theme === 'dark' ? 'light' : 'dark');
     },
   };
 });
