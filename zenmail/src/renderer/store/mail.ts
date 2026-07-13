@@ -201,6 +201,9 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
+/** openAgenda fetch 세대 카운터 — 닫기/재열기 시 in-flight 응답 무효화 (스토어 state 아님). */
+let agendaFetchSeq = 0;
+
 /** 아젠다 범위: 오늘 00:00 ~ 내일 24:00(모레 00:00). */
 function agendaRange(): { timeMinISO: string; timeMaxISO: string } {
   const start = new Date();
@@ -941,20 +944,22 @@ export const useMailStore = create<MailState>((set, get) => {
         get().showToast(CALENDAR_REAUTH_MSG);
         return;
       }
+      const seq = ++agendaFetchSeq;
       set({ agendaOpen: true, agendaLoading: true, agendaError: null, agendaEvents: [] });
       const { timeMinISO, timeMaxISO } = agendaRange();
       try {
         const events = await api().listEvents(timeMinISO, timeMaxISO);
-        if (!get().agendaOpen) return; // 닫힌 뒤 도착한 응답 무시
+        if (seq !== agendaFetchSeq || !get().agendaOpen) return; // 닫힘/재열기 뒤 도착한 응답 무시
         set({ agendaEvents: events, agendaLoading: false });
       } catch (err) {
         console.error('listEvents failed', err);
-        if (!get().agendaOpen) return;
+        if (seq !== agendaFetchSeq || !get().agendaOpen) return;
         set({ agendaError: '일정을 불러오지 못했어요', agendaLoading: false });
       }
     },
 
     closeAgenda() {
+      agendaFetchSeq++; // in-flight fetch 무효화
       set({ agendaOpen: false });
     },
 
