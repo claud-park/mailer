@@ -67,12 +67,14 @@ export function useKeyboard(): void {
         s.splitSettingsOpen ||
         s.snippetsOpen ||
         s.followupPickerOpen ||
+        s.agendaOpen ||
         coach.cheatSheetOpen ||
         coach.statsOpen
       ) {
         if (e.key === 'Escape') {
           s.closeSnoozePicker();
           s.closeLabelPicker();
+          if (s.agendaOpen) s.closeAgenda();
           if (coach.cheatSheetOpen) coach.closeCheatSheet();
           if (coach.statsOpen) coach.closeStats();
         }

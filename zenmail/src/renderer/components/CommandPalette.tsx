@@ -109,6 +109,7 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
       { id: 'sent', name: 'Go to sent', shortcut: ['g', 's'], section: 'Navigation', perform: () => s().setActiveLabel('SENT') },
       { id: 'drafts', name: 'Go to drafts', shortcut: ['g', 'd'], section: 'Navigation', perform: () => s().setActiveLabel('DRAFT') },
       { id: 'labelJump', name: 'Jump to label…', shortcut: ['g', 'l'], section: 'Navigation', perform: () => s().openLabelPicker() },
+      { id: 'agenda', name: 'Open agenda', shortcut: ['g', 'c'], section: 'Navigation', perform: () => s().openAgenda() },
       { id: 'toggleSplit', name: 'Toggle split inbox', section: 'View', perform: () => s().toggleSplit() },
       // Tab/⇧Tab은 useKeyboard 소유 — kbar shortcut으로 등록하면 이중 발화한다. 팔레트 검색용 액션만 둔다.
       { id: 'nextSplit', name: 'Next split', section: 'View', perform: () => s().nextTab() },

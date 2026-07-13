@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   type AccountInfo,
+  type CalendarEvent,
   type FollowupInfo,
   type Label,
   type RsvpResponse,
@@ -77,6 +78,10 @@ interface MailState {
   theme: 'light' | 'dark';
   /** iCalUID → 현재 RSVP 응답 상태(낙관 반영). 초대 배너가 읽는다. */
   rsvpStatus: Map<string, RsvpResponse>;
+  agendaOpen: boolean;
+  agendaEvents: CalendarEvent[];
+  agendaLoading: boolean;
+  agendaError: string | null;
 
   init(): Promise<void>;
   signIn(): Promise<void>;
@@ -145,6 +150,8 @@ interface MailState {
   dismissFollowup(threadId?: string): Promise<void>;
   showToast(msg: string): void;
   respondToInvite(iCalUID: string, response: RsvpResponse): Promise<void>;
+  openAgenda(): Promise<void>;
+  closeAgenda(): void;
 
   loadSnippets(): Promise<void>;
   saveSnippets(list: SnippetRecord[]): Promise<void>;
@@ -192,6 +199,14 @@ function targetThreadId(s: MailState, explicit?: string): string | null {
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+}
+
+/** 아젠다 범위: 오늘 00:00 ~ 내일 24:00(모레 00:00). */
+function agendaRange(): { timeMinISO: string; timeMaxISO: string } {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime() + 2 * DAY_MS);
+  return { timeMinISO: start.toISOString(), timeMaxISO: end.toISOString() };
 }
 
 export function quoteHtml(detail: ThreadDetail): string {
@@ -273,6 +288,10 @@ export const useMailStore = create<MailState>((set, get) => {
     bulkSelectedIds: new Set(),
     theme: 'light',
     rsvpStatus: new Map(),
+    agendaOpen: false,
+    agendaEvents: [],
+    agendaLoading: false,
+    agendaError: null,
 
     async init() {
       // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false)
@@ -915,6 +934,28 @@ export const useMailStore = create<MailState>((set, get) => {
         recordRollback('rsvp');
         get().showToast('RSVP failed — restored');
       }
+    },
+
+    async openAgenda() {
+      if (!get().account?.calendarReady) {
+        get().showToast(CALENDAR_REAUTH_MSG);
+        return;
+      }
+      set({ agendaOpen: true, agendaLoading: true, agendaError: null, agendaEvents: [] });
+      const { timeMinISO, timeMaxISO } = agendaRange();
+      try {
+        const events = await api().listEvents(timeMinISO, timeMaxISO);
+        if (!get().agendaOpen) return; // 닫힌 뒤 도착한 응답 무시
+        set({ agendaEvents: events, agendaLoading: false });
+      } catch (err) {
+        console.error('listEvents failed', err);
+        if (!get().agendaOpen) return;
+        set({ agendaError: '일정을 불러오지 못했어요', agendaLoading: false });
+      }
+    },
+
+    closeAgenda() {
+      set({ agendaOpen: false });
     },
 
     async loadSnippets() {
