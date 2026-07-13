@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  CalendarEvent,
+  CreateEventInput,
   FetchThreadsRequest,
   ModifyLabelsRequest,
+  RsvpResponse,
   SendRequest,
   SnoozeRequest,
   SplitDefinition,
@@ -35,6 +38,12 @@ const api: ZenmailApi = {
   cancelFollowup: (threadId: string) => ipcRenderer.invoke('mail:cancel-followup', threadId),
   dismissFollowup: (threadId: string) => ipcRenderer.invoke('mail:dismiss-followup', threadId),
   listFollowups: () => ipcRenderer.invoke('mail:list-followups'),
+
+  listEvents: (timeMinISO: string, timeMaxISO: string) =>
+    ipcRenderer.invoke('calendar:list-events', timeMinISO, timeMaxISO),
+  respondToEvent: (iCalUID: string, response: RsvpResponse) =>
+    ipcRenderer.invoke('calendar:respond', iCalUID, response),
+  createEvent: (input: CreateEventInput) => ipcRenderer.invoke('calendar:create', input),
 
   notifyOnline: () => ipcRenderer.invoke('mail:renderer-online'),
 
@@ -88,6 +97,9 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugSetOnline = (v: boolean) => ipcRenderer.invoke('mail:debug-set-online', v);
   api.__debugQueueDepth = () => ipcRenderer.invoke('mail:debug-queue-depth');
   api.__debugProviderCalls = () => ipcRenderer.invoke('mail:debug-provider-calls');
+  api.__debugCalendarState = () => ipcRenderer.invoke('calendar:debug-state');
+  api.__debugFailNextCalendar = () => ipcRenderer.invoke('calendar:debug-fail-next');
+  api.__debugSetCalendarReady = (v: boolean) => ipcRenderer.invoke('calendar:debug-set-ready', v);
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);

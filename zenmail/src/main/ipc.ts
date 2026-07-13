@@ -2,9 +2,12 @@ import crypto from 'node:crypto';
 import { ipcMain, type BrowserWindow } from 'electron';
 import type {
   AccountInfo,
+  CalendarEvent,
+  CreateEventInput,
   FetchThreadsRequest,
   FollowupInfo,
   ModifyLabelsRequest,
+  RsvpResponse,
   SendReceipt,
   SendRequest,
   SnoozeRequest,
@@ -13,6 +16,7 @@ import type {
 } from '../shared/types';
 import { classifyError } from '../shared/sync';
 import * as auth from './auth';
+import { MockCalendarProvider, RealCalendarProvider, type CalendarProvider } from './calendar';
 import * as cache from './cache';
 import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
 import { runDaemonTickNow } from './snooze';
@@ -22,6 +26,22 @@ const UNDO_WINDOW_MS = 10_000;
 const DAY_MS = 86_400_000;
 
 let provider: GmailProvider | null = null;
+let calendarProvider: CalendarProvider | null = null;
+/** 현재 세션의 실제 calendar.events scope 보유 여부(데모는 true). */
+let calendarReady = false;
+/** E2E-only: 데모에서 calendarReady 게이트를 강제로 덮어씀(null이면 계산값 사용). */
+let debugCalendarReady: boolean | null = null;
+
+function currentCalendarReady(demo: boolean): boolean {
+  if (debugCalendarReady !== null) return debugCalendarReady;
+  return demo ? true : calendarReady;
+}
+
+function requireCalendarProvider(): CalendarProvider {
+  if (!calendarProvider) throw new Error('Not signed in (calendar)');
+  return calendarProvider;
+}
+
 const pendingSends = new Map<string, NodeJS.Timeout>();
 
 // E2E-only: consumed (one-shot) by the next mail:modify-labels or mail:snooze call —
@@ -50,7 +70,9 @@ async function restoreSession(): Promise<AccountInfo | null> {
   const session = await auth.getAuthorizedClient();
   if (session) {
     provider = new RealGmailProvider(session.client, session.email);
-    return { email: session.email, demo: false };
+    calendarProvider = new RealCalendarProvider(session.client, session.email);
+    calendarReady = session.calendarReady;
+    return { email: session.email, demo: false, calendarReady: currentCalendarReady(false) };
   }
   return null;
 }
@@ -121,7 +143,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   }
 
   ipcMain.handle('auth:get-account', async (): Promise<AccountInfo | null> => {
-    if (provider) return { email: provider.email, demo: provider.demo };
+    if (provider) return { email: provider.email, demo: provider.demo, calendarReady: currentCalendarReady(provider.demo) };
     return restoreSession();
   });
 
@@ -130,17 +152,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const session = await auth.getAuthorizedClient();
     if (!session) throw new Error('Sign-in did not persist a session');
     provider = new RealGmailProvider(session.client, email);
-    return { email, demo: false };
+    calendarProvider = new RealCalendarProvider(session.client, email);
+    calendarReady = session.calendarReady;
+    return { email, demo: false, calendarReady: currentCalendarReady(false) };
   });
 
   ipcMain.handle('auth:sign-in-demo', async (): Promise<AccountInfo> => {
     provider = new MockGmailProvider();
-    return { email: provider.email, demo: true };
+    calendarProvider = new MockCalendarProvider();
+    calendarReady = true;
+    debugCalendarReady = null; // 새 데모 세션은 게이트 오버라이드를 초기화(E3 재로그인 복귀)
+    return { email: provider.email, demo: true, calendarReady: true };
   });
 
   ipcMain.handle('auth:sign-out', async () => {
     await auth.signOut();
     provider = null;
+    calendarProvider = null;
+    calendarReady = false;
     cache.clearFollowups();
   });
 
@@ -450,6 +479,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     triggerReconnect();
   });
 
+  ipcMain.handle('calendar:list-events', async (_e, timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]> => {
+    return requireCalendarProvider().listEvents(timeMinISO, timeMaxISO);
+  });
+
+  ipcMain.handle('calendar:respond', async (_e, iCalUID: string, response: RsvpResponse): Promise<void> => {
+    await requireCalendarProvider().respondToEvent(iCalUID, response);
+  });
+
+  ipcMain.handle('calendar:create', async (_e, input: CreateEventInput): Promise<CalendarEvent> => {
+    return requireCalendarProvider().createEvent(input);
+  });
+
   // E2E-only debug IPC — never registered unless ZENMAIL_E2E_PORT is set (see e2e/).
   if (process.env.ZENMAIL_E2E_PORT) {
     ipcMain.handle('mail:debug-simulate-reply', async (_e, threadId: string) => {
@@ -499,6 +540,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ipcMain.handle('mail:debug-provider-calls', async (): Promise<Record<string, number>> => {
       if (provider instanceof MockGmailProvider) return { ...provider.callCounts };
       return {};
+    });
+
+    ipcMain.handle('calendar:debug-state', async (): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }> => {
+      if (calendarProvider instanceof MockCalendarProvider) return calendarProvider.snapshot();
+      return { events: [], responses: {} };
+    });
+
+    ipcMain.handle('calendar:debug-fail-next', async () => {
+      if (calendarProvider instanceof MockCalendarProvider) calendarProvider.failNextCalendarCall();
+    });
+
+    // 데모 calendarReady 게이트 시뮬레이션. 렌더러가 다음 auth:get-account(재시작/재로그인)에서 읽는다.
+    ipcMain.handle('calendar:debug-set-ready', async (_e, v: boolean) => {
+      debugCalendarReady = v;
     });
   }
 }

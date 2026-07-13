@@ -14,6 +14,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.labels',
+  'https://www.googleapis.com/auth/calendar.events',
 ];
 
 export function getClientId(): string | undefined {
@@ -155,13 +156,19 @@ function newOAuthClient(redirectUri?: string): OAuth2Client {
 }
 
 /** Returns an authorized client for the stored account, or null if signed out. */
-export async function getAuthorizedClient(): Promise<{ client: OAuth2Client; email: string } | null> {
+export async function getAuthorizedClient(): Promise<{
+  client: OAuth2Client;
+  email: string;
+  calendarReady: boolean;
+} | null> {
   const email = getStoredEmail();
   if (!email) return null;
   const raw = await store.get(email);
   if (!raw) return null;
   const client = newOAuthClient();
   let current = JSON.parse(raw) as Credentials;
+  // 저장 토큰의 scope 문자열에 calendar.events 포함 여부 → calendarReady (강제 무효화 없음).
+  const calendarReady = typeof current.scope === 'string' && current.scope.includes('calendar.events');
   client.setCredentials(current);
   client.on('tokens', (tokens) => {
     // persist refreshed tokens, accumulating across consecutive refreshes
@@ -169,7 +176,7 @@ export async function getAuthorizedClient(): Promise<{ client: OAuth2Client; ema
     current = { ...current, ...tokens };
     void store.set(email, JSON.stringify(current));
   });
-  return { client, email };
+  return { client, email, calendarReady };
 }
 
 /** Full interactive sign-in: PKCE + loopback redirect + Keychain storage. */

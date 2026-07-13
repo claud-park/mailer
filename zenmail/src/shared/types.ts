@@ -140,6 +140,8 @@ export interface SnoozeRequest {
 export interface AccountInfo {
   email: string;
   demo: boolean;
+  /** calendar.events scope 보유 여부. false면 캘린더 기능만 비활성(메일 무영향). 데모는 항상 true. */
+  calendarReady: boolean;
 }
 
 export type SplitRule =
@@ -195,6 +197,10 @@ export interface ZenmailApi {
   dismissFollowup(threadId: string): Promise<void>;
   listFollowups(): Promise<FollowupInfo[]>;
 
+  listEvents(timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]>;
+  respondToEvent(iCalUID: string, response: RsvpResponse): Promise<void>;
+  createEvent(input: CreateEventInput): Promise<CalendarEvent>;
+
   /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
   notifyOnline(): Promise<void>;
 
@@ -234,6 +240,12 @@ export interface ZenmailApi {
   /** E2E-only: MockGmailProvider network-method call counts (e.g. listThreads) — used to prove
    *  a mutation's diff-push does NOT trigger a list refetch (TC-SY-D1). */
   __debugProviderCalls?(): Promise<Record<string, number>>;
+  /** E2E-only: mock 캘린더 상태 스냅샷(시드 이벤트 + 기록된 RSVP 응답). */
+  __debugCalendarState?(): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }>;
+  /** E2E-only: 다음 calendar:* 호출 1회를 실패시킴(one-shot). */
+  __debugFailNextCalendar?(): Promise<void>;
+  /** E2E-only: 데모 세션의 calendarReady 게이트 시뮬레이션(재시작/재로그인 전까지 유지). */
+  __debugSetCalendarReady?(v: boolean): Promise<void>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';
