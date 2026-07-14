@@ -94,10 +94,14 @@ export function setGlobalSetting(key: string, value: string): void {
 /**
  * 레거시 단일 계정 레이아웃 → 멀티 계정 레이아웃 1회 변환. 앱 시작 시(윈도우 생성 전) 호출.
  *  - accounts.json이 이미 있으면 no-op (이미 마이그레이션됨).
- *  - account.json이 있으면: 그 email을 첫 실계정으로 등록하고, zenmail.db(+-wal/-shm)를
- *    계정 스코프 파일명으로 rename, settings.theme를 전역 settings.json으로 복사, account.json 삭제.
+ *  - account.json이 있으면: zenmail.db(+-wal/-shm)를 계정 스코프 파일명으로 rename(all-or-nothing) →
+ *    성공 시에만 그 email을 첫 실계정으로 등록(accounts.json 커밋) → settings.theme를 전역
+ *    settings.json으로 best-effort 복사 → account.json 삭제.
  *  - 어느 쪽도 없으면 빈 레지스트리 생성.
- * 실패 시 원본 보존(파괴적 삭제 없음) — rename 실패는 콘솔 경고 후 원본 유지.
+ * DB rename이 중간에 실패하면 이미 옮긴 파일을 역순으로 원위치 롤백하고 accounts.json은 쓰지
+ * 않는다(= 다음 실행 시 최상단 accounts.json 가드에 걸리지 않아 자동 재시도됨). rename 이후
+ * 단계(테마 복사·account.json 삭제)의 실패는 계정 등록/DB 자체는 이미 유효하므로 best-effort로
+ * 경고만 남긴다.
  */
 export function migrateLegacyLayout(): void {
   if (fs.existsSync(ACCOUNTS_FILE())) return;
@@ -111,15 +115,36 @@ export function migrateLegacyLayout(): void {
     writeAccounts({ accounts: [], activeEmail: null });
     return;
   }
-  writeAccounts({ accounts: [{ email: legacyEmail, demo: false }], activeEmail: legacyEmail });
   const target = accountDbPath(legacyEmail);
-  try {
-    if (fs.existsSync(LEGACY_DB_FILE()) && !fs.existsSync(target)) {
+  // 1) DB rename을 먼저, all-or-nothing으로. 중간 실패 시 옮긴 파일을 역순 롤백하고
+  //    accounts.json을 쓰지 않은 채 return — 다음 실행에서 재시도 가능한 상태로 남긴다.
+  if (fs.existsSync(LEGACY_DB_FILE()) && !fs.existsSync(target)) {
+    const moved: Array<{ src: string; dest: string }> = [];
+    try {
       for (const ext of ['', '-wal', '-shm']) {
         const src = LEGACY_DB_FILE() + ext;
-        if (fs.existsSync(src)) fs.renameSync(src, target + ext);
+        const dest = target + ext;
+        if (fs.existsSync(src)) {
+          fs.renameSync(src, dest);
+          moved.push({ src, dest });
+        }
       }
+    } catch (err) {
+      for (const { src, dest } of moved.reverse()) {
+        try {
+          fs.renameSync(dest, src);
+        } catch {
+          /* best-effort rollback */
+        }
+      }
+      console.warn('[accounts] legacy db rename failed — migration deferred to next launch:', err);
+      return;
     }
+  }
+  // 2) rename이 성공(또는 애초에 불필요)했을 때만 레지스트리를 커밋.
+  writeAccounts({ accounts: [{ email: legacyEmail, demo: false }], activeEmail: legacyEmail });
+  // 3) 테마 복사 + account.json 삭제는 best-effort — 실패해도 계정 등록/DB는 이미 유효하다.
+  try {
     // 테마는 앱 전역 설정으로 승계 — index.ts의 BrowserWindow backgroundColor가 계정 DB 없이 읽어야 한다.
     if (fs.existsSync(target)) {
       const db = new Database(target, { readonly: true });
