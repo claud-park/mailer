@@ -4,7 +4,7 @@
 > Obsidian checkpoint: `_obsidian/Projects/ZenMail.md`
 > Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-07-04
+Last updated: 2026-07-14
 
 ## 0. 프로젝트 셋업
 - [x] PRD.md / TODO.md 작성
@@ -97,3 +97,7 @@ Last updated: 2026-07-04
 - [x] F4 `speed-instrumentation` — 100ms 레이턴시 버짓·계측 (wow #1) — 2026-07-04 완료, E2E 112건 109 PASS·0 FAIL·3 SKIP(F1 기존), burst p50 ~13ms (docs/features/speed-instrumentation/)
 - [x] F5 `detail-density` — Snippets(⌘; 피커)+Instant Intro, read-status 기각 (wow #5) — 2026-07-05 완료, E2E 128건 125 PASS·0 FAIL·3 SKIP(F1 기존) (docs/features/detail-density/)
 - [x] F6 `sync-engine` — 오프라인-퍼스트 전면화 (wow #6) — 2026-07-06 완료, E2E 142건 136 PASS·0 FAIL·5 SKIP(기존3+사유2), warm-hit p50 ~14-21ms (docs/features/sync-engine/) — **v1.x 로드맵 F1~F6 완주**
+
+## post-roadmap Features
+
+- [x] `calendar-integration` — Google Calendar 메일 중심 연동: 초대 RSVP 배너(ICS 자체 파서+낙관 5단계)·이벤트 생성 폼(규칙 프리필, No AI)·`g→c` 아젠다 패널·calendar.events scope+calendarReady 게이트 — 2026-07-14 완료, E2E 183 PASS·0 FAIL·6 SKIP ×2(집계 캐논 재해석 D10: 총 189=164+25) (docs/features/calendar-integration/)
