@@ -62,6 +62,7 @@
 - **D9-3. openAgenda stale-fetch 가드를 세대 카운터로**: boolean(agendaOpen) 가드는 닫기→재열기/연타 레이스에서 이전 fetch가 새 상태를 덮어씀 → 모듈 레벨 agendaFetchSeq로 latest-wins. "닫힌 뒤 도착 응답 무시"라는 계획 의도의 더 정확한 이행.
 - **D9-4. openEventComposer 가드를 activeThread로**: 계획은 targetThreadId 가드 + activeThread 프리필로 내부 불일치(스레드 미오픈 시 빈 프리필) → 가드를 프리필 소스와 일치. "Create event from email"은 열린 메일이 전제.
 - **D9-5. 오버레이 단축키 차단 메커니즘 확인(as-designed)**: useKeyboard guard는 자기 소유 키(j/k/Enter/[/]/Esc)만 막고, kbar 소유 단일 키(e 등)는 패널 keydown stopPropagation이 차단 — CLAUDE.md에 문서화된 기존 이중 메커니즘 그대로. TC-CAL-C4가 실측 검증.
+- **D9-6. MockCalendarProvider 실패 주입은 failIfOffline이 아니라 one-shot failIfArmed**: 캘린더 뮤테이션은 F6 큐 비대상(D6)이라 온라인/오프라인 상태 시뮬레이션이 의미 없음 — E2E가 필요한 것은 "다음 호출 1회 실패"의 결정적 주입뿐(PRD FR13의 failIfOffline 문구는 Gmail Mock 패턴의 관용적 인용).
 
 ## D10. E2E 캐논 재해석 — "157·0·7"의 7번째 SKIP은 런타임 유동 (2026-07-13)
 

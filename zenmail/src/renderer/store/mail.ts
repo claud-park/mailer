@@ -355,6 +355,12 @@ export const useMailStore = create<MailState>((set, get) => {
         activeThreadId: null,
         activeThread: null,
         followups: new Map(),
+        rsvpStatus: new Map(),
+        agendaOpen: false,
+        agendaEvents: [],
+        agendaLoading: false,
+        agendaError: null,
+        eventComposerOpen: false,
       });
     },
 
