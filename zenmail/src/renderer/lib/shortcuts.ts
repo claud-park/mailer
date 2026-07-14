@@ -49,6 +49,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'nextSplit', keys: ['Tab'], label: 'Next split', section: 'View' },
   { id: 'prevSplit', keys: ['⇧', 'Tab'], label: 'Previous split', section: 'View' },
   { id: 'splitTabJump', keys: ['⌘', '1–9'], label: 'Jump to split tab', section: 'View' },
+  { id: 'switchAccount', keys: ['⌃', '1–9'], label: 'Switch account', section: 'View' },
 
   // Help
   { id: 'commandPalette', keys: ['⌘', 'K'], label: 'Command palette', section: 'Help' },

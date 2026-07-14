@@ -1,6 +1,6 @@
 import { useMailStore, activeAccount } from '../store/mail';
 import { useCoachStore } from '../store/coach';
-import { SNOOZE_LABEL_NAME, type Label } from '../../shared/types';
+import { SNOOZE_LABEL_NAME, type Label, type AccountInfo } from '../../shared/types';
 
 const SYSTEM_ITEMS: { id: string; name: string }[] = [
   { id: 'INBOX', name: 'Inbox' },
@@ -14,6 +14,29 @@ function LabelDot({ label }: { label: Label }) {
       className="inline-block h-2 w-2 shrink-0 rounded-full"
       style={{ background: label.color?.backgroundColor ?? 'var(--color-text-muted)' }}
     />
+  );
+}
+
+function AccountAvatar({ acct, index, active, onClick }: {
+  acct: AccountInfo; index: number; active: boolean; onClick: () => void;
+}) {
+  const initial = (acct.demo ? acct.email.split('@')[0] : acct.email)[0]?.toUpperCase() ?? '?';
+  return (
+    <button
+      onClick={onClick}
+      title={`${acct.email} (⌃${index + 1})${acct.needsReauth ? ' — 재로그인 필요' : ''}`}
+      aria-label={`Switch to ${acct.email}`}
+      className={`relative flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold transition-colors ${
+        active ? 'bg-accent text-white' : 'bg-bg-border text-text-secondary hover:text-text-primary'
+      }`}
+    >
+      {acct.needsReauth ? '!' : initial}
+      {acct.unreadCount > 0 && !active && (
+        <span className="absolute -top-1 -right-1 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] leading-4 text-white">
+          {acct.unreadCount > 99 ? '99+' : acct.unreadCount}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -54,6 +77,10 @@ export function Sidebar() {
   const account = useMailStore(activeAccount);
   const removeAccount = useMailStore((s) => s.removeAccount);
   const sync = useMailStore((s) => s.sync);
+  const accounts = useMailStore((s) => s.accounts);
+  const activeAccountId = useMailStore((s) => s.activeAccountId);
+  const switchAccount = useMailStore((s) => s.switchAccount);
+  const addAccount = useMailStore((s) => s.addAccount);
 
   // 최소 사이드바(Task 5)의 단일 "Sign out"은 전 계정 로그아웃 → 로그인 화면 복귀.
   // (계정별 전환·제거 UI 본격 신설은 Task 7.) 데모는 계정 2개가 상주하므로 활성 하나만
@@ -73,6 +100,30 @@ export function Sidebar() {
     <aside className="flex h-full w-52 shrink-0 flex-col border-r border-bg-border bg-bg-subtle/50">
       {/* traffic-light spacer / drag region */}
       <div className="app-drag h-12 shrink-0" />
+
+      {/* 계정 스위처 — drag region 아래 */}
+      {accounts.length > 0 && (
+        <div className="flex items-center gap-1.5 px-3 pb-2">
+          {accounts.map((a, i) => (
+            <AccountAvatar
+              key={a.email} acct={a} index={i} active={a.email === activeAccountId}
+              onClick={() => {
+                if (a.needsReauth) void addAccount(); // D4: reauth = OAuth 재실행
+                else void switchAccount(a.email);
+              }}
+            />
+          ))}
+          <button
+            onClick={() => void addAccount()}
+            title="Add account"
+            aria-label="Add account"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[13px] text-text-muted hover:bg-bg-border hover:text-text-primary"
+          >
+            +
+          </button>
+        </div>
+      )}
+
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
         {SYSTEM_ITEMS.map((item) => (
           <SidebarRow

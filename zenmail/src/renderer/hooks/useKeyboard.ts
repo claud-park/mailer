@@ -58,6 +58,17 @@ export function useKeyboard(): void {
         return;
       }
 
+      // ⌃1~⌃9 — 계정 전환 (kbar 미등록: Tab 주석과 동일한 이중발화 회피. ⌘digit=스플릿과 수식키로 구분)
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
+        const target = s.accounts[Number(e.code.slice(5)) - 1];
+        if (target && target.email !== s.activeAccountId && !target.needsReauth) {
+          e.preventDefault();
+          void s.switchAccount(target.email);
+          useCoachStore.getState().recordEfficient('switchAccount');
+        }
+        return;
+      }
+
       if (isTyping(e.target)) return;
       const coach = useCoachStore.getState();
       if (

@@ -546,8 +546,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       pendingSends.delete(sendId);
       return true;
     }
-    // scheduled send?
-    requireContext(accountId).cache.removeScheduledSend(sendId);
+    // scheduled send? — 계정이 이미 제거됐을 수 있으므로 requireContext 대신 관용화(no-op)
+    contexts.get(accountId)?.cache.removeScheduledSend(sendId);
     return true;
   });
 

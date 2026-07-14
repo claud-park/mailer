@@ -7,10 +7,43 @@ import {
   KBarSearch,
   KBarResults,
   useMatches,
+  useRegisterActions,
   type Action,
 } from 'kbar';
 import { useMailStore } from '../store/mail';
 import { useCoachStore } from '../store/coach';
+
+/** 계정 목록은 런타임 가변 — 정적 actions 배열 대신 useRegisterActions로 등록/갱신 */
+function AccountActions() {
+  const accounts = useMailStore((s) => s.accounts);
+  const activeAccountId = useMailStore((s) => s.activeAccountId);
+  const actions = useMemo<Action[]>(() => {
+    const s = useMailStore.getState;
+    return [
+      ...accounts.map((a, i) => ({
+        id: `switchAccount:${a.email}`,
+        name: `Switch to ${a.email}${a.email === activeAccountId ? ' (current)' : ''}`,
+        section: 'Accounts',
+        // 단축키는 useKeyboard 소유(⌃N) — kbar shortcut 등록 금지(이중발화)
+        perform: () => {
+          if (a.needsReauth) void s().addAccount();
+          else void s().switchAccount(a.email);
+        },
+      })),
+      { id: 'addAccount', name: 'Add account…', section: 'Accounts', perform: () => void s().addAccount() },
+      ...(activeAccountId
+        ? [{
+            id: 'removeAccount',
+            name: `Sign out of ${activeAccountId}`,
+            section: 'Accounts',
+            perform: () => void s().removeAccount(activeAccountId),
+          }]
+        : []),
+    ];
+  }, [accounts, activeAccountId]);
+  useRegisterActions(actions, [actions]);
+  return null;
+}
 
 function RenderResults() {
   const { results } = useMatches();
@@ -171,6 +204,7 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
 
   return (
     <KBarProvider actions={actions} options={{ toggleShortcut: '$mod+k' }}>
+      <AccountActions />
       <KBarPortal>
         <KBarPositioner className="z-50 bg-black/50">
           <KBarAnimator className="w-full max-w-lg overflow-hidden rounded-lg border border-bg-border bg-bg-subtle shadow-2xl">
