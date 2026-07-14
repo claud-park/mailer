@@ -23,6 +23,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'snooze', keys: ['b'], label: 'Snooze…', section: 'Actions' },
   { id: 'remindMe', keys: ['h'], label: 'Remind me…', section: 'Actions' },
   { id: 'trash', keys: ['#'], label: 'Move to trash', section: 'Actions' },
+  { id: 'star', keys: ['s'], label: 'Star / Unstar', section: 'Actions' },
   { id: 'markRead', keys: ['I'], label: 'Mark as read', section: 'Actions' },
   { id: 'markUnread', keys: ['U'], label: 'Mark as unread', section: 'Actions' },
   // Actions — Compose-local (Compose.tsx onKeyDown), not kbar

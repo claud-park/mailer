@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  SNOOZE_LABEL_NAME,
   type AccountInfo,
   type CalendarEvent,
   type CreateEventInput,
@@ -12,8 +13,16 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '../../shared/types';
+import { inLabelView } from '../../shared/view';
 import { computeSplits, selectVisibleThreads, INBOX_TAB } from '../lib/splits';
-import { captureRemoval, reinsert, removeLabelId, toggleUnread, type RemovalCapture } from '../lib/optimistic';
+import {
+  addLabelId,
+  captureRemoval,
+  reinsert,
+  removeLabelId,
+  toggleUnread,
+  type RemovalCapture,
+} from '../lib/optimistic';
 import { parseSnippets, SNIPPETS_KEY } from '../lib/snippets';
 import { detectIntro, type IntroSuggestion } from '../lib/intro';
 import { useCoachStore } from './coach';
@@ -118,6 +127,7 @@ interface MailState {
 
   archiveThread(threadId?: string, opts?: { silent?: boolean }): Promise<void>;
   trashThread(threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+  toggleStar(threadId?: string): Promise<void>;
   markRead(threadId?: string, read?: boolean, opts?: { silent?: boolean }): Promise<void>;
   applyLabel(labelId: string, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
   snoozeThread(until: Date, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
@@ -202,6 +212,11 @@ function targetThreadId(s: MailState, explicit?: string): string | null {
   return explicit ?? s.activeThreadId ?? visibleThreads(s)[s.selectedIndex]?.id ?? null;
 }
 
+/** the loaded label whose name matches SNOOZE_LABEL_NAME, or null if unknown yet (inbox-zero-starred D6) */
+function snoozeLabelIdOf(s: MailState): string | null {
+  return s.labels.find((l) => l.name === SNOOZE_LABEL_NAME)?.id ?? null;
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
@@ -253,7 +268,7 @@ export const useMailStore = create<MailState>((set, get) => {
   }
 
   /** Reinserts a captured removal (if any) and records the rollback (F4 CP3, DECISIONS D4). */
-  function rollbackRemoval(capture: RemovalCapture | null, action: 'archive' | 'trash' | 'snooze'): void {
+  function rollbackRemoval(capture: RemovalCapture | null, action: 'archive' | 'trash' | 'snooze' | 'star'): void {
     if (capture) {
       set((st) => ({ threads: reinsert(st.threads, capture) }));
     }
@@ -419,19 +434,23 @@ export const useMailStore = create<MailState>((set, get) => {
     /**
      * F6 CP5 (D1): merges a mutation-origin diff push straight into store.threads — never refetches.
      * removals drop the ids. Each upsert is resolved against the *current view label* (main doesn't
-     * know the view): present + still in view → replace in place; present + label gone → drop (archive
-     * lands here); absent + in view → insert at date-sorted position. Search results are a static
-     * snapshot, so diffs are ignored while a search is active. selectedIndex is re-clamped after.
+     * know the view) via the shared inLabelView predicate: present + still in view → replace in place;
+     * present + view membership lost → drop (archive lands here, unless the thread is starred — see
+     * archiveThread's D5 branch); absent + in view → insert at date-sorted position. For the INBOX view,
+     * "in view" is the shared predicate INBOX∪STARRED−TRASH/SPAM−snoozed (DECISIONS D1/D5), not a plain
+     * label include — a starred-but-archived upsert stays. Search results are a static snapshot, so
+     * diffs are ignored while a search is active. selectedIndex is re-clamped after.
      */
     applyThreadsDiff(upserts, removals) {
       set((st) => {
         if (st.searchQuery) return {}; // search results are a frozen snapshot — ignore live diffs
         const viewLabel = st.activeLabelId || 'INBOX';
+        const snoozeLabelId = snoozeLabelIdOf(st);
         const rm = new Set(removals);
         let threads = st.threads.filter((t) => !rm.has(t.id));
         for (const u of upserts) {
           const exists = threads.some((t) => t.id === u.id);
-          const inView = u.labelIds.includes(viewLabel);
+          const inView = inLabelView(u.labelIds, viewLabel, snoozeLabelId);
           if (exists) {
             threads = inView
               ? threads.map((t) => (t.id === u.id ? u : t))
@@ -576,6 +595,35 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+
+      // D5: a starred thread stays visible after archive (INBOX∪STARRED predicate) — update the
+      // row in place instead of removing it, but only while the INBOX view (no search) is on screen.
+      const thread = s.threads.find((t) => t.id === id);
+      const nextLabels = thread ? thread.labelIds.filter((l) => l !== 'INBOX') : null;
+      const keepInPlace =
+        nextLabels !== null &&
+        inLabelView(nextLabels, 'INBOX', snoozeLabelIdOf(s)) &&
+        (s.activeLabelId === 'INBOX' || !s.activeLabelId) &&
+        !s.searchQuery;
+
+      if (keepInPlace) {
+        set((st) => ({ threads: st.threads.map((t) => (t.id === id ? { ...t, labelIds: nextLabels! } : t)) }));
+        done();
+        try {
+          await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
+        } catch (err) {
+          console.error('archiveThread failed', err);
+          set((st) => ({ threads: addLabelId(st.threads, id, 'INBOX') }));
+          recordRollback('archive');
+          get().showToast('Archive failed — restored');
+          void get().refresh();
+          return;
+        }
+        if (!opts?.silent) get().showToast('Archived');
+        useCoachStore.getState().bumpStat('archive');
+        return;
+      }
+
       const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
@@ -627,6 +675,100 @@ export const useMailStore = create<MailState>((set, get) => {
       }
       if (!opts?.silent) get().showToast('Moved to trash');
       useCoachStore.getState().bumpStat('trash');
+    },
+
+    /**
+     * D7: minimal star toggle. Starring always updates in place. Unstarring drops the row only when
+     * it would fall out of the INBOX view predicate (archived-starred in the INBOX view, D5's mirror
+     * on the way out) — everywhere else (search, non-INBOX view, or still-in-INBOX) it's in-place too.
+     */
+    async toggleStar(threadId) {
+      const done = instrument('star');
+      const s = get();
+      const id = targetThreadId(s, threadId);
+      if (!id) return;
+      const thread = s.threads.find((t) => t.id === id);
+      if (!thread) return;
+      const isStarred = thread.labelIds.includes('STARRED');
+
+      const setActiveLabels = (st: MailState, labelIds: string[]) =>
+        st.activeThreadId === id && st.activeThread
+          ? { activeThread: { ...st.activeThread, labelIds } }
+          : {};
+
+      if (!isStarred) {
+        set((st) => ({
+          threads: addLabelId(st.threads, id, 'STARRED'),
+          ...setActiveLabels(st, [...thread.labelIds, 'STARRED']),
+        }));
+        done();
+        try {
+          await api().modifyLabels({ threadId: id, addLabelIds: ['STARRED'], removeLabelIds: [] });
+        } catch (err) {
+          console.error('toggleStar failed', err);
+          set((st) => ({
+            threads: removeLabelId(st.threads, id, 'STARRED'),
+            ...setActiveLabels(st, thread.labelIds),
+          }));
+          recordRollback('star');
+          get().showToast('Star failed — restored');
+          void get().refresh();
+          return;
+        }
+        get().showToast('Starred');
+        return;
+      }
+
+      const nextLabels = thread.labelIds.filter((l) => l !== 'STARRED');
+      const viewLabel = s.activeLabelId || 'INBOX';
+      const keepInPlace =
+        !!s.searchQuery || viewLabel !== 'INBOX' || inLabelView(nextLabels, 'INBOX', snoozeLabelIdOf(s));
+
+      if (keepInPlace) {
+        set((st) => ({
+          threads: removeLabelId(st.threads, id, 'STARRED'),
+          ...setActiveLabels(st, nextLabels),
+        }));
+        done();
+        try {
+          await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
+        } catch (err) {
+          console.error('toggleStar failed', err);
+          set((st) => ({
+            threads: addLabelId(st.threads, id, 'STARRED'),
+            ...setActiveLabels(st, thread.labelIds),
+          }));
+          recordRollback('star');
+          get().showToast('Unstar failed — restored');
+          void get().refresh();
+          return;
+        }
+        get().showToast('Unstarred');
+        return;
+      }
+
+      // archived-starred thread leaving the INBOX view on unstar (D5 mirror)
+      const capture = captureRemoval(s.threads, id);
+      set((st) => {
+        const threads = st.threads.filter((t) => t.id !== id);
+        const next = { ...st, threads };
+        return {
+          threads,
+          selectedIndex: clampSelection(next),
+          ...(st.activeThreadId === id ? { activeThreadId: null, activeThread: null } : {}),
+        };
+      });
+      done();
+      try {
+        await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
+      } catch (err) {
+        console.error('toggleStar failed', err);
+        rollbackRemoval(capture, 'star');
+        get().showToast('Unstar failed — restored');
+        void get().refresh();
+        return;
+      }
+      get().showToast('Unstarred');
     },
 
     async markRead(threadId, read = true, _opts) {

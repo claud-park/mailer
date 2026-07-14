@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureRemoval, reinsert, removeLabelId, toggleUnread } from './optimistic';
+import { addLabelId, captureRemoval, reinsert, removeLabelId, toggleUnread } from './optimistic';
 import type { ThreadSummary } from '../../shared/types';
 
 function thread(id: string, overrides: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -123,5 +123,36 @@ describe('removeLabelId', () => {
     const threads = [thread('a', { labelIds: ['X'] }), thread('b', { labelIds: ['X'] })];
     const result = removeLabelId(threads, 'a', 'X');
     expect(result[1]).toEqual(threads[1]);
+  });
+});
+
+describe('addLabelId', () => {
+  it('adds the labelId to the target thread', () => {
+    const threads = [thread('a', { labelIds: ['INBOX'] })];
+    const result = addLabelId(threads, 'a', 'STARRED');
+    expect(result[0].labelIds).toEqual(['INBOX', 'STARRED']);
+  });
+
+  it('is idempotent when the labelId is already present', () => {
+    const threads = [thread('a', { labelIds: ['INBOX', 'STARRED'] })];
+    const once = addLabelId(threads, 'a', 'STARRED');
+    const twice = addLabelId(once, 'a', 'STARRED');
+    expect(twice).toEqual(once);
+    expect(twice[0].labelIds).toEqual(['INBOX', 'STARRED']);
+  });
+
+  it('leaves other threads untouched', () => {
+    const threads = [thread('a', { labelIds: ['X'] }), thread('b', { labelIds: ['X'] })];
+    const result = addLabelId(threads, 'a', 'STARRED');
+    expect(result[1]).toEqual(threads[1]);
+  });
+
+  it('archive-of-starred keeps the row: removeLabelId(INBOX) + addLabelId(INBOX) round-trips label-only update (inbox-zero-starred D5)', () => {
+    const threads = [thread('a', { labelIds: ['INBOX', 'STARRED'] })];
+    const archived = removeLabelId(threads, 'a', 'INBOX');
+    expect(archived[0].labelIds).toEqual(['STARRED']);
+    expect(archived.map((t) => t.id)).toEqual(['a']); // row survives — no removal
+    const rolledBack = addLabelId(archived, 'a', 'INBOX');
+    expect(rolledBack[0].labelIds).toEqual(['STARRED', 'INBOX']);
   });
 });

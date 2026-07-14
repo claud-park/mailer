@@ -60,3 +60,12 @@ export function removeLabelId(threads: ThreadSummary[], id: string, labelId: str
       : t
   );
 }
+
+/** Adds `labelId` to thread `id`'s labelIds (idempotent — no-op if already present). Mirrors removeLabelId. */
+export function addLabelId(threads: ThreadSummary[], id: string, labelId: string): ThreadSummary[] {
+  return threads.map((t) =>
+    t.id === id && !t.labelIds.includes(labelId)
+      ? { ...t, labelIds: [...t.labelIds, labelId] }
+      : t
+  );
+}

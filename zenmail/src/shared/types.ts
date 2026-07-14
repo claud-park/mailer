@@ -240,6 +240,9 @@ export interface ZenmailApi {
   /** E2E-only: MockGmailProvider network-method call counts (e.g. listThreads) — used to prove
    *  a mutation's diff-push does NOT trigger a list refetch (TC-SY-D1). */
   __debugProviderCalls?(): Promise<Record<string, number>>;
+  /** E2E-only (inbox-zero-starred TC-IZ-A1/A2): "Gmail 웹에서 아카이브" 재현 — mock provider에서만
+   *  INBOX를 벗겨(캐시·modifyThread 우회) 외부 변경 수렴을 검증한다. real provider에선 no-op. */
+  __debugExternalArchive?(threadId: string): Promise<void>;
   /** E2E-only: mock 캘린더 상태 스냅샷(시드 이벤트 + 기록된 RSVP 응답). */
   __debugCalendarState?(): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }>;
   /** E2E-only: 다음 calendar:* 호출 1회를 실패시킴(one-shot). */

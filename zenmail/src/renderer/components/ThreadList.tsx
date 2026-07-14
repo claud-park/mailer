@@ -139,6 +139,11 @@ function ThreadRow({
               <span className="ml-1 text-[11px] text-text-muted">{thread.messageCount}</span>
             )}
           </span>
+          {thread.labelIds.includes('STARRED') && (
+            <span className="shrink-0 text-[11px] leading-none text-label-yellow" aria-hidden="true">
+              ★
+            </span>
+          )}
           {followup?.status === 'fired' && (
             <span className="shrink-0 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-medium text-accent">
               No reply
@@ -197,6 +202,11 @@ function ThreadRow({
         </span>
         <span className="truncate text-[12px] text-text-muted">{thread.snippet}</span>
       </span>
+      {thread.labelIds.includes('STARRED') && (
+        <span className="shrink-0 text-[13px] leading-none text-label-yellow" aria-hidden="true">
+          ★
+        </span>
+      )}
       {chips.slice(0, 3).map((l) => (
         <span
           key={l.id}

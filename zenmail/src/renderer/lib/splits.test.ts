@@ -198,6 +198,24 @@ describe('computeSplits', () => {
     expect(visible.map((t) => t.id)).toEqual(['t2']);
   });
 
+  // --- inbox-zero-starred (docs/features/inbox-zero-starred) ---
+
+  it('a STARRED-only (archived) thread present in the input list is included in INBOX_TAB and counted in its matching split tab — membership itself is upstream (store/view.ts), this documents the invariant', () => {
+    const threads = [
+      thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' }, labelIds: ['STARRED'] }),
+      thread({ id: 't2', from: { name: 'Nobody', email: 'nobody@nowhere.com' } }),
+    ];
+    const visibleInbox = selectVisibleThreads(threads, [vip, team], INBOX_TAB);
+    expect(visibleInbox.map((t) => t.id)).toEqual(['t1', 't2']);
+
+    const { assignment, counts } = computeSplits(threads, [vip, team]);
+    expect(assignment.get('t1')).toBe('vip');
+    expect(counts.get('vip')!.total).toBe(1);
+
+    const visibleVip = selectVisibleThreads(threads, [vip, team], 'vip');
+    expect(visibleVip.map((t) => t.id)).toEqual(['t1']);
+  });
+
   it('omitting pinnedIds (or passing an empty set) leaves ordering unchanged', () => {
     const threads = [thread({ id: 't1' }), thread({ id: 't2' }), thread({ id: 't3' })];
     const withoutArg = selectVisibleThreads(threads, [], INBOX_TAB);

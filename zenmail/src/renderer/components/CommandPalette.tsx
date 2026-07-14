@@ -84,6 +84,13 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         },
       },
       {
+        id: 'star',
+        name: 'Star / Unstar',
+        shortcut: ['s'],
+        section: 'Actions',
+        perform: () => void s().toggleStar(),
+      },
+      {
         id: 'markRead',
         name: 'Mark as read',
         shortcut: ['I'],

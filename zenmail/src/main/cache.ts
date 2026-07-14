@@ -12,8 +12,35 @@ import type {
   ThreadSummary,
 } from '../shared/types';
 import { backoffDelayMs } from '../shared/sync';
+import { isInInboxView } from '../shared/view';
 
 let db: Database.Database | null = null;
+
+/**
+ * inbox-zero-starred D3: 로컬 기원(사용자 낙관 뮤테이션)의 applyLabelDelta 시각을 기억한다.
+ * SWR revalidate가 "방금 로컬에서 아카이브/스트립한 스레드"를 스테일 fresh 페이지 때문에
+ * 부활시키지 않도록 가드하는 데 쓴다(hasPendingMutations와 함께). 프로세스 수명 동안만 유지되는
+ * in-memory Map으로 의도적으로 둔다 — 재시작 케이스는 영속 mutations 큐가 커버하므로 컬럼을
+ * 추가해 스키마를 늘리지 않는다(D3). revalidate발 서버-스트립은 origin:'server'로 여기서 제외된다.
+ */
+const localDeltaAt = new Map<string, number>();
+
+/** localDeltaAt[threadId] ≥ ts (로컬 델타가 ts 이후 발생) — revalidate 부활 가드용. */
+export function localDeltaSince(threadId: string, ts: number): boolean {
+  const at = localDeltaAt.get(threadId);
+  return at !== undefined && at >= ts;
+}
+
+/**
+ * inbox-zero-starred: 계정 경계(sign-out)에서 로컬-델타 기록을 비운다. 가드의 전제는 "낙관
+ * 뮤테이션이 아직 같은 provider/세션에 반영 중"인데, sign-out은 provider 인스턴스 자체를
+ * 교체한다 — 이전 세션의 타임스탬프가 새 provider의 진짜 fresh 페이지를 15초간 가로막아
+ * (예: 아카이브 직후 sign-out→demo 재로그인) 정당한 복원 upsert까지 억제하는 버그였다.
+ * clearFollowups()와 동일한 계정 경계 훅(auth:sign-out)에서 호출한다.
+ */
+export function clearLocalDeltaTracking(): void {
+  localDeltaAt.clear();
+}
 
 export function openCache(): Database.Database {
   if (db) return db;
@@ -148,10 +175,66 @@ export function upsertThreads(threads: ThreadSummary[]): void {
 /** Cache reader for the split-inbox lists — mirrors the Gmail `labelIds` filter semantics. */
 export function getThreads(labelId: string | undefined, limit = 50): ThreadSummary[] {
   const label = labelId ?? 'INBOX';
-  const rows = openCache()
+  const d = openCache();
+  if (label === 'INBOX') {
+    // inbox-zero-starred D1/D6: 인박스 뷰 = (INBOX ∨ STARRED) − snoozed − TRASH/SPAM.
+    // 캐시 리더는 라벨 id를 모르므로 snooze 배제는 로컬 truth인 snoozes 테이블 서브쿼리로 한다(D6).
+    // TRASH/SPAM은 SQL에서 직접 배제한다(isInInboxView와 동일 조건) — LIKE 프리필터 뒤에 JS 필터를
+    // 얹고 LIMIT을 먼저 적용하면, 상위 N행에 TRASH/SPAM 잔류 행이 몰릴 때 유효 행이 limit보다 적게
+    // 반환될 수 있다(뒤쪽 유효 행을 못 봄) — SQL이 최대한 정확히 걸러야 LIMIT이 안전하다. isInInboxView
+    // JS 필터는 그래도 유지(공유 술어가 유일한 진실 소스라는 D1 불변식 보존, SQL은 동일 조건의 미러).
+    const rows = d
+      .prepare(
+        `SELECT * FROM threads
+         WHERE (label_ids LIKE '%"INBOX"%' OR label_ids LIKE '%"STARRED"%')
+           AND label_ids NOT LIKE '%"TRASH"%'
+           AND label_ids NOT LIKE '%"SPAM"%'
+           AND id NOT IN (SELECT thread_id FROM snoozes)
+         ORDER BY date DESC LIMIT ?`
+      )
+      .all(limit) as Record<string, unknown>[];
+    return rows.map(rowToSummary).filter((t) => isInInboxView(t.labelIds));
+  }
+  const rows = d
     .prepare('SELECT * FROM threads WHERE label_ids LIKE ? ORDER BY date DESC LIMIT ?')
     .all(`%"${label}"%`, limit) as Record<string, unknown>[];
   return rows.map(rowToSummary);
+}
+
+/**
+ * inbox-zero-starred D4: revalidate의 removal 열거용 — 뷰에 매칭되는 **전체** 캐시 행(LIMIT 없음).
+ * getThreads가 반환하는 상위 페이지가 아니라 뷰 전체를 훑어야 84행 오염 케이스의 51번 이후 행까지
+ * 제거 후보가 된다. 멤버십 판정은 getThreads와 동일(INBOX면 인박스 술어+snoozes 배제, 그 외 라벨은
+ * 단순 LIKE). removal window 판정에 쓰이므로 date를 함께 반환한다.
+ */
+export function getViewRows(labelId: string | undefined): { id: string; date: number }[] {
+  const label = labelId ?? 'INBOX';
+  const d = openCache();
+  if (label === 'INBOX') {
+    const rows = d
+      .prepare(
+        `SELECT id, label_ids, date FROM threads
+         WHERE (label_ids LIKE '%"INBOX"%' OR label_ids LIKE '%"STARRED"%')
+           AND label_ids NOT LIKE '%"TRASH"%'
+           AND label_ids NOT LIKE '%"SPAM"%'
+           AND id NOT IN (SELECT thread_id FROM snoozes)`
+      )
+      .all() as { id: string; label_ids: string; date: number }[];
+    return rows
+      .filter((r) => isInInboxView(JSON.parse(r.label_ids) as string[]))
+      .map((r) => ({ id: r.id, date: r.date }));
+  }
+  return d
+    .prepare('SELECT id, date FROM threads WHERE label_ids LIKE ?')
+    .all(`%"${label}"%`) as { id: string; date: number }[];
+}
+
+/** inbox-zero-starred D6: snoozes 테이블에 pending 행이 있으면 true(로컬 snooze truth). */
+export function isSnoozed(threadId: string): boolean {
+  const row = openCache()
+    .prepare('SELECT 1 FROM snoozes WHERE thread_id = ? LIMIT 1')
+    .get(threadId);
+  return !!row;
 }
 
 /**
@@ -236,11 +319,17 @@ export function mergeLabelIds(
  *
  * Note: if INBOX is removed here the row is NOT deleted — label-filtered readers (getThreads)
  * naturally exclude it, and keeping the row lets warm-cache reads/undo still resolve it.
+ *
+ * inbox-zero-starred D3: opts.origin이 'server'가 아니면(기본 'local' — 모든 기존 호출부는
+ * 로컬 낙관 뮤테이션이므로 불변) 이 스레드의 로컬-델타 시각을 기록한다. revalidate가 서버발
+ * removal 스트립을 적용할 때만 {origin:'server'}로 이 기록을 건너뛴다(자기 upsert가 다음 가드를
+ * 오염시키지 않도록).
  */
 export function applyLabelDelta(
   threadId: string,
   addLabelIds: string[],
-  removeLabelIds: string[]
+  removeLabelIds: string[],
+  opts: { origin?: 'local' | 'server' } = {}
 ): void {
   const d = openCache();
   const row = d.prepare('SELECT label_ids FROM threads WHERE id = ?').get(threadId) as
@@ -256,6 +345,7 @@ export function applyLabelDelta(
     Date.now(),
     threadId
   );
+  if (opts.origin !== 'server') localDeltaAt.set(threadId, Date.now());
 }
 
 export function searchLocal(q: string): ThreadSummary[] {

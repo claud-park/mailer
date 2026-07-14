@@ -101,3 +101,4 @@ Last updated: 2026-07-14
 ## post-roadmap Features
 
 - [x] `calendar-integration` — Google Calendar 메일 중심 연동: 초대 RSVP 배너(ICS 자체 파서+낙관 5단계)·이벤트 생성 폼(규칙 프리필, No AI)·`g→c` 아젠다 패널·calendar.events scope+calendarReady 게이트 — 2026-07-14 완료, E2E 183 PASS·0 FAIL·6 SKIP ×2(집계 캐논 재해석 D10: 총 189=164+25) (docs/features/calendar-integration/)
+- [x] `inbox-zero-starred` — 사용자 실계정 버그 리포트(외부 아카이브 84행 미수렴) + 제품 요구(인박스=INBOX∪STARRED) — 2026-07-14 완료, 근본원인: SWR revalidate가 removal 미계산+60s 폴 무한 루프, 수정: 뷰 전체 캐시 행 열거 기반 removal 수렴 + 공유 술어(src/shared/view.ts) + 실계정 전용 15s grace 가드(mock=0, D10). E2E TC-IZ 9건 전건 PASS + 전체 스위트 0 FAIL·6 SKIP ×2, 실계정 스모크로 84→22행 수렴·STARRED 20건 확인 (docs/features/inbox-zero-starred/)

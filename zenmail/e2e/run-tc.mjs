@@ -650,6 +650,27 @@ async function run() {
 
   await browser?.close().catch(() => {});
   await killApp();
+
+  // --- inbox-zero-starred: TC-IZ-* (docs/features/inbox-zero-starred/TC.md) — a dedicated final
+  // session, launched AFTER every restart cycle above. It must run last because TC-IZ-A2 archives
+  // the entire inbox to inbox-zero (destructive to the shared seed pool) and TC-IZ-B2/B3 mutate the
+  // 'Starred: keep me visible' seed — running before the F1/F2/F4 restart block (which reads
+  // "Design tokens v2"/demo_3 and asserts a non-empty cold-read list, TC-FUP-E1/TC-SY-C2) would rob
+  // those. A fresh launch reconstructs a pristine MockGmailProvider (both starred seeds present),
+  // and no later scenario depends on this session's inbox state.
+  launchApp(PORT, USERDATA);
+  try {
+    ({ browser, page } = await connectPage(PORT));
+    await demoLogin(page);
+    await runIzSession(page);
+  } catch (err) {
+    console.error('[harness] scenario error (inbox-zero-starred):', err);
+    // surface a session-fatal error against the first TC so 0-FAIL bars can't silently pass.
+    if (!results.some((r) => r.id.startsWith('TC-IZ'))) record('TC-IZ-B1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+  }
+  await browser?.close().catch(() => {});
+  await killApp();
+
   rmSync(USERDATA, { recursive: true, force: true });
 
   // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
@@ -3609,7 +3630,17 @@ async function tryDdScenario(page, label, fn) {
 
 /** demo fixtures that later scenarios / the restart block still depend on — never *permanently*
  *  archive these (a reverted/redelivered mutation on them is fine, but a real drop is not). */
-const SY_RESERVED = ['Design tokens v2', 'Q3 roadmap review', 'Postmortem: snooze daemon', 'Intro: Yuna'];
+const SY_RESERVED = [
+  'Design tokens v2',
+  'Q3 roadmap review',
+  'Postmortem: snooze daemon',
+  'Intro: Yuna',
+  // inbox-zero-starred seeds — the dedicated final TC-IZ session depends on both surviving intact.
+  // A snooze/trash on these in an earlier session persists in the same cache DB across restarts and
+  // would hide them from the pristine-provider inbox the TC-IZ session reads (snoozed → excluded).
+  'Starred: keep me visible',
+  'Starred archived: still here',
+];
 
 async function syncProviderCalls(page) {
   return page.evaluate(() => window.zenmail.__debugProviderCalls());
@@ -3939,7 +3970,17 @@ async function deleteSplit(page, name) {
 }
 
 /** subjects whose demo threads the restart block / SY_RESERVED still depend on — never destroy */
-const SA_RESERVED_SUBJECTS = ['Design tokens v2', 'Q3 roadmap review', 'Postmortem: snooze', 'Intro: Yuna'];
+const SA_RESERVED_SUBJECTS = [
+  'Design tokens v2',
+  'Q3 roadmap review',
+  'Postmortem: snooze',
+  'Intro: Yuna',
+  // inbox-zero-starred seeds — never let a destructive bulk test (esp. TC-SA-B4 bulk snooze, which
+  // persists in the cache DB across restarts) claim these two throwaway-sender rows; the TC-IZ final
+  // session needs both present in a pristine inbox.
+  'Starred: keep me visible',
+  'Starred archived: still here',
+];
 
 /**
  * Ground-truth INBOX summaries (regular fetchThreads IPC — exposes from.email/labelIds the DOM
@@ -4737,6 +4778,504 @@ async function scenario_nav_arrows(page) {
     ok ? 'PASS' : 'FAIL',
     `selected ${start} -> ${afterDown} (ArrowDown x2) -> ${afterUp} (ArrowUp x1)`
   );
+}
+
+// ---------------------------------------------------------------------------
+// inbox-zero-starred: TC-IZ-* (docs/features/inbox-zero-starred/TC.md)
+//
+// Runs in its own final session (see run()). The inbox view is the shared predicate
+// INBOX ∪ (STARRED − TRASH − SPAM − snoozed): starred threads stay visible even after archive.
+// All targeting is by data-thread-id (discovered at runtime, never hardcoded) so it works for the
+// two oldest seeds too, which sort to the very bottom of the virtualized list.
+// ---------------------------------------------------------------------------
+
+/** whether the split tab bar is currently rendered */
+async function izSplitOn(page) {
+  return page.evaluate(() => !!document.querySelector('[role="tablist"][aria-label="Inbox splits"]'));
+}
+
+/** toggle split inbox to the desired state via the toolbar button (⌘⇧I) */
+async function izSetSplit(page, on) {
+  const cur = await izSplitOn(page);
+  if (cur !== on) {
+    await page.click('[title="Toggle split inbox (⌘⇧I)"]');
+    await sleep(400);
+  }
+}
+
+/** ground-truth inbox VIEW straight from the cache/provider (fetchThreads applies the shared
+ *  INBOX∪STARRED predicate) — independent of virtualization, unlike DOM reads. */
+async function izInboxView(page) {
+  return page.evaluate(() =>
+    window.zenmail
+      .fetchThreads({ labelIds: ['INBOX'] })
+      .then((r) => r.threads.map((t) => ({ id: t.id, subject: t.subject, labelIds: t.labelIds })))
+  );
+}
+
+/** re-load the INBOX list (kbar g→i → setActiveLabel('INBOX') → loadThreads → SWR warm read +
+ *  background revalidate). This is the app's own refresh path; a warm read ships pure removal/
+ *  upsert diffs (applyThreadsDiff), which is exactly what external-archive convergence relies on. */
+async function izRefresh(page) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(120);
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(500);
+}
+
+/** the inbox rows currently rendered in the main list, with their thread id + ★ + selection state */
+async function izDomRows(page) {
+  return page.evaluate(() => {
+    const dots = Array.from(document.querySelectorAll('main span.rounded-full')).filter(
+      (el) => el.classList.contains('h-2') && el.classList.contains('w-2') && !el.classList.contains('inline-block')
+    );
+    return dots
+      .map((dot) => dot.closest('button'))
+      .filter(Boolean)
+      .map((btn) => ({
+        id: btn.getAttribute('data-thread-id'),
+        text: btn.textContent.trim(),
+        starred: btn.textContent.includes('★'),
+        selected: btn.classList.contains('bg-bg-subtle'),
+      }));
+  });
+}
+
+/** DOM snapshot of a single row by thread id (null if not currently rendered) */
+async function izRowDomById(page, id) {
+  return page.evaluate((tid) => {
+    const btn = document.querySelector(`[data-thread-id="${tid}"]`);
+    if (!btn) return null;
+    return { text: btn.textContent.trim(), starred: btn.textContent.includes('★') };
+  }, id);
+}
+
+/** scroll the virtualized list until the row for `id` is rendered into the DOM (the two starred
+ *  seeds are the oldest threads → bottom of the list → overscan won't render them unscrolled). */
+async function izScrollToId(page, id) {
+  await waitFor(
+    async () =>
+      page.evaluate((tid) => {
+        if (document.querySelector(`[data-thread-id="${tid}"]`)) return true;
+        for (const sc of Array.from(document.querySelectorAll('main .overflow-y-auto'))) sc.scrollTop = sc.scrollHeight;
+        return false;
+      }, id),
+    { timeout: 6000, interval: 200, desc: `row ${id} scrolled into render` }
+  );
+}
+
+/** select a specific thread by id for a keyboard action: open it (openThread sets selectedIndex to
+ *  that row), then Escape to close the reading pane while keeping the selection — so a following
+ *  e/s/#/b targets exactly this thread via visibleThreads[selectedIndex], regardless of its list
+ *  position (mirrors the click→Escape→'b' pattern in scenario_km_milestone_snooze). */
+async function izSelectById(page, id) {
+  await izScrollToId(page, id);
+  const handle = await page.evaluateHandle((tid) => document.querySelector(`[data-thread-id="${tid}"]`), id);
+  const el = handle.asElement();
+  if (!el) throw new Error(`row not found by id: ${id}`);
+  await el.scrollIntoViewIfNeeded();
+  await el.click();
+  await sleep(200);
+  await page.keyboard.press('Escape');
+  await sleep(150);
+  await focusBody(page);
+}
+
+async function tryIzScenario(page, name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] TC-IZ ${name} error:`, err);
+    const owned =
+      {
+        B1: ['TC-IZ-B1'],
+        B4: ['TC-IZ-B4'],
+        B7: ['TC-IZ-B7'],
+        B2B3: ['TC-IZ-B2', 'TC-IZ-B3'],
+        B5: ['TC-IZ-B5'],
+        B6: ['TC-IZ-B6'],
+        A1: ['TC-IZ-A1'],
+        A3: ['TC-IZ-A3'],
+        A2: ['TC-IZ-A2'],
+      }[name] ?? [`TC-IZ-${name}`];
+    for (const id of owned) if (!results.some((r) => r.id === id)) record(id, 'FAIL', String(err).slice(0, 160));
+  }
+}
+
+async function runIzSession(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  // discover the two starred seeds by subject (their ids are the mock's — never hardcode them);
+  // a fresh provider is pristine, but a persisted cache may still be reconciling, so poll until both
+  // are present in the inbox view.
+  let seeds;
+  try {
+    seeds = await waitFor(
+      async () => {
+        const view = await izInboxView(page);
+        const keep = view.find((t) => t.subject === 'Starred: keep me visible');
+        const arch = view.find((t) => t.subject === 'Starred archived: still here');
+        return keep && arch ? { keepId: keep.id, archId: arch.id } : null;
+      },
+      { timeout: 20000, interval: 500, desc: 'both starred seeds present in the inbox view' }
+    );
+  } catch (err) {
+    const view = await izInboxView(page).catch(() => []);
+    console.error('[harness] TC-IZ seed discovery failed — inbox view subjects:', JSON.stringify(view.map((t) => t.subject)));
+    throw err;
+  }
+
+  // non-destructive first (B1/B4/B7), then the B2→B3 chain, then star-your-own actions (B5/B6),
+  // then archive-convergence on expendable rows (A1/A3), and finally the destructive inbox-zero A2.
+  await tryIzScenario(page, 'B1', () => scenario_iz_b1(page, seeds));
+  await tryIzScenario(page, 'B4', () => scenario_iz_b4(page));
+  await tryIzScenario(page, 'B7', () => scenario_iz_b7(page, seeds));
+  await tryIzScenario(page, 'B2B3', () => scenario_iz_b2_b3(page, seeds));
+  await tryIzScenario(page, 'B5', () => scenario_iz_b5(page));
+  await tryIzScenario(page, 'B6', () => scenario_iz_b6(page));
+  await tryIzScenario(page, 'A1', () => scenario_iz_a1(page));
+  await tryIzScenario(page, 'A3', () => scenario_iz_a3(page));
+  await tryIzScenario(page, 'A2', () => scenario_iz_a2(page, seeds));
+}
+
+// --- TC-IZ-B1: starred-archived seed is visible with a ★ ---------------------
+async function scenario_iz_b1(page, seeds) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  await izScrollToId(page, seeds.archId);
+  const row = await izRowDomById(page, seeds.archId);
+  const inView = (await izInboxView(page)).some((t) => t.id === seeds.archId);
+  if (row && row.starred && inView) {
+    record('TC-IZ-B1', 'PASS', `starred-archived seed ("${row.text.slice(0, 30)}") shows in the inbox list with a ★`);
+  } else {
+    record('TC-IZ-B1', 'FAIL', `row=${JSON.stringify(row)} inView=${inView}`);
+  }
+}
+
+// --- TC-IZ-B4: star toggle round-trip on an INBOX row ------------------------
+async function scenario_iz_b4(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const rows = await izDomRows(page);
+  const target = rows.find((r) => r.selected && !r.starred && r.id) ?? rows.find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-IZ-B4', 'FAIL', 'no non-starred INBOX row available to toggle');
+    return;
+  }
+  await focusBody(page);
+  await page.keyboard.press('s'); // star the selected (top) row
+  const starOn = await waitFor(
+    async () => {
+      const r = await izRowDomById(page, target.id);
+      return r && r.starred ? true : null;
+    },
+    { timeout: 4000, desc: 'B4 ★ appears on the row' }
+  ).then(() => true, () => false);
+  await page.keyboard.press('s'); // unstar
+  const starOffStays = await waitFor(
+    async () => {
+      const r = await izRowDomById(page, target.id);
+      return r && !r.starred ? true : null;
+    },
+    { timeout: 4000, desc: 'B4 ★ removed and the row remains' }
+  ).then(() => true, () => false);
+  const present = !!(await izRowDomById(page, target.id));
+  if (starOn && starOffStays && present) {
+    record('TC-IZ-B4', 'PASS', `star round-trip on INBOX row ("${target.text.slice(0, 24)}"): ★ on → off, row stays (INBOX)`);
+  } else {
+    record('TC-IZ-B4', 'FAIL', `starOn=${starOn} starOffStays=${starOffStays} present=${present}`);
+  }
+}
+
+// --- TC-IZ-B7: split inbox reflects the starred-archived seed ----------------
+async function scenario_iz_b7(page, seeds) {
+  await izSetSplit(page, true);
+  await sleep(400);
+  const tabs = (await tabsInfo(page)).map((t) => t.label);
+  if (!tabs.includes('Other')) {
+    record('TC-IZ-B7', 'SKIP', `no "Other" tab present in split mode (tabs: ${tabs.join(',')})`);
+    await izSetSplit(page, false);
+    return;
+  }
+  await clickTab(page, 'Other');
+  await sleep(300);
+  await izScrollToId(page, seeds.archId);
+  const inOther = !!(await izRowDomById(page, seeds.archId));
+  await clickTab(page, 'Inbox');
+  await sleep(300);
+  await izScrollToId(page, seeds.archId);
+  const inInboxTab = !!(await izRowDomById(page, seeds.archId));
+  await izSetSplit(page, false);
+  if (inOther && inInboxTab) {
+    record('TC-IZ-B7', 'PASS', 'starred-archived seed appears under its Other tab and in the unfiltered Inbox tab (split on)');
+  } else {
+    record('TC-IZ-B7', 'FAIL', `inOther=${inOther} inInboxTab=${inInboxTab}`);
+  }
+}
+
+// --- TC-IZ-B2 (archive-keeps-starred) + TC-IZ-B3 (unstar-removes-archived) ---
+async function scenario_iz_b2_b3(page, seeds) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+
+  // B2 (part 1): a plain non-starred row + 'e' disappears (the contrast case).
+  const rows = await izDomRows(page);
+  const plain = rows.find((r) => !r.starred && r.id && r.id !== seeds.keepId && r.id !== seeds.archId);
+  let plainGone = false;
+  if (plain) {
+    await izSelectById(page, plain.id);
+    await page.keyboard.press('e');
+    plainGone = await waitFor(
+      async () => {
+        const dom = await izRowDomById(page, plain.id);
+        const v = await izInboxView(page);
+        return !dom && !v.some((t) => t.id === plain.id) ? true : null;
+      },
+      { timeout: 6000, desc: 'B2 plain row archived away' }
+    ).then(() => true, () => false);
+  }
+
+  // B2 (part 2): the [INBOX,STARRED] seed + 'e' stays in place (★ kept, only INBOX stripped).
+  await izSelectById(page, seeds.keepId);
+  await page.keyboard.press('e');
+  const keptEntry = await waitFor(
+    async () => {
+      const t = (await izInboxView(page)).find((x) => x.id === seeds.keepId);
+      return t && t.labelIds.includes('STARRED') && !t.labelIds.includes('INBOX') ? t : null;
+    },
+    { timeout: 6000, desc: 'B2 archived-starred seed stays without INBOX' }
+  ).then((t) => t, () => null);
+  await izScrollToId(page, seeds.keepId).catch(() => {});
+  const keptRow = await izRowDomById(page, seeds.keepId);
+  if (plainGone && keptEntry && keptRow && keptRow.starred) {
+    record('TC-IZ-B2', 'PASS', `archive keeps the starred row (labels→[${keptEntry.labelIds}], ★ shown); a non-starred row + 'e' disappears`);
+  } else {
+    record('TC-IZ-B2', 'FAIL', `plainGone=${plainGone} keptEntry=${JSON.stringify(keptEntry)} keptRow=${JSON.stringify(keptRow)}`);
+  }
+
+  // B3: unstar the now archived-starred seed → it drops out of the inbox view; stays gone on re-entry.
+  await izSelectById(page, seeds.keepId);
+  await page.keyboard.press('s');
+  const b3Gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, seeds.keepId);
+      const v = await izInboxView(page);
+      return !dom && !v.some((t) => t.id === seeds.keepId) ? true : null;
+    },
+    { timeout: 6000, desc: 'B3 unstar removes the archived-starred row' }
+  ).then(() => true, () => false);
+  await izRefresh(page);
+  const b3StillGone =
+    !(await izRowDomById(page, seeds.keepId)) && !(await izInboxView(page)).some((t) => t.id === seeds.keepId);
+  if (b3Gone && b3StillGone) {
+    record('TC-IZ-B3', 'PASS', 'unstar of the archived-starred seed removes it from the inbox and it stays gone on re-entry');
+  } else {
+    record('TC-IZ-B3', 'FAIL', `b3Gone=${b3Gone} b3StillGone=${b3StillGone}`);
+  }
+}
+
+// --- TC-IZ-B5: star an INBOX row, then '#' trash removes it despite the ★ ----
+async function scenario_iz_b5(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const rows = await izDomRows(page);
+  const target = rows.find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-IZ-B5', 'FAIL', 'no plain INBOX row to star');
+    return;
+  }
+  await izSelectById(page, target.id);
+  await page.keyboard.press('s'); // star
+  await waitFor(
+    async () => {
+      const r = await izRowDomById(page, target.id);
+      return r && r.starred ? true : null;
+    },
+    { timeout: 4000, desc: 'B5 star applied' }
+  );
+  await page.keyboard.press('#'); // trash despite the star
+  const gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, target.id);
+      const v = await izInboxView(page);
+      return !dom && !v.some((t) => t.id === target.id) ? true : null;
+    },
+    { timeout: 6000, desc: 'B5 starred row trashed out of the inbox' }
+  ).then(() => true, () => false);
+  if (gone) record('TC-IZ-B5', 'PASS', `starred INBOX row ("${target.text.slice(0, 24)}") trashed → removed from the inbox despite the ★`);
+  else record('TC-IZ-B5', 'FAIL', 'starred row still present after trash');
+}
+
+// --- TC-IZ-B6: star an INBOX row, snooze it → hidden and does not reappear ----
+async function scenario_iz_b6(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const rows = await izDomRows(page);
+  const target = rows.find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-IZ-B6', 'FAIL', 'no plain INBOX row to star');
+    return;
+  }
+  await izSelectById(page, target.id);
+  await page.keyboard.press('s'); // star
+  // Wait for the star to FULLY commit (cache shows STARRED) before snoozing: otherwise the star's
+  // modifyLabels round-trip ships a threads-changed upsert (labels incl. STARRED) that lands AFTER
+  // the snooze's optimistic removal and re-inserts the row (inView via STARRED). Settling the star
+  // first means its single diff-push is already applied when the snooze removes the row.
+  await waitFor(
+    async () => {
+      const t = (await izInboxView(page)).find((x) => x.id === target.id);
+      return t && t.labelIds.includes('STARRED') ? true : null;
+    },
+    { timeout: 5000, desc: 'B6 star committed to cache (STARRED)' }
+  );
+  await sleep(400); // let the star diff-push flush to the renderer
+  await page.keyboard.press('b'); // snooze picker
+  await page.waitForSelector('button:has-text("Later today")', { timeout: 5000 });
+  await page.click('button:has-text("Later today")');
+  // Assert on the converged state (D6 "refresh/tick 후에도 재출현 없음"): after a refresh the cache
+  // read excludes the thread via the snoozes table (label-independent), so it is reliably hidden.
+  await izRefresh(page);
+  const gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, target.id);
+      const v = await izInboxView(page);
+      return !dom && !v.some((t) => t.id === target.id) ? true : null;
+    },
+    { timeout: 8000, desc: 'B6 snoozed starred row hidden from the inbox after refresh' }
+  ).then(() => true, () => false);
+  await izRefresh(page);
+  const stillGone =
+    !(await izRowDomById(page, target.id)) && !(await izInboxView(page)).some((t) => t.id === target.id);
+  if (gone && stillGone) {
+    record('TC-IZ-B6', 'PASS', `snoozed starred row hidden and does not reappear after refresh (INBOX/STARRED/snooze 3-way exclusion)`);
+  } else {
+    record('TC-IZ-B6', 'FAIL', `gone=${gone} stillGone=${stillGone}`);
+  }
+}
+
+// --- TC-IZ-A1: external archive of one visible thread converges out ----------
+async function scenario_iz_a1(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const target = (await izDomRows(page)).find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-IZ-A1', 'FAIL', 'no expendable inbox row for external archive');
+    return;
+  }
+  // "Gmail-web archive": strip INBOX from the provider copy only (cache/list untouched until refresh).
+  await page.evaluate((id) => window.zenmail.__debugExternalArchive(id), target.id);
+  await izRefresh(page); // warm read + background revalidate → convergence
+  const gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, target.id);
+      const v = await izInboxView(page);
+      return !dom && !v.some((t) => t.id === target.id) ? true : null;
+    },
+    { timeout: 12000, interval: 400, desc: 'A1 externally-archived row converges out of the list' }
+  ).then(() => true, () => false);
+  await izRefresh(page); // re-enter (cold read of the now-converged cache)
+  const stillGone =
+    !(await izRowDomById(page, target.id)) && !(await izInboxView(page)).some((t) => t.id === target.id);
+  if (gone && stillGone) {
+    record('TC-IZ-A1', 'PASS', `external archive of "${target.text.slice(0, 24)}" converges out after refresh and stays gone on re-entry (cache converged)`);
+  } else {
+    record('TC-IZ-A1', 'FAIL', `gone=${gone} stillGone=${stillGone}`);
+  }
+}
+
+// --- TC-IZ-A3: app-side 'e' archive is not resurrected by a refresh ----------
+async function scenario_iz_a3(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const target = (await izDomRows(page)).find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-IZ-A3', 'FAIL', 'no expendable inbox row for archive');
+    return;
+  }
+  await izSelectById(page, target.id);
+  await page.keyboard.press('e'); // optimistic app-side archive
+  await waitFor(async () => ((await izRowDomById(page, target.id)) ? null : true), {
+    timeout: 6000,
+    desc: 'A3 optimistic archive removes the row',
+  });
+  await izRefresh(page); // the revalidate must NOT resurrect it (pending/local-delta guard)
+  let resurrected = false;
+  for (let i = 0; i < 6; i++) {
+    await sleep(400);
+    if ((await izRowDomById(page, target.id)) || (await izInboxView(page)).some((t) => t.id === target.id)) {
+      resurrected = true;
+      break;
+    }
+  }
+  if (!resurrected) {
+    record('TC-IZ-A3', 'PASS', `app-side archive of "${target.text.slice(0, 24)}" is not resurrected by the refresh (no rebound over ~2.5s)`);
+  } else {
+    record('TC-IZ-A3', 'FAIL', 'archived row resurrected after refresh');
+  }
+}
+
+// --- TC-IZ-A2: full external archive + unstar reaches inbox-zero empty state -
+async function scenario_iz_a2(page, seeds) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  // Drain the inbox to zero. External archive (Gmail-web, provider-only) is the feature's core
+  // convergence path (already proven by TC-IZ-A1), but a thread with a recent LOCAL delta is
+  // guarded from revalidate stripping for 15s (D3) — earlier TC-IZ scenarios locally touched some
+  // rows (star/markRead), so external-archive alone can't reach empty in-window. So: external-archive
+  // untouched rows, and for survivors (guarded) fall back to an app-side 'e' archive; unstar any
+  // archived-starred rows (they leave the view on unstar). Loop until the inbox view is empty.
+  let prevExternal = new Set();
+  let drained = false;
+  for (let iter = 0; iter < 12 && !drained; iter++) {
+    const view = await izInboxView(page);
+    if (view.length === 0) {
+      drained = true;
+      break;
+    }
+    const nowExternal = new Set();
+    for (const t of view) {
+      const starred = t.labelIds.includes('STARRED');
+      const inbox = t.labelIds.includes('INBOX');
+      if (starred && !inbox) {
+        // archived-starred → unstar drops it out of the INBOX∪STARRED view.
+        await izSelectById(page, t.id);
+        await page.keyboard.press('s');
+        await sleep(150);
+      } else if (prevExternal.has(t.id) || (starred && inbox)) {
+        // survived an external archive (guarded), or starred-in-inbox (external archive would leave
+        // the star) → force removal app-side ('e'); a starred one becomes archived-starred, handled
+        // on the next iteration.
+        await izSelectById(page, t.id);
+        await page.keyboard.press('e');
+        await sleep(150);
+      } else {
+        await page.evaluate((id) => window.zenmail.__debugExternalArchive(id), t.id);
+        nowExternal.add(t.id);
+      }
+    }
+    prevExternal = nowExternal;
+    await izRefresh(page);
+    await sleep(300);
+  }
+  const emptyView = await waitFor(
+    async () => ((await izInboxView(page)).length === 0 ? true : null),
+    { timeout: 8000, interval: 400, desc: 'A2 inbox view drained to zero' }
+  ).then(() => true, () => false);
+  const emptyStateShown = await waitFor(
+    async () => ((await bodyText(page)).includes('Inbox zero. Enjoy the quiet.') ? true : null),
+    { timeout: 6000, desc: 'A2 inbox-zero empty state UI' }
+  ).then(() => true, () => false);
+  await izRefresh(page); // re-enter — must stay empty
+  const stillEmpty = (await izInboxView(page)).length === 0 && (await izDomRows(page)).length === 0;
+  if (emptyView && emptyStateShown && stillEmpty) {
+    record('TC-IZ-A2', 'PASS', 'archiving every inbox thread (external + app-side for guarded rows) and unstarring the starred seeds reaches the inbox-zero empty state ("Inbox zero. Enjoy the quiet."); stays empty on re-entry');
+  } else {
+    const left = await izInboxView(page);
+    record('TC-IZ-A2', 'FAIL', `emptyView=${emptyView} emptyStateShown=${emptyStateShown} stillEmpty=${stillEmpty} remaining=${JSON.stringify(left.map((t) => t.id))} (seeds ${seeds.keepId}/${seeds.archId})`);
+  }
 }
 
 process.on('SIGINT', async () => {

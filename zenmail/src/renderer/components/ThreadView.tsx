@@ -281,6 +281,7 @@ export function ThreadView() {
   const threadLoading = useMailStore((s) => s.threadLoading);
   const labels = useMailStore((s) => s.labels);
   const theme = useMailStore((s) => s.theme);
+  const toggleStar = useMailStore((s) => s.toggleStar);
 
   if (threadLoading && !activeThread) {
     return (
@@ -295,6 +296,7 @@ export function ThreadView() {
   const chips = activeThread.labelIds
     .map((id) => labelsById.get(id))
     .filter((l) => l && l.type === 'user' && l.visible);
+  const starred = activeThread.labelIds.includes('STARRED');
 
   return (
     <div className="zen-fade-in flex min-h-0 min-w-0 flex-1 flex-col">
@@ -306,6 +308,15 @@ export function ThreadView() {
       <div className="flex-1 overflow-y-auto">
         <div className="flex items-center gap-2 px-6 pt-4 pb-1">
           <h2 className="text-[15px] font-semibold text-text-primary">{activeThread.subject}</h2>
+          <button
+            onClick={() => void toggleStar(activeThread.id)}
+            aria-label={starred ? 'Unstar thread' : 'Star thread'}
+            className={`shrink-0 text-[15px] leading-none ${
+              starred ? 'text-label-yellow' : 'text-text-muted hover:text-label-yellow'
+            }`}
+          >
+            {starred ? '★' : '☆'}
+          </button>
           {chips.map(
             (l) =>
               l && (

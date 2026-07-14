@@ -19,8 +19,10 @@ import * as auth from './auth';
 import { MockCalendarProvider, RealCalendarProvider, type CalendarProvider } from './calendar';
 import * as cache from './cache';
 import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
+import { computeRevalidateDiff } from './revalidate';
 import { runDaemonTickNow } from './snooze';
 import { emitSyncState, notifyThreadsChanged, setOnline, triggerReconnect } from './sync-state';
+import { viewMembershipLabels } from '../shared/view';
 
 const UNDO_WINDOW_MS = 10_000;
 const DAY_MS = 86_400_000;
@@ -171,6 +173,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     calendarProvider = null;
     calendarReady = false;
     cache.clearFollowups();
+    cache.clearLocalDeltaTracking();
   });
 
   ipcMain.handle('mail:fetch-threads', async (_e, req: FetchThreadsRequest) => {
@@ -181,31 +184,50 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // sequential — both bypass the cache and take the direct flow below.
     const swrEligible = !req.q && !req.pageToken;
     if (swrEligible) {
-      const cached = cache.getThreads(req.labelIds?.[0]);
+      const viewLabel = req.labelIds?.[0] ?? 'INBOX';
+      const cached = cache.getThreads(viewLabel);
       if (cached.length > 0) {
         // Warm cache: return the cached page immediately, then revalidate in the background and ship
         // a pure diff (renderer merges via applyThreadsDiff, zero refetch).
+        //
+        // inbox-zero-starred D3/D4 — convergence rule (replaces the old "removals deliberately NOT
+        // computed" absence, which this feature proved stale: a label lost outside ZenMail left INBOX
+        // permanently in the cache row and every cold read re-served it — the 84-row bug).
+        //  • upserts  : fresh 행 중 반환한 cached 페이지 JSON과 다른 것(신규 포함) — 기존 규칙 보존.
+        //  • removals : 뷰 전체 캐시 행(getViewRows, LIMIT 없음) 중 fresh에서 사라진 것. fresh가
+        //    완전-페이지(nextPageToken 없음)면 전량, 부분 창이면 min(fresh date) 이상만 제거(D4).
+        //  • 가드     : hasPendingMutations ∨ localDeltaSince(grace) 인 id는 upsert·removal·캐시
+        //    기록 3곳 모두에서 제외 — 방금 로컬 아카이브한 스레드가 스테일 fresh로 부활하지 않는다(D3).
+        //    grace는 실계정에서만 15s(Gmail list 인덱스 전파 지연 추정치) — mock provider는 자체
+        //    상태에 대해 항상 동기적으로 최신이라(list 지연이 존재하지 않음, 기존 D1 주석 "mock
+        //    provider is synchronous... E2E is unaffected"의 전제와 동일) grace=0. 15s를 mock에도
+        //    걸면 데몬(followup 발화 등, provider.modifyThread 직접 호출 후 needsRefetch)처럼 로컬
+        //    아카이브 수 초 뒤에 합법적으로 라벨이 되돌아오는 케이스까지 최대 15초간 억제해 버려
+        //    TC-FUP-D2류의 "정당한 복원 upsert가 가드에 막힘" 회귀를 낳는다(실측으로 발견, D3 갱신).
+        //  • snoozed  : fresh에 있어도 캐시엔 안 쓰되 present로 카운트해 removal 후보에서 뺀다(D6).
+        // 자세한 근거: docs/features/inbox-zero-starred/DECISIONS.md D3/D4.
         void (async () => {
+          const fetchStartedAt = Date.now();
+          const GRACE_MS = p.demo ? 0 : 15_000;
           try {
             const fresh = await p.listThreads(req);
-            cache.upsertThreads(fresh.threads);
-            // Per-thread JSON diff vs what we just returned — new/changed summaries become upserts.
-            // JSON.stringify is acceptable at page size (≤50 rows); the cache row order (rowToSummary)
-            // and the provider summary order match, so an unchanged page yields zero upserts (no send).
-            //
-            // removals are deliberately NOT computed: a ≤50-row page can't tell "archived elsewhere"
-            // from "beyond this page", and applyThreadsDiff already drops any upsert whose fresh
-            // labelIds no longer include the current view label (label-change removal). A genuine
-            // server-side delete is rare and converges via the 60s poll (needsRefetch). D1's removals[]
-            // stays reserved for that daemon-origin path.
-            //
-            // Real-account risk (D14 backlog): an eventually-consistent fresh page could momentarily
-            // re-upsert a just-archived thread. The mock provider is synchronous (modifyThread updates
-            // its own store before this refetch), so E2E is unaffected.
-            const prev = new Map(cached.map((t) => [t.id, JSON.stringify(t)]));
-            const upserts = fresh.threads.filter((t) => prev.get(t.id) !== JSON.stringify(t));
-            if (upserts.length > 0) {
-              notifyThreadsChanged(getWindow, { upserts, removals: [], needsRefetch: false });
+            const guarded = (id: string) =>
+              cache.hasPendingMutations(id) ||
+              cache.localDeltaSince(id, fetchStartedAt - GRACE_MS);
+            // 뷰 전체 캐시 행을 stripping 전에 열거(removal 후보 소스).
+            const viewRows = cache.getViewRows(viewLabel);
+            const { upserts, removals, freshRowsToCache } = computeRevalidateDiff(cached, fresh, viewRows, {
+              guarded,
+              isSnoozed: cache.isSnoozed,
+            });
+            cache.upsertThreads(freshRowsToCache);
+            for (const id of removals) {
+              // 행 삭제가 아니라 뷰 라벨 스트립(INBOX 뷰는 INBOX+STARRED 동시) — FTS·타 라벨·undo용
+              // 행 보존, origin:'server'로 이 스트립이 다음 가드를 오염시키지 않게 한다(D4/D3).
+              cache.applyLabelDelta(id, [], viewMembershipLabels(viewLabel), { origin: 'server' });
+            }
+            if (upserts.length || removals.length) {
+              notifyThreadsChanged(getWindow, { upserts, removals, needsRefetch: false });
             }
           } catch (err) {
             // offline/transient — the cached list is already on screen, so stay quiet. Still an
@@ -540,6 +562,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ipcMain.handle('mail:debug-provider-calls', async (): Promise<Record<string, number>> => {
       if (provider instanceof MockGmailProvider) return { ...provider.callCounts };
       return {};
+    });
+
+    // inbox-zero-starred (TC-IZ-A1/A2): "Gmail 웹에서 아카이브" 재현 — mock provider 저장소에서만
+    // INBOX를 벗긴다(캐시·modifyThread 부기 우회). 다음 revalidate가 캐시/리스트에서 수렴시켜야 한다.
+    ipcMain.handle('mail:debug-external-archive', async (_e, threadId: string) => {
+      if (provider instanceof MockGmailProvider) provider.externalArchive(threadId);
     });
 
     ipcMain.handle('calendar:debug-state', async (): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }> => {

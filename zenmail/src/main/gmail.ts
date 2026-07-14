@@ -12,6 +12,7 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '../shared/types';
+import { isInInboxView } from '../shared/view';
 import { extractInvite } from './ics';
 
 export interface GmailProvider {
@@ -131,10 +132,17 @@ export class RealGmailProvider implements GmailProvider {
   }
 
   async listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse> {
+    // inbox-zero-starred D2: 인박스 뷰 술어를 프로바이더 내부에서만 Gmail q로 번역한다. q를 IPC
+    // 요청(req.q)에 싣지 않으므로 SWR warm-cache 자격(!req.q)이 보존된다 — 요청에 q가 실리면
+    // 인박스 웜캐시 읽기 전체가 무력화된다. threads.list의 labelIds는 순수 AND라 (INBOX ∨ STARRED)를
+    // 표현 못 해 q로 번역하고, pageToken은 그대로 통과시킨다.
+    const isInboxView = req.labelIds?.length === 1 && req.labelIds[0] === 'INBOX' && !req.q;
     const res = await this.gmail.users.threads.list({
       userId: 'me',
-      labelIds: req.labelIds,
-      q: req.q,
+      labelIds: isInboxView ? undefined : req.labelIds,
+      q: isInboxView
+        ? `(in:inbox OR is:starred) -in:trash -in:spam -label:${SNOOZE_LABEL_NAME}`
+        : req.q,
       pageToken: req.pageToken,
       maxResults: 50,
     });
@@ -588,6 +596,20 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     detail: { id: badId, subject: 'Invitation: Broken invite', labelIds: ['INBOX'], messages: [badMessage] },
   });
 
+  // inbox-zero-starred (TC-IZ-B*): starred 시맨틱 검증용 2건. 발신자는 어떤 split 규칙에도 안 걸리고
+  // (VIP ana@linearly.dev·Team @zenmail.app·newsletter 패턴 아님), date는 기존 최고령(120h, demo_20)
+  // 보다 더 오래됐다 — 기존 E2E 카운트/순서 불변식을 건드리지 않는다(F5 시드 관례).
+  const starredKeep: Contact = { name: 'Riley Fox', email: 'riley@quietmail.example' };
+  const starredArchived: Contact = { name: 'Morgan Vale', email: 'morgan@stillhere.example' };
+  threads.push(
+    mk(21, starredKeep, 'Starred: keep me visible', 'Starred while still in the inbox — stays with a ★.', ['INBOX', 'STARRED'], 130, [
+      'This one is starred and still in the inbox.',
+    ]),
+    mk(22, starredArchived, 'Starred archived: still here', 'Archived elsewhere but starred — must remain in the inbox view.', ['STARRED'], 132, [
+      'This one was archived but kept its star, so the inbox view still shows it.',
+    ])
+  );
+
   return { threads, labels, senders };
 }
 
@@ -640,8 +662,14 @@ export class MockGmailProvider implements GmailProvider {
     this.callCounts.listThreads = (this.callCounts.listThreads ?? 0) + 1;
     await this.delay();
     this.failIfOffline();
+    // !req.q mirrors RealGmailProvider's routing guard (D2) — a combined labelIds+q request must
+    // fall through to the plain AND-match + substring-filter path on both providers, not diverge.
+    const isInboxView = req.labelIds?.length === 1 && req.labelIds[0] === 'INBOX' && !req.q;
     let rows = this.threads.filter((t) => !t.summary.labelIds.includes('TRASH') || req.labelIds?.includes('TRASH'));
-    if (req.labelIds?.length) {
+    if (isInboxView) {
+      // inbox-zero-starred D1: 인박스 뷰 술어 공유 — (INBOX ∨ STARRED) − TRASH − SPAM − snoozed.
+      rows = rows.filter((t) => isInInboxView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID));
+    } else if (req.labelIds?.length) {
       rows = rows.filter((t) => req.labelIds!.every((l) => t.summary.labelIds.includes(l)));
     }
     if (req.q) {
@@ -750,6 +778,18 @@ export class MockGmailProvider implements GmailProvider {
     t.summary.date = date;
     t.summary.unread = true;
     t.summary.snippet = snippet;
+  }
+
+  /**
+   * inbox-zero-starred (TC-IZ-A1/A2): "Gmail 웹에서 아카이브" 재현 — provider 저장소에서만 INBOX를
+   * 제거한다(modifyThread 부기·캐시·mutations 큐 우회). 다음 revalidate가 뷰 부재를 감지해 캐시/리스트
+   * 에서 수렴시켜야 한다는 것을 검증하기 위한 E2E 전용 훅. mock 전용(real provider엔 없음).
+   */
+  externalArchive(threadId: string): void {
+    const t = this.threads.find((t) => t.summary.id === threadId);
+    if (!t) return;
+    t.summary.labelIds = t.summary.labelIds.filter((l) => l !== 'INBOX');
+    t.detail.labelIds = t.detail.labelIds.filter((l) => l !== 'INBOX');
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {

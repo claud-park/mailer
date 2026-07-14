@@ -10,6 +10,7 @@ export type LatencyAction =
   | 'markRead'
   | 'applyLabel'
   | 'snooze'
+  | 'star'
   | 'send'
   | 'followup:add'
   | 'followup:cancel'
