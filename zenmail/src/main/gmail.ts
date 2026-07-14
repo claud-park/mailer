@@ -25,6 +25,8 @@ export interface GmailProvider {
   modifyThread(req: ModifyLabelsRequest): Promise<void>;
   /** id of the zenmail/snoozed label, creating it if needed */
   snoozeLabelId(): Promise<string>;
+  /** INBOX 안읽음 스레드 수 — 사이드바 계정 배지(60s 데몬 틱 갱신). Real은 labels.get 1콜. */
+  inboxUnreadCount(): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +294,11 @@ export class RealGmailProvider implements GmailProvider {
     this.cachedSnoozeLabelId = created.data.id!;
     return this.cachedSnoozeLabelId;
   }
+
+  async inboxUnreadCount(): Promise<number> {
+    const res = await this.gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
+    return res.data.threadsUnread ?? 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +322,7 @@ function demoBody(paragraphs: string[], quoted?: string): string {
   return `<div>${paragraphs.map((p) => `<p>${p}</p>`).join('')}${quote}</div>`;
 }
 
-function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
+function buildDemoData(email: string): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
   const labels: Label[] = [
     { id: 'INBOX', name: 'Inbox', type: 'system', unreadCount: 0, visible: true },
     { id: 'SENT', name: 'Sent', type: 'system', unreadCount: 0, visible: true },
@@ -399,8 +406,8 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     const messages = Array.from({ length: messageCount }, (_, mi) => ({
       id: `${id}_m${mi}`,
       threadId: id,
-      from: mi % 2 === 1 ? { name: 'You', email: 'demo@zenmail.app' } : from,
-      to: [{ name: 'You', email: 'demo@zenmail.app' }],
+      from: mi % 2 === 1 ? { name: 'You', email } : from,
+      to: [{ name: 'You', email }],
       cc: [] as Contact[],
       date: date - (messageCount - 1 - mi) * h,
       snippet,
@@ -478,7 +485,7 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     mk(15, senders[1], 'Your draft: investor update', '(draft) June metrics: retention up 4pts, burn flat…', ['DRAFT'], 20, [
       'June metrics: retention up 4pts, burn flat.',
     ]),
-    mk(16, { name: 'You', email: 'demo@zenmail.app' }, 'Re: contract renewal', 'Signed copy attached. Same terms, 12 months.', ['SENT'], 15, [
+    mk(16, { name: 'You', email }, 'Re: contract renewal', 'Signed copy attached. Same terms, 12 months.', ['SENT'], 15, [
       'Signed copy attached. Same terms, 12 months.',
     ]),
     mk(17, senders[10], 'Sprint 14 planning — capacity check', 'Pulled everyone\'s PTO into the capacity sheet, we\'re at 34 points this sprint…', ['INBOX', 'UNREAD', 'Label_work'], 4, [
@@ -514,7 +521,7 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     id: `${introId}_m0`,
     threadId: introId,
     from: introFrom,
-    to: [{ name: 'You', email: 'demo@zenmail.app' }],
+    to: [{ name: 'You', email }],
     cc: [introOther],
     // oldest seed on purpose: keeps demo_20 at the bottom of the INBOX so the
     // index/order assumptions of earlier E2E scenarios (F2 TC-FUP-*) are undisturbed
@@ -554,7 +561,7 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
     id: `${calId}_m${mi}`,
     threadId: calId,
     from: inviteFrom,
-    to: [{ name: 'You', email: 'demo@zenmail.app' }],
+    to: [{ name: 'You', email }],
     cc: [] as Contact[],
     date: calBase + mi * h, // m1이 최신 — A3에서 최신 invite 1건만 노출
     snippet: 'You are invited: Sprint 14 planning',
@@ -582,7 +589,7 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
   const badId = 'demo_cal_2';
   const badMessage = {
     id: `${badId}_m0`, threadId: badId, from: inviteFrom,
-    to: [{ name: 'You', email: 'demo@zenmail.app' }], cc: [] as Contact[],
+    to: [{ name: 'You', email }], cc: [] as Contact[],
     date: now - 119 * h, snippet: 'Broken invite', bodyHtml: demoBody(['Broken invite.']),
     bodyText: 'Broken invite.', labelIds: ['INBOX'],
     ...(inviteBad ? { invite: inviteBad } : {}),
@@ -613,9 +620,53 @@ function buildDemoData(): { threads: MockThread[]; labels: Label[]; senders: Con
   return { threads, labels, senders };
 }
 
+export const DEMO_ACCOUNT_EMAILS = ['demo@zenmail.app', 'work@zenmail.app'] as const;
+
+/** 두 번째 데모 계정 시드 — demo 시드와 발신자·id·subject가 전혀 겹치지 않는 소형 세트(TC-MA 격리 검증용). */
+function buildWorkDemoData(email: string): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
+  const labels: Label[] = [
+    { id: 'INBOX', name: 'Inbox', type: 'system', unreadCount: 0, visible: true },
+    { id: 'SENT', name: 'Sent', type: 'system', unreadCount: 0, visible: true },
+    { id: 'DRAFT', name: 'Drafts', type: 'system', unreadCount: 0, visible: true },
+    { id: 'TRASH', name: 'Trash', type: 'system', unreadCount: 0, visible: false },
+    { id: 'UNREAD', name: 'Unread', type: 'system', unreadCount: 0, visible: false },
+    ...CATEGORY_LABELS.map((id) => ({
+      id, name: id.replace('CATEGORY_', '').toLowerCase(), type: 'system' as const, unreadCount: 0, visible: false,
+    })),
+    { id: DEMO_SNOOZE_LABEL_ID, name: SNOOZE_LABEL_NAME, type: 'user', unreadCount: 0, visible: false },
+  ];
+  const now = Date.now();
+  const h = 3600_000;
+  const senders: Contact[] = [
+    { name: 'Acme Client', email: 'client@acme.example' },
+    { name: 'Legal Team', email: 'legal@acme.example' },
+    { name: 'Billing Bot', email: 'billing@vendor.example' },
+  ];
+  const mkW = (i: number, from: Contact, subject: string, snippet: string, labelIds: string[], ageHours: number): MockThread => {
+    const id = `work_${i}`;
+    const date = now - ageHours * h;
+    const msg = {
+      id: `${id}_m0`, threadId: id, from, to: [{ name: 'You', email }], cc: [] as Contact[],
+      date, snippet, bodyHtml: demoBody([snippet]), bodyText: snippet, labelIds,
+    };
+    return {
+      summary: { id, subject, from, snippet, date, unread: labelIds.includes('UNREAD'), labelIds, messageCount: 1 },
+      detail: { id, subject, labelIds, messages: [msg] },
+    };
+  };
+  const threads = [
+    mkW(1, senders[0], 'W: Acme renewal contract', 'Renewal terms attached — need your sign-off by Friday.', ['INBOX', 'UNREAD'], 2),
+    mkW(2, senders[1], 'W: NDA redlines round 2', 'Two remaining clauses flagged by legal.', ['INBOX', 'UNREAD'], 6),
+    mkW(3, senders[0], 'W: Kickoff notes', 'Scope locked, timeline draft inside.', ['INBOX'], 24),
+    mkW(4, senders[2], 'W: Invoice #88 due', 'Net-30 reminder for invoice #88.', ['INBOX'], 48),
+    mkW(5, senders[1], 'W: Archived reference doc', 'Old policy doc for reference.', ['SENT'], 72),
+  ];
+  return { threads, labels, senders };
+}
+
 export class MockGmailProvider implements GmailProvider {
   readonly demo = true;
-  readonly email = 'demo@zenmail.app';
+  readonly email: string;
   private threads: MockThread[];
   private labels: Label[];
   private senders: Contact[];
@@ -630,8 +681,9 @@ export class MockGmailProvider implements GmailProvider {
   /** E2E-only (TC-SY-D1): per-method invocation counters, read via mail:debug-provider-calls. */
   readonly callCounts: Record<string, number> = {};
 
-  constructor() {
-    const data = buildDemoData();
+  constructor(email = 'demo@zenmail.app') {
+    this.email = email;
+    const data = email === 'work@zenmail.app' ? buildWorkDemoData(email) : buildDemoData(email);
     this.threads = data.threads;
     this.labels = data.labels;
     this.senders = data.senders;
@@ -814,5 +866,9 @@ export class MockGmailProvider implements GmailProvider {
 
   async snoozeLabelId(): Promise<string> {
     return DEMO_SNOOZE_LABEL_ID;
+  }
+
+  async inboxUnreadCount(): Promise<number> {
+    return this.threads.filter((t) => t.summary.unread && t.summary.labelIds.includes('INBOX')).length;
   }
 }
