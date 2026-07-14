@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useMailStore, quoteHtml, CALENDAR_REAUTH_MSG } from '../store/mail';
+import { useMailStore, activeAccount, quoteHtml, CALENDAR_REAUTH_MSG } from '../store/mail';
 import type { MessageDetail, InviteInfo, RsvpResponse } from '../../shared/types';
 import { labelChipFallback } from '../lib/theme';
 
@@ -115,7 +115,7 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
 
 function InlineReply() {
   const activeThread = useMailStore((s) => s.activeThread);
-  const account = useMailStore((s) => s.account);
+  const account = useMailStore(activeAccount);
   const send = useMailStore((s) => s.send);
   const [body, setBody] = useState('');
   const editorRef = useRef<HTMLDivElement>(null);
@@ -219,7 +219,7 @@ const RSVP_LABEL: Record<RsvpResponse, string> = {
 
 function InviteBanner({ invite }: { invite: InviteInfo }) {
   const status = useMailStore((s) => s.rsvpStatus.get(invite.iCalUID));
-  const calendarReady = useMailStore((s) => s.account?.calendarReady ?? false);
+  const calendarReady = useMailStore((s) => activeAccount(s)?.calendarReady ?? false);
   const respondToInvite = useMailStore((s) => s.respondToInvite);
   const showToast = useMailStore((s) => s.showToast);
 

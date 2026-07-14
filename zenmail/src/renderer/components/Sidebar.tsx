@@ -1,4 +1,4 @@
-import { useMailStore } from '../store/mail';
+import { useMailStore, activeAccount } from '../store/mail';
 import { useCoachStore } from '../store/coach';
 import { SNOOZE_LABEL_NAME, type Label } from '../../shared/types';
 
@@ -51,9 +51,18 @@ export function Sidebar() {
   const labels = useMailStore((s) => s.labels);
   const activeLabelId = useMailStore((s) => s.activeLabelId);
   const setActiveLabel = useMailStore((s) => s.setActiveLabel);
-  const account = useMailStore((s) => s.account);
-  const signOut = useMailStore((s) => s.signOut);
+  const account = useMailStore(activeAccount);
+  const removeAccount = useMailStore((s) => s.removeAccount);
   const sync = useMailStore((s) => s.sync);
+
+  // 최소 사이드바(Task 5)의 단일 "Sign out"은 전 계정 로그아웃 → 로그인 화면 복귀.
+  // (계정별 전환·제거 UI 본격 신설은 Task 7.) 데모는 계정 2개가 상주하므로 활성 하나만
+  // 제거하면 다른 데모 계정으로 전환될 뿐 로그인 화면에 닿지 않는다 — 전 계정 순차 제거.
+  const signOutAll = async () => {
+    for (const acc of useMailStore.getState().accounts) {
+      await removeAccount(acc.email);
+    }
+  };
 
   const byId = new Map(labels.map((l) => [l.id, l]));
   const userLabels = labels.filter(
@@ -111,7 +120,7 @@ export function Sidebar() {
             {account?.demo ? 'demo mode' : account?.email}
           </span>
           <button
-            onClick={() => void signOut()}
+            onClick={() => void signOutAll()}
             className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-text-secondary hover:bg-bg-border hover:text-text-primary"
           >
             Sign out

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMailStore } from '../store/mail';
 
 export function Login() {
-  const signIn = useMailStore((s) => s.signIn);
+  const addAccount = useMailStore((s) => s.addAccount);
   const signInDemo = useMailStore((s) => s.signInDemo);
   const authError = useMailStore((s) => s.authError);
   const [busy, setBusy] = useState(false);
@@ -28,7 +28,7 @@ export function Login() {
 
       <div className="app-no-drag flex flex-col items-center gap-3">
         <button
-          onClick={() => void run(signIn)}
+          onClick={() => void run(addAccount)}
           disabled={busy}
           className="rounded-md bg-accent px-6 py-2 text-[13px] font-medium text-white hover:bg-accent-hover disabled:opacity-50"
         >

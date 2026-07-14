@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMailStore } from '../store/mail';
+import { useMailStore, activeAccount } from '../store/mail';
 import type { ThreadDetail } from '../../shared/types';
 
 /** Re:/Fwd: 접두를 (반복까지) 제거. */
@@ -28,7 +28,7 @@ export function EventComposer() {
   const close = useMailStore((s) => s.closeEventComposer);
   const create = useMailStore((s) => s.createCalendarEvent);
   const activeThread = useMailStore((s) => s.activeThread);
-  const me = useMailStore((s) => s.account?.email);
+  const me = useMailStore((s) => activeAccount(s)?.email);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const prefillSummary = useMemo(() => stripSubjectPrefix(activeThread?.subject ?? ''), [activeThread]);

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  AccountsSnapshot,
   CreateEventInput,
   FetchThreadsRequest,
   ModifyLabelsRequest,
@@ -13,61 +14,71 @@ import type {
 } from '../shared/types';
 
 const api: ZenmailApi = {
-  getAccount: () => ipcRenderer.invoke('auth:get-account'),
-  signIn: () => ipcRenderer.invoke('auth:sign-in'),
+  listAccounts: () => ipcRenderer.invoke('auth:list-accounts'),
+  addAccount: () => ipcRenderer.invoke('auth:add-account'),
   signInDemo: () => ipcRenderer.invoke('auth:sign-in-demo'),
-  signOut: () => ipcRenderer.invoke('auth:sign-out'),
+  removeAccount: (email: string) => ipcRenderer.invoke('auth:remove-account', email),
+  setActiveAccount: (email: string) => ipcRenderer.invoke('auth:set-active-account', email),
 
-  fetchThreads: (req: FetchThreadsRequest) => ipcRenderer.invoke('mail:fetch-threads', req),
-  fetchThread: (threadId: string) => ipcRenderer.invoke('mail:fetch-thread', threadId),
-  fetchLabels: () => ipcRenderer.invoke('mail:fetch-labels'),
-  send: (req: SendRequest) => ipcRenderer.invoke('mail:send', req),
-  cancelSend: (sendId: string) => ipcRenderer.invoke('mail:cancel-send', sendId),
-  modifyLabels: (req: ModifyLabelsRequest) => ipcRenderer.invoke('mail:modify-labels', req),
-  snooze: (req: SnoozeRequest) => ipcRenderer.invoke('mail:snooze', req),
-  searchLocal: (q: string) => ipcRenderer.invoke('mail:search-local', q),
-  listContacts: (prefix: string) => ipcRenderer.invoke('mail:contacts', prefix),
-  getSplits: () => ipcRenderer.invoke('mail:get-splits'),
-  setSplits: (defs: SplitDefinition[]) => ipcRenderer.invoke('mail:set-splits', defs),
-  getSetting: (key: string) => ipcRenderer.invoke('mail:get-setting', key),
-  setSetting: (key: string, value: string) => ipcRenderer.invoke('mail:set-setting', key, value),
+  fetchThreads: (accountId: string, req: FetchThreadsRequest) =>
+    ipcRenderer.invoke('mail:fetch-threads', accountId, req),
+  fetchThread: (accountId: string, threadId: string) =>
+    ipcRenderer.invoke('mail:fetch-thread', accountId, threadId),
+  fetchLabels: (accountId: string) => ipcRenderer.invoke('mail:fetch-labels', accountId),
+  send: (accountId: string, req: SendRequest) => ipcRenderer.invoke('mail:send', accountId, req),
+  cancelSend: (accountId: string, sendId: string) => ipcRenderer.invoke('mail:cancel-send', accountId, sendId),
+  modifyLabels: (accountId: string, req: ModifyLabelsRequest) =>
+    ipcRenderer.invoke('mail:modify-labels', accountId, req),
+  snooze: (accountId: string, req: SnoozeRequest) => ipcRenderer.invoke('mail:snooze', accountId, req),
+  searchLocal: (accountId: string, q: string) => ipcRenderer.invoke('mail:search-local', accountId, q),
+  listContacts: (accountId: string, prefix: string) => ipcRenderer.invoke('mail:contacts', accountId, prefix),
+  getSplits: (accountId: string) => ipcRenderer.invoke('mail:get-splits', accountId),
+  setSplits: (accountId: string, defs: SplitDefinition[]) => ipcRenderer.invoke('mail:set-splits', accountId, defs),
+  getSetting: (accountId: string, key: string) => ipcRenderer.invoke('mail:get-setting', accountId, key),
+  setSetting: (accountId: string, key: string, value: string) =>
+    ipcRenderer.invoke('mail:set-setting', accountId, key, value),
+  getGlobalSetting: (key: string) => ipcRenderer.invoke('settings:get-global', key),
+  setGlobalSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set-global', key, value),
 
-  addFollowup: (threadId: string, remindDays: number) =>
-    ipcRenderer.invoke('mail:add-followup', threadId, remindDays),
-  cancelFollowup: (threadId: string) => ipcRenderer.invoke('mail:cancel-followup', threadId),
-  dismissFollowup: (threadId: string) => ipcRenderer.invoke('mail:dismiss-followup', threadId),
-  listFollowups: () => ipcRenderer.invoke('mail:list-followups'),
+  addFollowup: (accountId: string, threadId: string, remindDays: number) =>
+    ipcRenderer.invoke('mail:add-followup', accountId, threadId, remindDays),
+  cancelFollowup: (accountId: string, threadId: string) =>
+    ipcRenderer.invoke('mail:cancel-followup', accountId, threadId),
+  dismissFollowup: (accountId: string, threadId: string) =>
+    ipcRenderer.invoke('mail:dismiss-followup', accountId, threadId),
+  listFollowups: (accountId: string) => ipcRenderer.invoke('mail:list-followups', accountId),
 
-  listEvents: (timeMinISO: string, timeMaxISO: string) =>
-    ipcRenderer.invoke('calendar:list-events', timeMinISO, timeMaxISO),
-  respondToEvent: (iCalUID: string, response: RsvpResponse) =>
-    ipcRenderer.invoke('calendar:respond', iCalUID, response),
-  createEvent: (input: CreateEventInput) => ipcRenderer.invoke('calendar:create', input),
+  listEvents: (accountId: string, timeMinISO: string, timeMaxISO: string) =>
+    ipcRenderer.invoke('calendar:list-events', accountId, timeMinISO, timeMaxISO),
+  respondToEvent: (accountId: string, iCalUID: string, response: RsvpResponse) =>
+    ipcRenderer.invoke('calendar:respond', accountId, iCalUID, response),
+  createEvent: (accountId: string, input: CreateEventInput) =>
+    ipcRenderer.invoke('calendar:create', accountId, input),
 
   notifyOnline: () => ipcRenderer.invoke('mail:renderer-online'),
 
   onThreadsChanged: (
-    cb: (p: { upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }) => void
+    cb: (p: { accountId: string; upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }) => void
   ) => {
     const listener = (
       _e: unknown,
-      p: { upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }
+      p: { accountId: string; upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }
     ) => cb(p);
     ipcRenderer.on('mail:threads-changed', listener);
     return () => ipcRenderer.removeListener('mail:threads-changed', listener);
   },
-  onThreadChanged: (cb: (p: { threadId: string; detail: ThreadDetail }) => void) => {
-    const listener = (_e: unknown, p: { threadId: string; detail: ThreadDetail }) => cb(p);
+  onThreadChanged: (cb: (p: { accountId: string; threadId: string; detail: ThreadDetail }) => void) => {
+    const listener = (_e: unknown, p: { accountId: string; threadId: string; detail: ThreadDetail }) => cb(p);
     ipcRenderer.on('mail:thread-changed', listener);
     return () => ipcRenderer.removeListener('mail:thread-changed', listener);
   },
-  onSnoozeFired: (cb: (threadId: string) => void) => {
-    const listener = (_e: unknown, threadId: string) => cb(threadId);
+  onSnoozeFired: (cb: (p: { accountId: string; threadId: string }) => void) => {
+    const listener = (_e: unknown, p: { accountId: string; threadId: string }) => cb(p);
     ipcRenderer.on('mail:snooze-fired', listener);
     return () => ipcRenderer.removeListener('mail:snooze-fired', listener);
   },
-  onFollowupFired: (cb: (threadId: string) => void) => {
-    const listener = (_e: unknown, threadId: string) => cb(threadId);
+  onFollowupFired: (cb: (p: { accountId: string; threadId: string }) => void) => {
+    const listener = (_e: unknown, p: { accountId: string; threadId: string }) => cb(p);
     ipcRenderer.on('mail:followup-fired', listener);
     return () => ipcRenderer.removeListener('mail:followup-fired', listener);
   },
@@ -76,10 +87,15 @@ const api: ZenmailApi = {
     ipcRenderer.on('mail:sync-state', listener);
     return () => ipcRenderer.removeListener('mail:sync-state', listener);
   },
-  onMutationPermanentFailed: (cb: (p: { threadId: string | null; kind: string }) => void) => {
-    const listener = (_e: unknown, p: { threadId: string | null; kind: string }) => cb(p);
+  onMutationPermanentFailed: (cb: (p: { accountId: string; threadId: string | null; kind: string }) => void) => {
+    const listener = (_e: unknown, p: { accountId: string; threadId: string | null; kind: string }) => cb(p);
     ipcRenderer.on('mail:mutation-permanent-failed', listener);
     return () => ipcRenderer.removeListener('mail:mutation-permanent-failed', listener);
+  },
+  onAccountsChanged: (cb: (snap: AccountsSnapshot) => void) => {
+    const listener = (_e: unknown, snap: AccountsSnapshot) => cb(snap);
+    ipcRenderer.on('auth:accounts-changed', listener);
+    return () => ipcRenderer.removeListener('auth:accounts-changed', listener);
   },
 };
 

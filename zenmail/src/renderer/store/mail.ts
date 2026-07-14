@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   SNOOZE_LABEL_NAME,
   type AccountInfo,
+  type AccountsSnapshot,
   type CalendarEvent,
   type CreateEventInput,
   type FollowupInfo,
@@ -32,6 +33,45 @@ const api = () => window.zenmail;
 const DAY_MS = 86_400_000;
 export const CALENDAR_REAUTH_MSG = '캘린더 권한 필요 — 다시 로그인';
 
+/** 활성 계정 셀렉터 — 구 `s.account` 참조처의 대체. */
+export function activeAccount(s: Pick<MailState, 'accounts' | 'activeAccountId'>): AccountInfo | null {
+  return s.accounts.find((a) => a.email === s.activeAccountId) ?? null;
+}
+
+/** 데이터 액션 진입 시점의 활성 계정 id — 없으면 로그인 전이므로 액션은 조용히 반환. */
+function aid(s: Pick<MailState, 'activeAccountId'>): string | null {
+  return s.activeAccountId;
+}
+
+/** 계정 종속 슬라이스 리셋 — 전환·제거 공용. threads/선택/상세/스플릿/검색/팔로우업/캘린더/벌크. */
+const ACCOUNT_SCOPED_RESET = {
+  labels: [] as Label[],
+  threads: [] as ThreadSummary[],
+  nextPageToken: undefined as string | undefined,
+  activeThreadId: null as string | null,
+  activeThread: null as ThreadDetail | null,
+  threadLoading: false,
+  selectedIndex: 0,
+  splitDefs: [] as SplitDefinition[],
+  activeSplitTab: INBOX_TAB,
+  searchQuery: '',
+  bulkSelectedIds: new Set<string>(),
+  followups: new Map<string, FollowupInfo>(),
+  rsvpStatus: new Map<string, RsvpResponse>(),
+  snippets: [] as SnippetRecord[],
+  agendaOpen: false,
+  agendaEvents: [] as CalendarEvent[],
+  agendaLoading: false,
+  agendaError: null as string | null,
+  composeInit: null as ComposeInit | null,
+  snoozePickerOpen: false,
+  labelPickerOpen: false,
+  followupPickerOpen: false,
+  eventComposerOpen: false,
+  splitSettingsOpen: false,
+  snippetsOpen: false,
+};
+
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
 
 export interface ComposeInit {
@@ -43,15 +83,20 @@ export interface ComposeInit {
   threadId?: string;
   inReplyTo?: string;
   intro?: IntroSuggestion;
+  /** D5: 열린 시점의 활성 계정 — 전환 후 발신해도 이 계정으로 나간다. */
+  accountId: string;
 }
 
 export interface PendingSend {
   sendId: string;
+  /** D5: 발신 계정 — undo는 이 계정으로 cancelSend. */
+  accountId: string;
   expiresAt: number;
 }
 
 interface MailState {
-  account: AccountInfo | null;
+  accounts: AccountInfo[];
+  activeAccountId: string | null;
   accountLoading: boolean;
   authError: string | null;
 
@@ -95,9 +140,11 @@ interface MailState {
   eventComposerOpen: boolean;
 
   init(): Promise<void>;
-  signIn(): Promise<void>;
+  addAccount(): Promise<void>; // 구 signIn 대체 (Login 버튼·계정 추가 공용)
   signInDemo(): Promise<void>;
-  signOut(): Promise<void>;
+  removeAccount(email: string): Promise<void>; // 구 signOut 대체
+  switchAccount(email: string): Promise<void>;
+  applyAccountsSnapshot(snap: AccountsSnapshot): void;
 
   loadLabels(): Promise<void>;
   loadThreads(): Promise<void>;
@@ -246,11 +293,13 @@ export function quoteHtml(detail: ThreadDetail): string {
 export const useMailStore = create<MailState>((set, get) => {
   /** loads splitDefs + persisted view state (activeSplitTab/splitInbox); called after account load */
   async function loadSplitState(): Promise<void> {
+    const a = aid(get());
+    if (!a) return;
     try {
       const [splitDefs, splitInboxSetting, activeSplitTabSetting] = await Promise.all([
-        api().getSplits(),
-        api().getSetting('splitInbox'),
-        api().getSetting('activeSplitTab'),
+        api().getSplits(a),
+        api().getSetting(a, 'splitInbox'),
+        api().getSetting(a, 'activeSplitTab'),
       ]);
       set((s) => {
         const { order } = computeSplits(s.threads, splitDefs);
@@ -267,6 +316,17 @@ export const useMailStore = create<MailState>((set, get) => {
     }
   }
 
+  /** 활성 계정의 전 슬라이스 로드 — 전환·초기화·계정 추가 공용. 첫 페인트는 계정별 캐시에서 즉시. */
+  async function loadActiveAccountData(): Promise<void> {
+    await Promise.all([
+      get().loadLabels(),
+      get().loadThreads(),
+      loadSplitState(),
+      get().refreshFollowups(),
+      get().loadSnippets(),
+    ]);
+  }
+
   /** Reinserts a captured removal (if any) and records the rollback (F4 CP3, DECISIONS D4). */
   function rollbackRemoval(capture: RemovalCapture | null, action: 'archive' | 'trash' | 'snooze' | 'star'): void {
     if (capture) {
@@ -276,7 +336,8 @@ export const useMailStore = create<MailState>((set, get) => {
   }
 
   return {
-    account: null,
+    accounts: [],
+    activeAccountId: null,
     accountLoading: true,
     authError: null,
 
@@ -318,14 +379,15 @@ export const useMailStore = create<MailState>((set, get) => {
     eventComposerOpen: false,
 
     async init() {
-      // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false)
+      // theme boot — 저장값이 dark일 때만 전환, 기본 light (재기록 불필요라 persist:false). 전역 설정.
       try {
-        if ((await api().getSetting('theme')) === 'dark') get().setTheme('dark', { persist: false });
+        if ((await api().getGlobalSetting('theme')) === 'dark') get().setTheme('dark', { persist: false });
       } catch {
         /* default light */
       }
-      api().onFollowupFired((threadId) => {
-        const thread = get().threads.find((t) => t.id === threadId);
+      api().onFollowupFired((p) => {
+        if (p.accountId !== get().activeAccountId) return; // 비활성 계정 발화는 배지(accounts-changed)로만
+        const thread = get().threads.find((t) => t.id === p.threadId);
         get().showToast(
           thread
             ? `No reply yet — "${thread.subject}" is back`
@@ -334,61 +396,81 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refreshFollowups();
       });
       try {
-        const account = await api().getAccount();
-        set({ account, accountLoading: false });
-        if (account) {
-          await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
-        }
+        const snap = await api().listAccounts();
+        set({ accounts: snap.accounts, activeAccountId: snap.activeEmail, accountLoading: false });
+        if (snap.activeEmail) await loadActiveAccountData();
       } catch (err) {
         set({ accountLoading: false, authError: String(err) });
       }
     },
 
-    async signIn() {
+    applyAccountsSnapshot(snap) {
+      set((st) => ({
+        accounts: snap.accounts,
+        // 활성 계정이 제거된 스냅샷이면 main이 정한 activeEmail로 따라간다(switchAccount가 후속 로드)
+        activeAccountId: snap.accounts.some((a) => a.email === st.activeAccountId)
+          ? st.activeAccountId
+          : snap.activeEmail,
+      }));
+    },
+
+    async addAccount() {
       set({ authError: null });
       try {
-        const account = await api().signIn();
-        set({ account });
-        await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
+        const snap = await api().addAccount();
+        get().applyAccountsSnapshot(snap);
+        // 첫 로그인(이전에 계정 0)이면 새 계정으로 진입
+        if (!get().activeAccountId && snap.activeEmail) {
+          set({ activeAccountId: snap.activeEmail });
+        }
+        if (get().activeAccountId) await loadActiveAccountData();
       } catch (err) {
         set({ authError: err instanceof Error ? err.message : String(err) });
       }
     },
 
     async signInDemo() {
-      const account = await api().signInDemo();
-      set({ account, authError: null });
-      await Promise.all([get().loadLabels(), get().loadThreads(), loadSplitState(), get().refreshFollowups(), get().loadSnippets()]);
+      const snap = await api().signInDemo();
+      set({ accounts: snap.accounts, activeAccountId: snap.activeEmail, authError: null });
+      await loadActiveAccountData();
     },
 
-    async signOut() {
-      await api().signOut();
-      set({
-        account: null,
-        threads: [],
-        labels: [],
-        activeThreadId: null,
-        activeThread: null,
-        followups: new Map(),
-        rsvpStatus: new Map(),
-        agendaOpen: false,
-        agendaEvents: [],
-        agendaLoading: false,
-        agendaError: null,
-        eventComposerOpen: false,
-      });
+    async switchAccount(email) {
+      const s = get();
+      if (email === s.activeAccountId || !s.accounts.some((a) => a.email === email)) return;
+      set({ activeAccountId: email, ...ACCOUNT_SCOPED_RESET });
+      void api().setActiveAccount(email);
+      await loadActiveAccountData(); // 계정별 캐시 SWR — 첫 페인트는 로컬에서 즉시
+    },
+
+    async removeAccount(email) {
+      const snap = await api().removeAccount(email);
+      if (snap.accounts.length === 0) {
+        set({ accounts: [], activeAccountId: null, ...ACCOUNT_SCOPED_RESET });
+        return;
+      }
+      const wasActive = get().activeAccountId === email;
+      set({ accounts: snap.accounts });
+      if (wasActive) {
+        set({ activeAccountId: snap.activeEmail, ...ACCOUNT_SCOPED_RESET });
+        await loadActiveAccountData();
+      }
     },
 
     async loadLabels() {
-      const labels = await api().fetchLabels();
+      const a = aid(get());
+      if (!a) return;
+      const labels = await api().fetchLabels(a);
       set({ labels });
     },
 
     async loadThreads() {
+      const a = aid(get());
+      if (!a) return;
       const { activeLabelId, searchQuery } = get();
       set({ threadsLoading: true });
       try {
-        const res = await api().fetchThreads({
+        const res = await api().fetchThreads(a, {
           labelIds: searchQuery ? undefined : [activeLabelId],
           q: searchQuery || undefined,
         });
@@ -408,11 +490,12 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async loadMore() {
+      const a = aid(get());
       const { nextPageToken, activeLabelId, searchQuery, threadsLoading } = get();
-      if (!nextPageToken || threadsLoading) return;
+      if (!a || !nextPageToken || threadsLoading) return;
       set({ threadsLoading: true });
       try {
-        const res = await api().fetchThreads({
+        const res = await api().fetchThreads(a, {
           labelIds: searchQuery ? undefined : [activeLabelId],
           q: searchQuery || undefined,
           pageToken: nextPageToken,
@@ -471,12 +554,14 @@ export const useMailStore = create<MailState>((set, get) => {
 
     toggleSplit() {
       set((s) => ({ splitInbox: !s.splitInbox }));
-      void api().setSetting('splitInbox', get().splitInbox ? '1' : '0');
+      const a = aid(get());
+      if (a) void api().setSetting(a, 'splitInbox', get().splitInbox ? '1' : '0');
     },
 
     switchTab(id) {
       set({ activeSplitTab: id, selectedIndex: 0 });
-      void api().setSetting('activeSplitTab', id);
+      const a = aid(get());
+      if (a) void api().setSetting(a, 'activeSplitTab', id);
     },
 
     nextTab() {
@@ -501,7 +586,8 @@ export const useMailStore = create<MailState>((set, get) => {
         const activeSplitTab = order.includes(s.activeSplitTab) ? s.activeSplitTab : INBOX_TAB;
         return { splitDefs: defs, activeSplitTab };
       });
-      await api().setSplits(defs);
+      const a = aid(get());
+      if (a) await api().setSplits(a, defs);
     },
 
     closeSplitSettings() {
@@ -563,8 +649,10 @@ export const useMailStore = create<MailState>((set, get) => {
         ...(idx >= 0 ? { selectedIndex: idx } : {}),
       });
       doneSelect();
+      const a = aid(get());
+      if (!a) return;
       try {
-        const detail = await api().fetchThread(id);
+        const detail = await api().fetchThread(a, id);
         if (get().activeThreadId !== id) return; // stale response
         set({ activeThread: detail, threadLoading: false });
         doneContent();
@@ -595,6 +683,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
 
       // D5: a starred thread stays visible after archive (INBOX∪STARRED predicate) — update the
       // row in place instead of removing it, but only while the INBOX view (no search) is on screen.
@@ -610,7 +700,7 @@ export const useMailStore = create<MailState>((set, get) => {
         set((st) => ({ threads: st.threads.map((t) => (t.id === id ? { ...t, labelIds: nextLabels! } : t)) }));
         done();
         try {
-          await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
+          await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
         } catch (err) {
           console.error('archiveThread failed', err);
           set((st) => ({ threads: addLabelId(st.threads, id, 'INBOX') }));
@@ -636,7 +726,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
+        await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: ['INBOX'] });
       } catch (err) {
         console.error('archiveThread failed', err);
         rollbackRemoval(capture, 'archive');
@@ -653,6 +743,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
@@ -665,7 +757,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().modifyLabels({ threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
+        await api().modifyLabels(a, { threadId: id, addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] });
       } catch (err) {
         console.error('trashThread failed', err);
         rollbackRemoval(capture, 'trash');
@@ -687,6 +779,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const thread = s.threads.find((t) => t.id === id);
       if (!thread) return;
       const isStarred = thread.labelIds.includes('STARRED');
@@ -703,7 +797,7 @@ export const useMailStore = create<MailState>((set, get) => {
         }));
         done();
         try {
-          await api().modifyLabels({ threadId: id, addLabelIds: ['STARRED'], removeLabelIds: [] });
+          await api().modifyLabels(a, { threadId: id, addLabelIds: ['STARRED'], removeLabelIds: [] });
         } catch (err) {
           console.error('toggleStar failed', err);
           set((st) => ({
@@ -731,7 +825,7 @@ export const useMailStore = create<MailState>((set, get) => {
         }));
         done();
         try {
-          await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
+          await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
         } catch (err) {
           console.error('toggleStar failed', err);
           set((st) => ({
@@ -760,7 +854,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().modifyLabels({ threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
+        await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: ['STARRED'] });
       } catch (err) {
         console.error('toggleStar failed', err);
         rollbackRemoval(capture, 'star');
@@ -776,6 +870,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const prevUnread = s.threads.find((t) => t.id === id)?.unread ?? !read;
       set((st) => ({
         threads: st.threads.map((t) =>
@@ -790,7 +886,7 @@ export const useMailStore = create<MailState>((set, get) => {
       }));
       done();
       try {
-        await api().modifyLabels({
+        await api().modifyLabels(a, {
           threadId: id,
           addLabelIds: read ? [] : ['UNREAD'],
           removeLabelIds: read ? ['UNREAD'] : [],
@@ -811,6 +907,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       set({ labelPickerOpen: false });
       set((st) => {
         const threads = st.threads.map((t) =>
@@ -823,7 +921,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().modifyLabels({ threadId: id, addLabelIds: [labelId], removeLabelIds: [] });
+        await api().modifyLabels(a, { threadId: id, addLabelIds: [labelId], removeLabelIds: [] });
       } catch (err) {
         console.error('applyLabel failed', err);
         set((st) => ({ threads: removeLabelId(st.threads, id, labelId) }));
@@ -840,6 +938,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
@@ -853,7 +953,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().snooze({ threadId: id, until: until.toISOString() });
+        await api().snooze(a, { threadId: id, until: until.toISOString() });
       } catch (err) {
         console.error('snoozeThread failed', err);
         rollbackRemoval(capture, 'snooze');
@@ -866,12 +966,15 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     openCompose(init) {
+      const accountId = get().activeAccountId;
+      if (!accountId) return; // 로그인 전이면 작성 불가
       set({
         composeInit: {
           mode: 'new',
           to: [],
           cc: [],
           subject: '',
+          accountId, // D5: 열림 시점 계정 캡처
           ...init,
         },
       });
@@ -882,7 +985,7 @@ export const useMailStore = create<MailState>((set, get) => {
       if (!detail) return;
       const last = detail.messages[detail.messages.length - 1];
       if (!last) return;
-      const me = get().account?.email;
+      const me = activeAccount(get())?.email;
       const to = [last.from.email];
       const cc = all
         ? [...last.to, ...last.cc].map((c) => c.email).filter((e) => e !== me && e !== last.from.email)
@@ -916,14 +1019,17 @@ export const useMailStore = create<MailState>((set, get) => {
 
     async send(req) {
       const done = instrument('send');
-      const receipt = await api().send(req);
+      // D5: 열림 시점의 계정으로 발신 — 전환 후 눌러도 원래 계정으로 나간다.
+      const a = get().composeInit?.accountId ?? aid(get());
+      if (!a) return;
+      const receipt = await api().send(a, req);
       set({ composeInit: null });
       done();
       useCoachStore.getState().bumpStat('send');
       if (req.sendAt) {
         get().showToast(`Scheduled for ${new Date(req.sendAt).toLocaleString()}`);
       } else {
-        set({ pendingSend: { sendId: receipt.sendId, expiresAt: receipt.sendAt } });
+        set({ pendingSend: { sendId: receipt.sendId, accountId: a, expiresAt: receipt.sendAt } });
         setTimeout(() => {
           if (get().pendingSend?.sendId === receipt.sendId) set({ pendingSend: null });
           // archive-on-send is applied by the main process after the undo window;
@@ -935,7 +1041,7 @@ export const useMailStore = create<MailState>((set, get) => {
     async undoSend() {
       const pending = get().pendingSend;
       if (!pending) return;
-      await api().cancelSend(pending.sendId);
+      await api().cancelSend(pending.accountId, pending.sendId);
       set({ pendingSend: null });
       get().showToast('Send cancelled');
     },
@@ -960,8 +1066,10 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async refreshFollowups() {
+      const a = aid(get());
+      if (!a) return;
       try {
-        const list = await api().listFollowups();
+        const list = await api().listFollowups(a);
         set({ followups: new Map(list.map((f) => [f.threadId, f])) });
       } catch (err) {
         console.error('refreshFollowups failed', err);
@@ -973,6 +1081,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const previous = s.followups.get(id);
       const optimistic: FollowupInfo = {
         threadId: id,
@@ -986,7 +1096,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().addFollowup(id, days);
+        await api().addFollowup(a, id, days);
         void get().refreshFollowups();
       } catch (err) {
         console.error('scheduleFollowup failed', err);
@@ -1009,6 +1119,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const previous = s.followups.get(id);
       set((st) => {
         const followups = new Map(st.followups);
@@ -1017,7 +1129,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().cancelFollowup(id);
+        await api().cancelFollowup(a, id);
         void get().refreshFollowups();
       } catch (err) {
         console.error('cancelFollowup failed', err);
@@ -1036,6 +1148,8 @@ export const useMailStore = create<MailState>((set, get) => {
       const s = get();
       const id = targetThreadId(s, threadId);
       if (!id) return;
+      const a = aid(s);
+      if (!a) return;
       const previous = s.followups.get(id);
       set((st) => {
         const followups = new Map(st.followups);
@@ -1044,7 +1158,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().dismissFollowup(id);
+        await api().dismissFollowup(a, id);
         void get().refreshFollowups();
       } catch (err) {
         console.error('dismissFollowup failed', err);
@@ -1066,7 +1180,8 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async respondToInvite(iCalUID, response) {
-      if (!get().account?.calendarReady) {
+      const a = aid(get());
+      if (!a || !activeAccount(get())?.calendarReady) {
         get().showToast(CALENDAR_REAUTH_MSG);
         return;
       }
@@ -1079,7 +1194,7 @@ export const useMailStore = create<MailState>((set, get) => {
       });
       done();
       try {
-        await api().respondToEvent(iCalUID, response);
+        await api().respondToEvent(a, iCalUID, response);
       } catch (err) {
         console.error('respondToInvite failed', err);
         set((st) => {
@@ -1094,7 +1209,8 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async openAgenda() {
-      if (!get().account?.calendarReady) {
+      const a = aid(get());
+      if (!a || !activeAccount(get())?.calendarReady) {
         get().showToast(CALENDAR_REAUTH_MSG);
         return;
       }
@@ -1102,7 +1218,7 @@ export const useMailStore = create<MailState>((set, get) => {
       set({ agendaOpen: true, agendaLoading: true, agendaError: null, agendaEvents: [] });
       const { timeMinISO, timeMaxISO } = agendaRange();
       try {
-        const events = await api().listEvents(timeMinISO, timeMaxISO);
+        const events = await api().listEvents(a, timeMinISO, timeMaxISO);
         if (seq !== agendaFetchSeq || !get().agendaOpen) return; // 닫힘/재열기 뒤 도착한 응답 무시
         set({ agendaEvents: events, agendaLoading: false });
       } catch (err) {
@@ -1120,7 +1236,7 @@ export const useMailStore = create<MailState>((set, get) => {
     openEventComposer() {
       const s = get();
       if (!s.activeThread) return; // 프리필 소스(activeThread)와 가드 일치 — 열려 있는 메일이 전제
-      if (!s.account?.calendarReady) {
+      if (!activeAccount(s)?.calendarReady) {
         s.showToast(CALENDAR_REAUTH_MSG);
         return;
       }
@@ -1132,12 +1248,13 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async createCalendarEvent(input) {
-      if (!get().account?.calendarReady) {
+      const a = aid(get());
+      if (!a || !activeAccount(get())?.calendarReady) {
         get().showToast(CALENDAR_REAUTH_MSG);
         return false;
       }
       try {
-        await api().createEvent(input);
+        await api().createEvent(a, input);
       } catch (err) {
         console.error('createEvent failed', err);
         get().showToast('이벤트 생성 실패');
@@ -1149,8 +1266,10 @@ export const useMailStore = create<MailState>((set, get) => {
     },
 
     async loadSnippets() {
+      const a = aid(get());
+      if (!a) return;
       try {
-        const raw = await api().getSetting(SNIPPETS_KEY);
+        const raw = await api().getSetting(a, SNIPPETS_KEY);
         set({ snippets: parseSnippets(raw) });
       } catch (err) {
         console.error('loadSnippets failed', err);
@@ -1159,7 +1278,8 @@ export const useMailStore = create<MailState>((set, get) => {
 
     async saveSnippets(list) {
       set({ snippets: list });
-      await api().setSetting(SNIPPETS_KEY, JSON.stringify(list));
+      const a = aid(get());
+      if (a) await api().setSetting(a, SNIPPETS_KEY, JSON.stringify(list));
     },
 
     selectAllVisible() {
@@ -1223,7 +1343,7 @@ export const useMailStore = create<MailState>((set, get) => {
     setTheme(theme, opts) {
       set({ theme });
       document.documentElement.dataset.theme = theme;
-      if (opts?.persist !== false) void api().setSetting('theme', theme);
+      if (opts?.persist !== false) void api().setGlobalSetting('theme', theme);
     },
 
     toggleTheme() {

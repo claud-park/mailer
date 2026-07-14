@@ -414,7 +414,12 @@ async function setCalendarReady(page, v) {
   await page.evaluate((val) => window.zenmail.__debugSetCalendarReady(val), v);
 }
 async function accountInfo(page) {
-  return page.evaluate(() => window.zenmail.getAccount());
+  // multi-account 계약: getAccount 제거 → listAccounts 스냅샷에서 활성 계정을 뽑는다.
+  // (구 단일-계정 AccountInfo와 동일한 필드 형태 — calendarReady 등 — 를 반환한다.)
+  return page.evaluate(async () => {
+    const snap = await window.zenmail.listAccounts();
+    return snap.accounts.find((a) => a.email === snap.activeEmail) ?? null;
+  });
 }
 async function openInviteThread(page) {
   await focusBody(page);

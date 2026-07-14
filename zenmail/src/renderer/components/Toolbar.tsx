@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMailStore } from '../store/mail';
+import { useMailStore, activeAccount } from '../store/mail';
 import { useCoachStore } from '../store/coach';
 
 export function Toolbar() {
@@ -12,7 +12,7 @@ export function Toolbar() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
   const splitInbox = useMailStore((s) => s.splitInbox);
   const toggleSplit = useMailStore((s) => s.toggleSplit);
-  const account = useMailStore((s) => s.account);
+  const account = useMailStore(activeAccount);
 
   const [draft, setDraft] = useState(searchQuery);
   const inputRef = useRef<HTMLInputElement>(null);

@@ -30,20 +30,21 @@ function RecipientField({
   const [suggestions, setSuggestions] = useState<Contact[]>([]);
   const [highlighted, setHighlighted] = useState(0);
   const seq = useRef(0);
+  const accountId = useMailStore((s) => s.activeAccountId);
 
   useEffect(() => {
     const q = draft.trim();
-    if (q.length < 2) {
+    if (q.length < 2 || !accountId) {
       setSuggestions([]);
       return;
     }
     const mySeq = ++seq.current;
-    void window.zenmail.listContacts(q).then((contacts) => {
+    void window.zenmail.listContacts(accountId, q).then((contacts) => {
       if (seq.current !== mySeq) return;
       setSuggestions(contacts.filter((c) => !values.includes(c.email)));
       setHighlighted(0);
     });
-  }, [draft, values]);
+  }, [draft, values, accountId]);
 
   const commit = (email: string) => {
     const v = email.trim().replace(/,$/, '');
@@ -158,11 +159,13 @@ export function Compose() {
   }, [composeInit]);
 
   useEffect(() => {
-    void window.zenmail.getSetting(FOLLOWUP_DEFAULT_DAYS_KEY).then((v) => {
+    const accountId = composeInit?.accountId;
+    if (!accountId) return;
+    void window.zenmail.getSetting(accountId, FOLLOWUP_DEFAULT_DAYS_KEY).then((v) => {
       const n = v ? Number(v) : NaN;
       setRemindCustomDays(Number.isFinite(n) && n > 0 ? n : FOLLOWUP_DEFAULT_DAYS);
     });
-  }, []);
+  }, [composeInit]);
 
   if (!composeInit) return null;
 
@@ -190,7 +193,7 @@ export function Compose() {
         remindDays: remindDays ?? undefined,
       });
       if (remindDays != null) {
-        void window.zenmail.setSetting(FOLLOWUP_DEFAULT_DAYS_KEY, String(remindDays));
+        void window.zenmail.setSetting(composeInit.accountId, FOLLOWUP_DEFAULT_DAYS_KEY, String(remindDays));
       }
     } finally {
       setSending(false);

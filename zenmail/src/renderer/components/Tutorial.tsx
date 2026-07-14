@@ -19,7 +19,7 @@ function isTyping(target: EventTarget | null): boolean {
  * by tutorialActive so React 18 StrictMode's double-invoke of effects is a no-op.
  */
 function useTutorialAutoStart(): void {
-  const hasAccount = useMailStore((s) => !!s.account);
+  const hasAccount = useMailStore((s) => !!s.activeAccountId);
   const hasThreads = useMailStore((s) => s.threads.length > 0);
   const tutorialSeen = useCoachStore((s) => s.tutorialSeen);
   const tutorialActive = useCoachStore((s) => s.tutorialActive);

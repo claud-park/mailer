@@ -60,7 +60,7 @@ function Shell() {
 }
 
 export default function App() {
-  const account = useMailStore((s) => s.account);
+  const signedIn = useMailStore((s) => !!s.activeAccountId);
   const accountLoading = useMailStore((s) => s.accountLoading);
   const init = useMailStore((s) => s.init);
 
@@ -75,7 +75,7 @@ export default function App() {
       </div>
     );
   }
-  if (!account) return <Login />;
+  if (!signedIn) return <Login />;
 
   return (
     <CommandPalette>
