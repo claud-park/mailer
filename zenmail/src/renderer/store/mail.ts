@@ -301,6 +301,7 @@ export const useMailStore = create<MailState>((set, get) => {
         api().getSetting(a, 'splitInbox'),
         api().getSetting(a, 'activeSplitTab'),
       ]);
+      if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
       set((s) => {
         const { order } = computeSplits(s.threads, splitDefs);
         const activeSplitTab =
@@ -461,6 +462,7 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(get());
       if (!a) return;
       const labels = await api().fetchLabels(a);
+      if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
       set({ labels });
     },
 
@@ -474,6 +476,7 @@ export const useMailStore = create<MailState>((set, get) => {
           labelIds: searchQuery ? undefined : [activeLabelId],
           q: searchQuery || undefined,
         });
+        if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
         set((s) => {
           const next = { ...s, threads: res.threads };
           return {
@@ -485,6 +488,7 @@ export const useMailStore = create<MailState>((set, get) => {
         });
       } catch (err) {
         console.error('loadThreads failed', err);
+        if (get().activeAccountId !== a) return; // 전환 후 도착한 실패가 새 계정 로딩 상태를 건드리지 않게
         set({ threadsLoading: false });
       }
     },
@@ -500,12 +504,14 @@ export const useMailStore = create<MailState>((set, get) => {
           q: searchQuery || undefined,
           pageToken: nextPageToken,
         });
+        if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
         set((s) => ({
           threads: [...s.threads, ...res.threads],
           nextPageToken: res.nextPageToken,
           threadsLoading: false,
         }));
       } catch {
+        if (get().activeAccountId !== a) return; // 전환 후 도착한 실패가 새 계정 로딩 상태를 건드리지 않게
         set({ threadsLoading: false });
       }
     },
@@ -1070,6 +1076,7 @@ export const useMailStore = create<MailState>((set, get) => {
       if (!a) return;
       try {
         const list = await api().listFollowups(a);
+        if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
         set({ followups: new Map(list.map((f) => [f.threadId, f])) });
       } catch (err) {
         console.error('refreshFollowups failed', err);
@@ -1270,6 +1277,7 @@ export const useMailStore = create<MailState>((set, get) => {
       if (!a) return;
       try {
         const raw = await api().getSetting(a, SNIPPETS_KEY);
+        if (get().activeAccountId !== a) return; // 전환 중 이전 계정 응답의 late-arrival 차단
         set({ snippets: parseSnippets(raw) });
       } catch (err) {
         console.error('loadSnippets failed', err);

@@ -285,6 +285,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('auth:remove-account', async (_e, email: string): Promise<AccountsSnapshot> => {
     const ctx = contexts.get(email);
     if (ctx) {
+      // 이 계정 소속 undo-window 타이머 정리 — 계정 제거 후 타이머가 발화하면 닫힌 cache 핸들을
+      // 만진다(transient 실패 경로의 addScheduledSend → unhandled rejection).
+      for (const [sendId, entry] of pendingSends) {
+        if (entry.accountId === email) {
+          clearTimeout(entry.timer);
+          pendingSends.delete(sendId);
+        }
+      }
       if (!ctx.demo) await auth.signOut(email);
       ctx.cache.close();
       contexts.delete(email);
