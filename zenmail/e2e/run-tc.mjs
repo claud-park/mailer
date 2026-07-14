@@ -4525,11 +4525,19 @@ async function scenario_lm_b1(page) {
   await clickTab(page, 'Inbox').catch(() => {});
   await focusBody(page);
   await page.keyboard.press('Enter'); // open whatever is currently selected (index 0) — non-destructive
-  await waitFor(async () => (await iframeBodyColor(page)) !== null, { timeout: 5000, desc: 'thread iframe rendered' });
-  const colorBefore = await iframeBodyColor(page);
+  // SWR 새로고침이 srcDoc을 교체하는 순간 body가 잠시 null로 돌아갈 수 있다(cache-first 페인트
+  // → fresh 교체). "대기 후 단발 읽기"는 그 틈에 null을 읽으므로, 값이 잡힐 때까지 폴링해
+  // waitFor의 반환값을 그대로 쓴다.
+  const colorBefore = await waitFor(async () => (await iframeBodyColor(page)) ?? false, {
+    timeout: 8000,
+    desc: 'thread iframe rendered (colorBefore)',
+  });
   await toggleThemeViaKbar(page); // dark -> light
   await sleep(300);
-  const colorAfter = await iframeBodyColor(page);
+  const colorAfter = await waitFor(async () => (await iframeBodyColor(page)) ?? false, {
+    timeout: 8000,
+    desc: 'iframe color after toggle (colorAfter)',
+  });
   await page.keyboard.press('Escape'); // close reading pane
   if (colorBefore && colorAfter && colorBefore !== colorAfter && colorAfter === 'rgb(24, 24, 27)') {
     record('TC-LM-B1', 'PASS', `iframe body color updated immediately on toggle (no re-open): ${colorBefore} -> ${colorAfter}`);
