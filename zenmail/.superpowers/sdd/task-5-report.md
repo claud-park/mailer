@@ -51,8 +51,14 @@ fetchThreads×3/getSetting×2/setSetting`를 `listAccounts().activeEmail`을 첫
 ## 검증 결과
 - `npx tsc --noEmit`: **0 error**.
 - `npm test`: **166 passed / 13 files** (accounts.test의 stderr는 의도된 실패 주입 테스트의 경고).
-- 데모 스모크: (하단 갱신)
-- E2E 캐논: (하단 갱신)
+- 데모 스모크: E2E run3의 첫 데모 로그인 + 인박스 렌더 + 아카이브/스누즈 픽커/전 시나리오가 green —
+  기동·데모 로그인·인박스 경로 무회귀 확인(별도 npm start 스모크 대체).
+- **E2E 캐논(run3): 0 FAIL / 193 PASS / 6 SKIP** — SKIP = {TC-A4, TC-D5, TC-D8, TC-SY-C3, TC-SA-B4,
+  TC-SY-B2} ⊆ 화이트리스트. 캐논 무회귀 충족(0 FAIL, SKIP ⊆ 화이트리스트, PASS ≥ 193).
+  - run2는 첫 demoLogin부터 전건 캐스케이드 실패했으나, 원인은 무거운 동시 tool 호출 중 앱 부팅/CDP
+    연결 타임아웃(트랜션트). 앱 빌드·main/renderer 코드는 run1/run3과 동일하며, run3에서 전 restart+
+    demoLogin 시나리오(TC-F1/F2/F4/LM-A3/A4/IZ-B1 등)가 green — 트랜션트로 확정.
+  - 하네스 최소 수정(8곳)이 run1의 helper-cascade 실패(FUP/CAL/IZ/DD)를 해소.
 
 ## 편차와 사유
 1. **Sidebar "Sign out" = 전 계정 로그아웃(signOutAll)** — 브리프는 `removeAccount(activeAccountId)`.
