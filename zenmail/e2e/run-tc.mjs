@@ -4480,7 +4480,9 @@ async function toggleThemeViaKbar(page) {
 async function iframeBodyColor(page) {
   return page.evaluate(() => {
     const ifr = document.querySelector('iframe');
-    if (!ifr || !ifr.contentDocument) return null;
+    // srcDoc 로드 창에서 contentDocument는 있어도 body가 잠시 null일 수 있다 — throw 대신
+    // null을 반환해 waitFor가 계속 폴링하게 한다(mid-abort 연쇄 방지).
+    if (!ifr || !ifr.contentDocument || !ifr.contentDocument.body) return null;
     return getComputedStyle(ifr.contentDocument.body).color;
   });
 }
