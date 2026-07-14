@@ -2,6 +2,22 @@
 
 > E2E 프리픽스 `TC-MA-*` (e2e/run-tc.mjs). 데모 하네스: 앱이 `demo@zenmail.app`(기본 활성) + `work@zenmail.app` 2계정으로 기동(design spec R7). TC-MA-E1은 vitest 단위 테스트로 검증(Task 2), E2E에선 N/A.
 
+## 결과 (2026-07-15, `node e2e/run-tc.mjs` 2연속 — Task 8)
+
+| TC | 상태 | 비고 |
+| --- | --- | --- |
+| TC-MA-A1 | **PASS** ×2 | 사이드바 아바타 aria-label 2건(demo·work) + active=demo(bg-accent) + 인박스 첫 행 = 데모 시드 "Q3 roadmap review" |
+| TC-MA-A2 | **PASS** ×2 | ⌃2 후 "W: Acme renewal contract" 표시 ∧ "Q3 roadmap review" 미표시 |
+| TC-MA-A3 | **PASS** ×2 | ⌃1 후 demo 복귀 + row 0 단일 선택(selectedIndex 리셋) |
+| TC-MA-B1 | **PASS** ×2 | work "W: Kickoff notes" 아카이브 → demo 무영향 → work 재전환 시 아카이브 유지 |
+| TC-MA-B2 | **PASS** ×2 | work 스레드 과거 시각 스누즈(커스텀 datetime, −1h) → demo 전환 → `__debugTick` → work 복귀 시 인박스 복귀 |
+| TC-MA-C1 | **PASS** ×2 | demo에서 `W:` 검색 0건 ∧ To-자동완성 "client" 입력에 `client@acme.example` 미노출 |
+| TC-MA-D1 | **PASS** ×2 | work 활성 상태에서 `__debugSimulateReply('work_3')` → demo 전환+tick → work 아바타 배지 2→3 |
+| TC-MA-E1 | **PASS** (vitest) | Task 2 단위 테스트 — E2E N/A |
+| TC-MA-G1 | **PASS** ×2 | `npx tsc --noEmit` exit 0 (TC-KM-G3 게이트로 확인) |
+| TC-MA-G2 | **PASS** ×2 | `npm test`(vitest) exit 0 (TC-KM-G2 게이트로 확인) |
+| TC-MA-G3 | **PASS** ×2 | 전체 스위트 200 PASS / 0 FAIL / 6 SKIP(={A4, D5, D8, SY-C3, SA-B4, SY-B2} = 캐논 집합) ×2, 두 런 id/status 집합 동일(결정성) |
+
 ## A. 전환 & 격리 (기본 동작)
 - **TC-MA-A1 초기 2계정 기동**: If 데모 로그인, When 앱 진입, Then 사이드바에 계정 2개(demo·work) 표시, active=demo, 기존 데모 인박스 리스트 그대로(무회귀).
 - **TC-MA-A2 전환 시 데이터 격리**: If demo 활성, When `⌃2`, Then work 계정 리스트로 전환되어 work 고유 subject가 표시되고 demo 스레드 subject는 미표시(격리 확인).

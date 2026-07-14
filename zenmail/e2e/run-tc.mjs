@@ -243,6 +243,45 @@ async function focusBody(page) {
 }
 
 // ---------------------------------------------------------------------------
+// multi-account helpers (TC-MA-*)
+// ---------------------------------------------------------------------------
+
+/** ⌃n account switch — useKeyboard listens on window keydown for ctrl+Digit{n} (e.code). The
+ *  switch resets the account-scoped view (selectedIndex=0, threads=[]) then SWR-reloads the target
+ *  account's cache, so we poll until the list repaints rather than trust a fixed sleep. rows>0 is a
+ *  coarse gate (both demo accounts always have inbox rows); each TC then asserts account-specific
+ *  content with its own waitFor. */
+async function switchAccount(page, n) {
+  await focusBody(page);
+  await page.keyboard.down('Control');
+  await page.keyboard.press(`Digit${n}`);
+  await page.keyboard.up('Control');
+  await waitFor(async () => (await rowsInfo(page)).length > 0, { timeout: 8000, desc: `account ${n} list repaint` });
+}
+
+/** the numeric unread badge text rendered inside a sidebar account avatar (Sidebar.tsx AccountAvatar:
+ *  a `<span class="rounded-full …">` only present when unreadCount>0 AND the avatar is inactive).
+ *  Returns 0 when absent (active avatar, or zero unread). */
+async function accountAvatarBadge(page, email) {
+  return page.evaluate((em) => {
+    const btn = document.querySelector(`button[aria-label="Switch to ${em}"]`);
+    if (!btn) return null; // avatar missing entirely — caller treats null as a hard error
+    const badge = btn.querySelector('span.rounded-full');
+    const n = badge ? parseInt(badge.textContent.trim(), 10) : 0;
+    return Number.isNaN(n) ? 0 : n;
+  }, email);
+}
+
+/** aria-labels of every account avatar currently in the sidebar switcher. */
+async function accountAvatarEmails(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('button[aria-label^="Switch to "]')).map((b) =>
+      b.getAttribute('aria-label').replace('Switch to ', '')
+    )
+  );
+}
+
+// ---------------------------------------------------------------------------
 // F2 follow-up-reminders helpers
 // ---------------------------------------------------------------------------
 
@@ -487,6 +526,181 @@ async function tryCalScenario(page, name, fn) {
 }
 
 // ---------------------------------------------------------------------------
+// multi-account: TC-MA-A1..D1 (docs/features/multi-account/TC.md)
+// ---------------------------------------------------------------------------
+//
+// Runs as a dedicated final session on its own fresh user-data dir (see run()), so both demo
+// accounts boot pristine. Demo (`demo@zenmail.app`, active) unique subject = "Q3 roadmap review";
+// work (`work@zenmail.app`) unique subject = "W: Acme renewal contract". Ordering is deliberate:
+// D1 runs before B1 because D1's __debugSimulateReply('work_3') needs work_3 ("W: Kickoff notes")
+// still in the work inbox, which B1 then archives.
+async function runMaSession(page) {
+  const DEMO_EMAIL = 'demo@zenmail.app';
+  const WORK_EMAIL = 'work@zenmail.app';
+  const DEMO_UNIQUE = 'Q3 roadmap review';
+  const WORK_UNIQUE = 'W: Acme renewal contract';
+
+  await focusBody(page);
+  await page.keyboard.press('Escape'); // ensure no reading pane / modal from initial paint
+
+  // --- TC-MA-A1: two accounts boot, active=demo, demo inbox intact (no regression) ---
+  try {
+    const emails = await accountAvatarEmails(page);
+    const hasBoth = emails.includes(DEMO_EMAIL) && emails.includes(WORK_EMAIL);
+    const demoTop = await waitFor(async () => {
+      const rows = await rowsInfo(page);
+      return rows.length && rows[0].text.includes(DEMO_UNIQUE) ? rows : null;
+    }, { timeout: 8000, desc: 'demo inbox top row = Q3 roadmap' });
+    const demoActive = await page.evaluate((em) => {
+      const btn = document.querySelector(`button[aria-label="Switch to ${em}"]`);
+      return !!btn && btn.className.includes('bg-accent'); // AccountAvatar active style
+    }, DEMO_EMAIL);
+    if (hasBoth && demoActive && demoTop) {
+      record('TC-MA-A1', 'PASS', `2 avatars (${emails.join(', ')}); active=demo; inbox top="${demoTop[0].text.slice(0, 40)}"`);
+    } else {
+      record('TC-MA-A1', 'FAIL', `emails=${JSON.stringify(emails)} demoActive=${demoActive} demoTopFound=${!!demoTop}`);
+    }
+  } catch (err) {
+    record('TC-MA-A1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-A2: ⌃2 switches to work; work-only subject shows, demo subject gone (isolation) ---
+  try {
+    await switchAccount(page, 2);
+    const ok = await waitFor(async () => {
+      const bt = await bodyText(page);
+      return bt.includes(WORK_UNIQUE) && !bt.includes(DEMO_UNIQUE) ? true : null;
+    }, { timeout: 8000, desc: 'work view shows work subject, demo subject absent' });
+    record('TC-MA-A2', ok ? 'PASS' : 'FAIL', `work shows "${WORK_UNIQUE}", demo "${DEMO_UNIQUE}" absent`);
+  } catch (err) {
+    record('TC-MA-A2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-A3: ⌃1 restores demo; work subject gone; selectedIndex reset to 0 ---
+  try {
+    await switchAccount(page, 1);
+    const res = await waitFor(async () => {
+      const bt = await bodyText(page);
+      if (!bt.includes(DEMO_UNIQUE) || bt.includes(WORK_UNIQUE)) return null;
+      const rows = await rowsInfo(page);
+      return rows.length && rows[0].selected ? rows : null;
+    }, { timeout: 8000, desc: 'demo restored with row 0 selected' });
+    const singleSel = res.filter((r) => r.selected).length === 1;
+    record('TC-MA-A3', singleSel ? 'PASS' : 'FAIL',
+      `demo restored (top="${res[0].text.slice(0, 30)}"); row0 selected, single-selection=${singleSel}`);
+  } catch (err) {
+    record('TC-MA-A3', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-C1: demo local search + contact autocomplete never leak work's data ---
+  try {
+    await page.fill('input[placeholder^="Search mail"]', 'W:');
+    await page.keyboard.press('Enter');
+    const zero = await waitFor(async () => ((await rowsInfo(page)).length === 0 ? true : null),
+      { timeout: 6000, desc: 'demo search "W:" → 0 rows' }).catch(() => false);
+    await clearSearchIfActive(page);
+    await openNewCompose(page);
+    const toInput = await composeFieldHandle(page, 'To');
+    await toInput.click();
+    await page.keyboard.type('client'); // matches work's client@acme.example, never a demo contact
+    await sleep(400); // let listContacts(demo, 'client') resolve
+    const leaked = (await bodyText(page)).includes('client@acme.example');
+    await page.keyboard.press('Escape'); // close compose
+    await waitFor(async () => !(await bodyText(page)).includes('New message'), { timeout: 4000, desc: 'compose closed' }).catch(() => {});
+    record('TC-MA-C1', (zero && !leaked) ? 'PASS' : 'FAIL',
+      `demo search "W:"→0rows=${zero}; autocomplete leaked work contact=${leaked}`);
+  } catch (err) {
+    record('TC-MA-C1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-D1: reply on inactive work account bumps its sidebar badge after a daemon tick ---
+  try {
+    const before = await accountAvatarBadge(page, WORK_EMAIL); // demo active → work badge visible
+    await switchAccount(page, 2);
+    await debugSimulateReply(page, 'work_3'); // active ctx = work (D6); marks work_3 unread in inbox
+    await switchAccount(page, 1); // back to demo — work now inactive again
+    await debugTick(page); // daemon badge-refresh loop recomputes work unread + pushes accounts-changed
+    const after = await waitFor(async () => {
+      const n = await accountAvatarBadge(page, WORK_EMAIL);
+      return n !== null && before !== null && n > before ? n : null;
+    }, { timeout: 8000, desc: 'work avatar badge increments' });
+    record('TC-MA-D1', 'PASS', `work badge ${before} → ${after} after simulateReply(work_3)+tick`);
+  } catch (err) {
+    record('TC-MA-D1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-B1: per-account cache mutation (archive) survives a re-switch; demo unaffected ---
+  try {
+    await switchAccount(page, 2); // work
+    await waitFor(async () => (await rowsInfo(page)).some((r) => r.text.includes('W: Kickoff notes')),
+      { timeout: 8000, desc: 'work "W: Kickoff notes" present' });
+    await clickRowContaining(page, 'W: Kickoff notes');
+    await sleep(200);
+    await page.keyboard.press('Escape'); // close reading pane, keep selection
+    await focusBody(page);
+    await page.keyboard.press('e'); // archive selected
+    await waitFor(async () => !(await rowsInfo(page)).some((r) => r.text.includes('W: Kickoff notes')),
+      { timeout: 8000, desc: 'work Kickoff archived out of inbox' });
+    await switchAccount(page, 1); // demo — must be untouched
+    const demoOk = await waitFor(async () => {
+      const bt = await bodyText(page);
+      const rows = await rowsInfo(page);
+      return bt.includes(DEMO_UNIQUE) && !bt.includes('W: ') && rows[0]?.text.includes(DEMO_UNIQUE) ? true : null;
+    }, { timeout: 8000, desc: 'demo unaffected by work archive' });
+    await switchAccount(page, 2); // work — archive must persist across the re-switch
+    const workOk = await waitFor(async () => {
+      const rows = await rowsInfo(page);
+      return rows.length && !rows.some((r) => r.text.includes('W: Kickoff notes')) ? true : null;
+    }, { timeout: 8000, desc: 'work archive persists across re-switch' });
+    record('TC-MA-B1', (demoOk && workOk) ? 'PASS' : 'FAIL', `demoUnaffected=${demoOk} workArchivePersists=${workOk}`);
+  } catch (err) {
+    record('TC-MA-B1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-MA-B2: inactive-account snooze daemon fires on __debugTick ---
+  try {
+    await switchAccount(page, 2); // ensure work active (no-op if already)
+    await waitFor(async () => (await rowsInfo(page)).some((r) => r.text.includes('W: Invoice #88 due')),
+      { timeout: 8000, desc: 'work "W: Invoice #88 due" present' });
+    await clickRowContaining(page, 'W: Invoice #88 due');
+    await sleep(200);
+    await page.keyboard.press('Escape');
+    await focusBody(page);
+    await page.keyboard.press('b'); // open snooze picker for the selected thread
+    await page.waitForSelector('input[type="datetime-local"]', { timeout: 5000 });
+    // a past datetime (local, 1h ago) → snooze until <= now → dueSnoozes wakes it on the next tick
+    const pastLocal = await page.evaluate(() => {
+      const d = new Date(Date.now() - 3600_000);
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    });
+    const snzBefore = (await coachState(page))?.counters?.snooze ?? 0;
+    await page.fill('input[type="datetime-local"]', pastLocal);
+    await page.click('button:has-text("Set")');
+    await waitFor(async () => !(await rowsInfo(page)).some((r) => r.text.includes('W: Invoice #88 due')),
+      { timeout: 8000, desc: 'work Invoice snoozed out of inbox' });
+    // The row removal above is optimistic — cache.addSnooze only lands when the mail:snooze IPC
+    // resolves (~2 mock provider round-trips later), and bumpStat('snooze') runs strictly after
+    // that await (store/mail.ts snoozeThread). Gate on the counter so the tick below can't race
+    // an unregistered snooze (observed FAIL mode: switch+tick immediately after the optimistic
+    // removal → dueSnoozes sees nothing → the 8s wait misses the next 60s interval tick). Same
+    // durability signal TC-KM-D2 already polls.
+    await waitFor(async () => ((await coachState(page))?.counters?.snooze ?? 0) === snzBefore + 1,
+      { timeout: 8000, desc: 'snooze IPC durably registered (coach snooze counter bump)' });
+    await switchAccount(page, 1); // demo active → work is now the INACTIVE account
+    await debugTick(page); // daemon processes every account, not just the active one
+    await switchAccount(page, 2); // work
+    const back = await waitFor(async () => ((await rowsInfo(page)).some((r) => r.text.includes('W: Invoice #88 due')) ? true : null),
+      { timeout: 8000, desc: 'work Invoice returned to inbox after inactive-account tick' });
+    record('TC-MA-B2', back ? 'PASS' : 'FAIL', 'inactive-account snooze woke on __debugTick');
+  } catch (err) {
+    record('TC-MA-B2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  await switchAccount(page, 1).catch(() => {}); // leave the session on demo
+}
+
+// ---------------------------------------------------------------------------
 // Test scenarios
 // ---------------------------------------------------------------------------
 
@@ -684,6 +898,25 @@ async function run() {
   await killApp();
 
   rmSync(USERDATA, { recursive: true, force: true });
+
+  // --- multi-account: TC-MA-* — dedicated final session on its OWN fresh user-data dir, so both
+  // demo accounts boot pristine (independent of every mutation the shared-USERDATA saga above left
+  // in the demo cache). Records 7 assertions (A1~A3, B1, B2, C1, D1) consumed by the gates below.
+  const MA_USERDATA = mkdtempSync(path.join(tmpdir(), 'zenmail-e2e-ma-'));
+  launchApp(PORT, MA_USERDATA);
+  try {
+    ({ browser, page } = await connectPage(PORT));
+    await demoLogin(page);
+    await runMaSession(page);
+  } catch (err) {
+    console.error('[harness] scenario error (multi-account):', err);
+    if (!results.some((r) => r.id.startsWith('TC-MA'))) record('TC-MA-A1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+  }
+  await browser?.close().catch(() => {});
+  await killApp();
+  // killApp only pkills the shared USERDATA — the MA session's detached Electron uses MA_USERDATA.
+  try { execSync(`pkill -f -- "--user-data-dir=${MA_USERDATA}"`); } catch { /* none left — fine */ }
+  rmSync(MA_USERDATA, { recursive: true, force: true });
 
   // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
   const nonKmFails = results.filter((r) => !r.id.startsWith('TC-KM') && !r.id.startsWith('TC-SP') && r.status === 'FAIL');
