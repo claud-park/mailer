@@ -248,7 +248,10 @@ async function focusBody(page) {
 
 /** ground truth straight from the main-process cache — listFollowups() is a regular (non-debug) IPC */
 async function listFollowups(page) {
-  return page.evaluate(() => window.zenmail.listFollowups());
+  return page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.listFollowups(activeEmail);
+  });
 }
 
 async function debugTick(page) {
@@ -265,7 +268,10 @@ async function debugAddFollowupDueNow(page, threadId) {
 }
 
 async function dismissFollowup(page, threadId) {
-  await page.evaluate((id) => window.zenmail.dismissFollowup(id), threadId);
+  await page.evaluate(async (id) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.dismissFollowup(activeEmail, id);
+  }, threadId);
 }
 
 /** reads the `data-thread-id` attribute (added to ThreadRow for CP5) off the row matching the text */
@@ -464,9 +470,10 @@ function stripReFwdPrefix(subject) {
  *  same reasoning as safeBulkSenderCandidates()/syncSelectSafeRow() elsewhere in this file, which
  *  already query live state instead of assuming a fixed seed thread survives to their point in the run). */
 async function findRePrefixedInboxSubject(page) {
-  const subjects = await page.evaluate(() =>
-    window.zenmail.fetchThreads({ labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => t.subject))
-  );
+  const subjects = await page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.fetchThreads(activeEmail, { labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => t.subject));
+  });
   return subjects.find((s) => /^(re|fwd):\s/i.test(s)) ?? null;
 }
 
@@ -3287,7 +3294,10 @@ function normalizeNoNewlines(s) {
  *  scenario has already recorded its assertions — a reload resets the in-memory latency ring
  *  buffer that TC-SP's aggregates depend on (see TC-SP scenario notes above). */
 async function seedSnippets(page, list) {
-  await page.evaluate((data) => window.zenmail.setSetting('snippets', JSON.stringify(data)), list);
+  await page.evaluate(async (data) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.setSetting(activeEmail, 'snippets', JSON.stringify(data));
+  }, list);
   await reloadApp(page);
   await clickTab(page, 'Inbox');
 }
@@ -3463,7 +3473,10 @@ async function scenario_dd_snippet_crud(page) {
   const listedC1 = (await bodyText(page)).includes(nameC1);
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await waitFor(async () => !(await bodyText(page)).includes('+ Add snippet'), { desc: 'manager closes after save (C1)' });
-  const storedRawC1 = await page.evaluate(() => window.zenmail.getSetting('snippets'));
+  const storedRawC1 = await page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.getSetting(activeEmail, 'snippets');
+  });
   const storedC1 = JSON.parse(storedRawC1 || '[]');
   const persistedC1 = storedC1.some((s) => s.name === nameC1 && s.body === bodyC1);
   record('TC-DD-C1', listedC1 && persistedC1 ? 'PASS' : 'FAIL', `listedC1=${listedC1} persistedC1=${persistedC1} stored=${storedRawC1}`);
@@ -3476,7 +3489,10 @@ async function scenario_dd_snippet_crud(page) {
   const removedFromListC2 = !(await bodyText(page)).includes(nameC1);
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await waitFor(async () => !(await bodyText(page)).includes('+ Add snippet'), { desc: 'manager closes after delete-save (C2)' });
-  const storedRawC2 = await page.evaluate(() => window.zenmail.getSetting('snippets'));
+  const storedRawC2 = await page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.getSetting(activeEmail, 'snippets');
+  });
   const storedC2 = JSON.parse(storedRawC2 || '[]');
   const removedFromStorageC2 = !storedC2.some((s) => s.name === nameC1);
 
@@ -3995,7 +4011,10 @@ const SA_RESERVED_SUBJECTS = [
  * actually claims them. Returns a de-duped list of candidate emails.
  */
 async function safeBulkSenderCandidates(page) {
-  const threads = await page.evaluate(() => window.zenmail.fetchThreads({ labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => ({ email: t.from.email.toLowerCase(), subject: t.subject, labelIds: t.labelIds }))));
+  const threads = await page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.fetchThreads(activeEmail, { labelIds: ['INBOX'] }).then((r) => r.threads.map((t) => ({ email: t.from.email.toLowerCase(), subject: t.subject, labelIds: t.labelIds })));
+  });
   const isReserved = (t) => SA_RESERVED_SUBJECTS.some((s) => t.subject.includes(s));
   const reservedEmails = new Set(threads.filter(isReserved).map((t) => t.email));
   const CATEGORY_RE = /^CATEGORY_/;
@@ -4811,11 +4830,12 @@ async function izSetSplit(page, on) {
 /** ground-truth inbox VIEW straight from the cache/provider (fetchThreads applies the shared
  *  INBOX∪STARRED predicate) — independent of virtualization, unlike DOM reads. */
 async function izInboxView(page) {
-  return page.evaluate(() =>
-    window.zenmail
-      .fetchThreads({ labelIds: ['INBOX'] })
-      .then((r) => r.threads.map((t) => ({ id: t.id, subject: t.subject, labelIds: t.labelIds })))
-  );
+  return page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail
+      .fetchThreads(activeEmail, { labelIds: ['INBOX'] })
+      .then((r) => r.threads.map((t) => ({ id: t.id, subject: t.subject, labelIds: t.labelIds })));
+  });
 }
 
 /** re-load the INBOX list (kbar g→i → setActiveLabel('INBOX') → loadThreads → SWR warm read +
