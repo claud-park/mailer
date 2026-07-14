@@ -3837,7 +3837,9 @@ async function scenario_sy_send_spill(page) {
       const n = await sendCount();
       return n >= s1 + 1 ? n : false;
     },
-    { timeout: 8000, desc: 'E1 spilled send delivered on reconnect drain' }
+    // 부하 시 10s undo 타이머+드레인이 밀릴 수 있어 여유 있게 — 통과 판정은 아래 카운트 등식이
+    // 하므로(정확히 +1, 추가 tick 무증가) 대기 연장이 오답을 가리지 않는다.
+    { timeout: 20000, desc: 'E1 spilled send delivered on reconnect drain' }
   );
 
   // exactly-once: an extra tick must NOT re-fire the (already-removed) scheduled send.
