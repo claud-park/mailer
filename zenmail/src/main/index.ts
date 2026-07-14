@@ -2,7 +2,7 @@ import path from 'node:path';
 import { app, BrowserWindow, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { getGlobalSetting, migrateLegacyLayout } from './accounts';
-import { registerIpc, getContexts, initAccounts } from './ipc';
+import { registerIpc, getContexts, initAccounts, pushAccountsChanged } from './ipc';
 import { startSnoozeDaemon, stopSnoozeDaemon } from './snooze';
 
 if (started) app.quit();
@@ -64,7 +64,7 @@ app.whenReady().then(async () => {
   migrateLegacyLayout();
   await initAccounts();
   registerIpc(() => mainWindow);
-  startSnoozeDaemon(getContexts, () => mainWindow);
+  startSnoozeDaemon(getContexts, () => mainWindow, () => pushAccountsChanged(() => mainWindow));
   createWindow();
 
   app.on('activate', () => {

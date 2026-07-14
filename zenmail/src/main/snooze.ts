@@ -21,7 +21,8 @@ let tickInFlight = false;
  */
 export function startSnoozeDaemon(
   getContexts: () => AccountContext[],
-  getWindow: () => BrowserWindow | null
+  getWindow: () => BrowserWindow | null,
+  pushAccounts: () => void
 ): void {
   stopSnoozeDaemon();
   const tick = async () => {
@@ -39,6 +40,23 @@ export function startSnoozeDaemon(
           console.error('[daemon] account tick failed', ctx.email, err); // 계정 간 격리
         }
       }
+
+      // 배지: 전 계정 INBOX 안읽음 수 갱신(1콜/계정/분, D7) — 값이 하나라도 바뀌면 스냅샷 push.
+      // ipc.ts를 런타임 import하면 순환이 생기므로 pushAccounts 콜백으로 주입받는다(index.ts가 정본).
+      let badgeChanged = false;
+      for (const ctx of getContexts()) {
+        if (!ctx.provider) continue; // needsReauth 계정은 스킵
+        try {
+          const n = await ctx.provider.inboxUnreadCount();
+          if (n !== ctx.unreadCount) {
+            ctx.unreadCount = n;
+            badgeChanged = true;
+          }
+        } catch (err) {
+          console.error('[daemon] badge refresh failed', ctx.email, err); // transient — 다음 틱에 재시도
+        }
+      }
+      if (badgeChanged) pushAccounts();
     } finally {
       tickInFlight = false;
     }

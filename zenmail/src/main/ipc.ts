@@ -255,6 +255,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   // --- account lifecycle ---
 
+  // 로그인/데모 진입 직후 1회 배지 시딩 — 데몬의 첫 틱(최대 60s)을 기다리지 않고 초기 배지를 표시한다.
+  // 데몬 틱의 배지 루프(snooze.ts)와 동일한 조건(needsReauth 스킵, 계정별 격리)을 공유한다.
+  async function refreshBadges(): Promise<void> {
+    let badgeChanged = false;
+    for (const ctx of getContexts()) {
+      if (!ctx.provider) continue; // needsReauth 계정은 스킵
+      try {
+        const n = await ctx.provider.inboxUnreadCount();
+        if (n !== ctx.unreadCount) {
+          ctx.unreadCount = n;
+          badgeChanged = true;
+        }
+      } catch (err) {
+        console.error('[badges] refresh failed', ctx.email, err); // transient — 다음 틱에 재시도
+      }
+    }
+    if (badgeChanged) pushAccountsChanged(getWindow);
+  }
+
   ipcMain.handle('auth:list-accounts', async (): Promise<AccountsSnapshot> => accountsSnapshot());
 
   ipcMain.handle('auth:add-account', async (): Promise<AccountsSnapshot> => {
@@ -269,6 +288,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       accounts.setActiveEmail(email);
     }
     pushAccountsChanged(getWindow);
+    void refreshBadges(); // await하지 않는다 — 로그인 응답 지연 금지
     return accountsSnapshot();
   });
 
@@ -279,6 +299,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     activeEmail = DEMO_ACCOUNT_EMAILS[0]; // demo@zenmail.app — accounts.json엔 미영속(D3)
     debugCalendarReady = null; // 새 데모 세션은 게이트 오버라이드 초기화(기존 E3 시맨틱 보존)
     pushAccountsChanged(getWindow);
+    void refreshBadges(); // await하지 않는다 — 로그인 응답 지연 금지
     return accountsSnapshot();
   });
 
