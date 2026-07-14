@@ -3834,12 +3834,15 @@ async function scenario_sy_send_spill(page) {
   await syncTick(page);
   const s2 = await waitFor(
     async () => {
+      // 1분 데몬 tick이 오프라인 창(undo 만료~재접속, ~2.5s)에 우연히 걸리면 스필 행이
+      // attempts=1·백오프 +10s로 밀리는데, 그 due 시각을 집행할 다음 자동 tick은 최대 60s 뒤다.
+      // 단발 tick+대기로는 영원히 못 보므로 매 폴마다 tick해 시간을 압축한다(배달되면 행이
+      // 제거되니 아래 exactly-once 등식 판정은 그대로 유효).
+      await syncTick(page);
       const n = await sendCount();
       return n >= s1 + 1 ? n : false;
     },
-    // 부하 시 10s undo 타이머+드레인이 밀릴 수 있어 여유 있게 — 통과 판정은 아래 카운트 등식이
-    // 하므로(정확히 +1, 추가 tick 무증가) 대기 연장이 오답을 가리지 않는다.
-    { timeout: 20000, desc: 'E1 spilled send delivered on reconnect drain' }
+    { timeout: 30000, desc: 'E1 spilled send delivered on reconnect drain' }
   );
 
   // exactly-once: an extra tick must NOT re-fire the (already-removed) scheduled send.
