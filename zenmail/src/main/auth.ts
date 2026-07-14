@@ -129,24 +129,6 @@ function keytarStore(): TokenStore | null {
 
 const store: TokenStore = keytarStore() ?? fileStore();
 
-const ACCOUNT_KEY_FILE = () => path.join(app.getPath('userData'), 'account.json');
-
-export function getStoredEmail(): string | null {
-  try {
-    return JSON.parse(fs.readFileSync(ACCOUNT_KEY_FILE(), 'utf8')).email ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function setStoredEmail(email: string | null): void {
-  if (email === null) {
-    fs.rmSync(ACCOUNT_KEY_FILE(), { force: true });
-  } else {
-    fs.writeFileSync(ACCOUNT_KEY_FILE(), JSON.stringify({ email }));
-  }
-}
-
 function newOAuthClient(redirectUri?: string): OAuth2Client {
   return new google.auth.OAuth2({
     clientId: getClientId(),
@@ -155,14 +137,12 @@ function newOAuthClient(redirectUri?: string): OAuth2Client {
   });
 }
 
-/** Returns an authorized client for the stored account, or null if signed out. */
-export async function getAuthorizedClient(): Promise<{
+/** 특정 계정의 authorized client. 토큰 부재/파손 시 null (호출측이 needsReauth 처리). */
+export async function getAuthorizedClient(email: string): Promise<{
   client: OAuth2Client;
   email: string;
   calendarReady: boolean;
 } | null> {
-  const email = getStoredEmail();
-  if (!email) return null;
   const raw = await store.get(email);
   if (!raw) return null;
   const client = newOAuthClient();
@@ -213,17 +193,14 @@ export async function signIn(): Promise<string> {
     const email = profile.data.emailAddress ?? 'unknown';
 
     await store.set(email, JSON.stringify(tokens));
-    setStoredEmail(email);
     return email;
   } finally {
     server.close();
   }
 }
 
-export async function signOut(): Promise<void> {
-  const email = getStoredEmail();
-  if (email) await store.del(email);
-  setStoredEmail(null);
+export async function signOut(email: string): Promise<void> {
+  await store.del(email);
 }
 
 function startLoopbackServer(): Promise<{

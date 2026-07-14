@@ -142,6 +142,15 @@ export interface AccountInfo {
   demo: boolean;
   /** calendar.events scope 보유 여부. false면 캘린더 기능만 비활성(메일 무영향). 데모는 항상 true. */
   calendarReady: boolean;
+  /** INBOX 안읽음 스레드 수 — 사이드바 계정 배지. 데몬 틱/최초 스냅샷에서 갱신. */
+  unreadCount: number;
+  /** 토큰 복원/갱신 실패 — 이 계정의 mail IPC는 reject, 다른 계정 무영향. 재로그인(addAccount)으로 복구. */
+  needsReauth: boolean;
+}
+
+export interface AccountsSnapshot {
+  accounts: AccountInfo[];
+  activeEmail: string | null;
 }
 
 export type SplitRule =
@@ -171,35 +180,43 @@ export interface SnippetRecord {
   createdAt: number;
 }
 
-/** API surface exposed on window.zenmail via contextBridge */
+/** API surface exposed on window.zenmail via contextBridge (accountId는 항상 첫 인자, string 필수) */
 export interface ZenmailApi {
-  getAccount(): Promise<AccountInfo | null>;
-  signIn(): Promise<AccountInfo>;
-  signInDemo(): Promise<AccountInfo>;
-  signOut(): Promise<void>;
+  listAccounts(): Promise<AccountsSnapshot>;
+  /** real OAuth 플로우 기동 — 성공 시 계정 추가(동일 email 재로그인 = 토큰 갱신/reauth) */
+  addAccount(): Promise<AccountsSnapshot>;
+  /** 데모 세션 기동 — mock 계정 2개(demo@zenmail.app, work@zenmail.app) 생성, active=demo */
+  signInDemo(): Promise<AccountsSnapshot>;
+  /** 해당 계정만 제거: keytar 토큰 삭제 + accounts.json 제거 + 계정 DB 파일 삭제 */
+  removeAccount(email: string): Promise<AccountsSnapshot>;
+  /** accounts.json activeEmail 영속화(실계정 한정 — 데모 계정은 in-memory) */
+  setActiveAccount(email: string): Promise<void>;
 
-  fetchThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse>;
-  fetchThread(threadId: string): Promise<ThreadDetail>;
-  fetchLabels(): Promise<Label[]>;
-  send(req: SendRequest): Promise<SendReceipt>;
-  cancelSend(sendId: string): Promise<boolean>;
-  modifyLabels(req: ModifyLabelsRequest): Promise<void>;
-  snooze(req: SnoozeRequest): Promise<void>;
-  searchLocal(q: string): Promise<ThreadSummary[]>;
-  listContacts(prefix: string): Promise<Contact[]>;
-  getSplits(): Promise<SplitDefinition[]>;
-  setSplits(defs: SplitDefinition[]): Promise<void>;
-  getSetting(key: string): Promise<string | null>;
-  setSetting(key: string, value: string): Promise<void>;
+  fetchThreads(accountId: string, req: FetchThreadsRequest): Promise<FetchThreadsResponse>;
+  fetchThread(accountId: string, threadId: string): Promise<ThreadDetail>;
+  fetchLabels(accountId: string): Promise<Label[]>;
+  send(accountId: string, req: SendRequest): Promise<SendReceipt>;
+  cancelSend(accountId: string, sendId: string): Promise<boolean>;
+  modifyLabels(accountId: string, req: ModifyLabelsRequest): Promise<void>;
+  snooze(accountId: string, req: SnoozeRequest): Promise<void>;
+  searchLocal(accountId: string, q: string): Promise<ThreadSummary[]>;
+  listContacts(accountId: string, prefix: string): Promise<Contact[]>;
+  getSplits(accountId: string): Promise<SplitDefinition[]>;
+  setSplits(accountId: string, defs: SplitDefinition[]): Promise<void>;
+  getSetting(accountId: string, key: string): Promise<string | null>;
+  setSetting(accountId: string, key: string, value: string): Promise<void>;
+  /** 앱 전역 설정(테마 등) — userData/settings.json. 계정 DB 아님. */
+  getGlobalSetting(key: string): Promise<string | null>;
+  setGlobalSetting(key: string, value: string): Promise<void>;
 
-  addFollowup(threadId: string, remindDays: number): Promise<void>;
-  cancelFollowup(threadId: string): Promise<void>;
-  dismissFollowup(threadId: string): Promise<void>;
-  listFollowups(): Promise<FollowupInfo[]>;
+  addFollowup(accountId: string, threadId: string, remindDays: number): Promise<void>;
+  cancelFollowup(accountId: string, threadId: string): Promise<void>;
+  dismissFollowup(accountId: string, threadId: string): Promise<void>;
+  listFollowups(accountId: string): Promise<FollowupInfo[]>;
 
-  listEvents(timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]>;
-  respondToEvent(iCalUID: string, response: RsvpResponse): Promise<void>;
-  createEvent(input: CreateEventInput): Promise<CalendarEvent>;
+  listEvents(accountId: string, timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]>;
+  respondToEvent(accountId: string, iCalUID: string, response: RsvpResponse): Promise<void>;
+  createEvent(accountId: string, input: CreateEventInput): Promise<CalendarEvent>;
 
   /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
   notifyOnline(): Promise<void>;
@@ -207,20 +224,22 @@ export interface ZenmailApi {
   /**
    * The single change-propagation channel (F6 CP5, D1): main pushes a thread-list diff. Mutation-origin
    * payloads carry {upserts, removals} the renderer merges without any refetch; daemon-origin payloads
-   * set needsRefetch so the renderer does a full refresh() instead.
+   * set needsRefetch so the renderer does a full refresh() instead. accountId scopes the diff to one account.
    */
   onThreadsChanged(
-    cb: (p: { upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }) => void
+    cb: (p: { accountId: string; upserts: ThreadSummary[]; removals: string[]; needsRefetch?: boolean }) => void
   ): () => void;
   /** SWR revalidate push (F6 CP4, D11): main sends the fresh detail when a cache-hit read diverged. */
-  onThreadChanged(cb: (p: { threadId: string; detail: ThreadDetail }) => void): () => void;
-  onSnoozeFired(cb: (threadId: string) => void): () => void;
-  onFollowupFired(cb: (threadId: string) => void): () => void;
-  /** D10: sidebar sync line data push — {online, pending queue depth}. */
+  onThreadChanged(cb: (p: { accountId: string; threadId: string; detail: ThreadDetail }) => void): () => void;
+  onSnoozeFired(cb: (p: { accountId: string; threadId: string }) => void): () => void;
+  onFollowupFired(cb: (p: { accountId: string; threadId: string }) => void): () => void;
+  /** D10: sidebar sync line data push — {online, pending queue depth}. 전역 합산. */
   onSyncState(cb: (s: { online: boolean; pending: number }) => void): () => void;
   /** D10: a queued mutation or send exhausted retries (or hit a permanent error) — renderer
    *  reconciles with a refresh() + toast rather than trusting its stale optimistic state. */
-  onMutationPermanentFailed(cb: (p: { threadId: string | null; kind: string }) => void): () => void;
+  onMutationPermanentFailed(cb: (p: { accountId: string; threadId: string | null; kind: string }) => void): () => void;
+  /** 배지/needsReauth/계정 목록 변화 push — 데몬 틱·addAccount·removeAccount에서 발화 */
+  onAccountsChanged(cb: (snap: AccountsSnapshot) => void): () => void;
 
   /** E2E-only debug hooks — only present when ZENMAIL_E2E_PORT is set (see preload.ts) */
   __debugSimulateReply?(threadId: string): Promise<void>;

@@ -7,10 +7,15 @@
 
 import type { BrowserWindow } from 'electron';
 import type { ThreadSummary } from '../shared/types';
-import * as cache from './cache';
 
 let online = true;
 let reconnectHook: (() => void) | null = null;
+
+let pendingCounter: () => number = () => 0;
+/** ipc.ts가 컨텍스트 합산 집계를 등록한다 — sync-state는 cache를 직접 알지 않는다. */
+export function registerPendingCounter(fn: () => number): void {
+  pendingCounter = fn;
+}
 
 export function isOnline(): boolean {
   return online;
@@ -45,11 +50,12 @@ export function setOnline(v: boolean, notify?: () => void): void {
 export function emitSyncState(getWindow: () => BrowserWindow | null): void {
   getWindow()?.webContents.send('mail:sync-state', {
     online,
-    pending: cache.mutationQueueDepth() + cache.overdueScheduledSendCount(Date.now()),
+    pending: pendingCounter(),
   });
 }
 
 export interface ThreadsChangedPayload {
+  accountId: string;
   upserts: ThreadSummary[];
   removals: string[];
   /** daemon-origin ticks (D1 compromise): renderer does a full refresh() instead of a pure diff merge. */

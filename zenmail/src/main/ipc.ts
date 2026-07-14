@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { ipcMain, type BrowserWindow } from 'electron';
+import type { Auth } from 'googleapis';
 import type {
-  AccountInfo,
+  AccountsSnapshot,
   CalendarEvent,
   CreateEventInput,
   FetchThreadsRequest,
@@ -15,36 +17,152 @@ import type {
   ThreadDetail,
 } from '../shared/types';
 import { classifyError } from '../shared/sync';
+import * as accounts from './accounts';
 import * as auth from './auth';
 import { MockCalendarProvider, RealCalendarProvider, type CalendarProvider } from './calendar';
-import * as cache from './cache';
-import { DEMO_VIP_EMAIL, MockGmailProvider, RealGmailProvider, type GmailProvider } from './gmail';
+import { AccountCache } from './cache';
+import {
+  DEMO_ACCOUNT_EMAILS,
+  DEMO_VIP_EMAIL,
+  MockGmailProvider,
+  RealGmailProvider,
+  type GmailProvider,
+} from './gmail';
 import { computeRevalidateDiff } from './revalidate';
 import { runDaemonTickNow } from './snooze';
-import { emitSyncState, notifyThreadsChanged, setOnline, triggerReconnect } from './sync-state';
+import {
+  emitSyncState,
+  notifyThreadsChanged,
+  registerPendingCounter,
+  setOnline,
+  triggerReconnect,
+} from './sync-state';
 import { viewMembershipLabels } from '../shared/view';
 
 const UNDO_WINDOW_MS = 10_000;
 const DAY_MS = 86_400_000;
 
-let provider: GmailProvider | null = null;
-let calendarProvider: CalendarProvider | null = null;
-/** 현재 세션의 실제 calendar.events scope 보유 여부(데모는 true). */
-let calendarReady = false;
-/** E2E-only: 데모에서 calendarReady 게이트를 강제로 덮어씀(null이면 계산값 사용). */
+/**
+ * multi-account: 한 계정의 런타임 컨텍스트. provider === null ⇔ needsReauth (토큰 복원/갱신 실패
+ * 격리 — 이 계정의 mail IPC는 reject, 다른 계정 무영향). cache는 계정별 SQLite 핸들.
+ */
+export interface AccountContext {
+  email: string;
+  demo: boolean;
+  provider: GmailProvider | null; // null ⇔ needsReauth
+  calendarProvider: CalendarProvider | null;
+  calendarReady: boolean;
+  cache: AccountCache;
+  needsReauth: boolean;
+  unreadCount: number;
+}
+
+const contexts = new Map<string, AccountContext>();
+/** main측 활성 계정 — debug hook 기본 대상 + accounts.json activeEmail 미러(실계정 한정 영속). */
+let activeEmail: string | null = null;
+
+/** E2E-only: 데모에서 calendarReady 게이트를 강제로 덮어씀(null이면 계산값 사용). 전역(활성 데모 대상). */
 let debugCalendarReady: boolean | null = null;
 
-function currentCalendarReady(demo: boolean): boolean {
-  if (debugCalendarReady !== null) return debugCalendarReady;
-  return demo ? true : calendarReady;
+export function getContexts(): AccountContext[] {
+  return [...contexts.values()];
+}
+export function getActiveEmail(): string | null {
+  return activeEmail;
+}
+const activeCtx = (): AccountContext | undefined => (activeEmail ? contexts.get(activeEmail) : undefined);
+
+function requireContext(accountId: string): AccountContext & { provider: GmailProvider } {
+  const ctx = contexts.get(accountId);
+  if (!ctx) throw new Error(`Unknown account ${accountId}`);
+  if (!ctx.provider) throw new Error(`Account needs re-auth: ${accountId}`);
+  return ctx as AccountContext & { provider: GmailProvider };
 }
 
-function requireCalendarProvider(): CalendarProvider {
-  if (!calendarProvider) throw new Error('Not signed in (calendar)');
-  return calendarProvider;
+function requireCalendarProvider(accountId: string): CalendarProvider {
+  const ctx = requireContext(accountId);
+  if (!ctx.calendarProvider) throw new Error('Not signed in (calendar)');
+  return ctx.calendarProvider;
 }
 
-const pendingSends = new Map<string, NodeJS.Timeout>();
+export function accountsSnapshot(): AccountsSnapshot {
+  return {
+    accounts: getContexts().map((c) => ({
+      email: c.email,
+      demo: c.demo,
+      calendarReady: c.demo ? (debugCalendarReady ?? true) : c.calendarReady,
+      unreadCount: c.unreadCount,
+      needsReauth: c.needsReauth,
+    })),
+    activeEmail,
+  };
+}
+
+export function pushAccountsChanged(getWindow: () => BrowserWindow | null): void {
+  getWindow()?.webContents.send('auth:accounts-changed', accountsSnapshot());
+}
+
+function makeRealContext(session: {
+  client: Auth.OAuth2Client;
+  email: string;
+  calendarReady: boolean;
+}): AccountContext {
+  return {
+    email: session.email,
+    demo: false,
+    provider: new RealGmailProvider(session.client, session.email),
+    calendarProvider: new RealCalendarProvider(session.client, session.email),
+    calendarReady: session.calendarReady,
+    cache: new AccountCache(accounts.accountDbPath(session.email)),
+    needsReauth: false,
+    unreadCount: 0,
+  };
+}
+
+function makeReauthContext(email: string): AccountContext {
+  return {
+    email,
+    demo: false,
+    provider: null,
+    calendarProvider: null,
+    calendarReady: false,
+    cache: new AccountCache(accounts.accountDbPath(email)),
+    needsReauth: true,
+    unreadCount: 0,
+  };
+}
+
+function makeDemoContext(email: string): AccountContext {
+  return {
+    email,
+    demo: true,
+    provider: new MockGmailProvider(email),
+    calendarProvider: new MockCalendarProvider(),
+    calendarReady: true,
+    cache: new AccountCache(accounts.accountDbPath(email)),
+    needsReauth: false,
+    unreadCount: 0,
+  };
+}
+
+/** 앱 부팅: accounts.json의 전 실계정 컨텍스트 복원. 토큰 실패 계정은 needsReauth로 격리(부분 실패 허용). */
+export async function initAccounts(): Promise<void> {
+  const file = accounts.readAccounts();
+  for (const a of file.accounts) {
+    if (a.demo) continue; // 데모는 비영속(D3) — 방어적 스킵
+    try {
+      const session = await auth.getAuthorizedClient(a.email);
+      contexts.set(a.email, session ? makeRealContext(session) : makeReauthContext(a.email));
+    } catch (err) {
+      console.warn('[accounts] restore failed, marking needsReauth:', a.email, err);
+      contexts.set(a.email, makeReauthContext(a.email));
+    }
+  }
+  activeEmail =
+    file.activeEmail && contexts.has(file.activeEmail)
+      ? file.activeEmail
+      : (getContexts()[0]?.email ?? null);
+}
 
 // E2E-only: consumed (one-shot) by the next mail:modify-labels or mail:snooze call —
 // only ever set true via the ZENMAIL_E2E_PORT-gated mail:debug-fail-next-modify handler below.
@@ -64,34 +182,24 @@ async function maybeInjectDebugFailure(): Promise<void> {
   throw new Error('injected failure');
 }
 
-export function getProvider(): GmailProvider | null {
-  return provider;
-}
-
-async function restoreSession(): Promise<AccountInfo | null> {
-  const session = await auth.getAuthorizedClient();
-  if (session) {
-    provider = new RealGmailProvider(session.client, session.email);
-    calendarProvider = new RealCalendarProvider(session.client, session.email);
-    calendarReady = session.calendarReady;
-    return { email: session.email, demo: false, calendarReady: currentCalendarReady(false) };
-  }
-  return null;
-}
-
-function requireProvider(): GmailProvider {
-  if (!provider) throw new Error('Not signed in');
-  return provider;
-}
+const pendingSends = new Map<string, { timer: NodeJS.Timeout; accountId: string }>();
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
+  // 전 계정 합산 pending 집계를 sync-state에 등록(sync-state는 cache를 직접 알지 않는다).
+  registerPendingCounter(() =>
+    getContexts().reduce(
+      (n, c) => n + c.cache.mutationQueueDepth() + c.cache.overdueScheduledSendCount(Date.now()),
+      0
+    )
+  );
+
   // F6 CP5 (D1): mutation-origin diff push. Re-read the affected row from cache (its optimistic
   // label delta already applied) and ship it as an upsert. The renderer decides upsert-vs-remove
   // against its *current* view label, so main never needs to know which list is on screen. A thread
   // absent from cache is skipped (60s poll converges). removals[] is reserved for server-vanished ids.
-  const pushThreadUpsert = (threadId: string) => {
-    const summary = cache.getThreadSummary(threadId);
-    if (summary) notifyThreadsChanged(getWindow, { upserts: [summary], removals: [] });
+  const pushThreadUpsert = (ctx: AccountContext, threadId: string) => {
+    const summary = ctx.cache.getThreadSummary(threadId);
+    if (summary) notifyThreadsChanged(getWindow, { accountId: ctx.email, upserts: [summary], removals: [] });
   };
 
   /**
@@ -109,6 +217,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * failure — letting snooze persist its local truth (addSnooze) without polluting the rollback.
    */
   async function attemptOrEnqueue(
+    ctx: AccountContext & { provider: GmailProvider },
     kind: string,
     threadId: string,
     addLabelIds: string[],
@@ -117,11 +226,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     doProvider: () => Promise<void>,
     onEnqueue?: () => void
   ): Promise<void> {
-    cache.applyLabelDelta(threadId, addLabelIds, removeLabelIds);
+    ctx.cache.applyLabelDelta(threadId, addLabelIds, removeLabelIds);
 
-    if (cache.hasPendingMutations(threadId)) {
+    if (ctx.cache.hasPendingMutations(threadId)) {
       onEnqueue?.();
-      cache.enqueueMutation(kind, threadId, payload, Date.now());
+      ctx.cache.enqueueMutation(kind, threadId, payload, Date.now());
       emitSyncState(getWindow);
       return;
     }
@@ -129,55 +238,88 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     try {
       await doProvider();
       setOnline(true, () => emitSyncState(getWindow));
-      pushThreadUpsert(threadId);
+      pushThreadUpsert(ctx, threadId);
     } catch (err) {
       if (classifyError(err) === 'permanent') {
         // The renderer rolls its store back on reject (F4) — mirror that in the cache, or a
         // cold read after a permanent failure would paint the never-applied optimistic state (D3).
-        cache.applyLabelDelta(threadId, removeLabelIds, addLabelIds);
+        ctx.cache.applyLabelDelta(threadId, removeLabelIds, addLabelIds);
         throw err;
       }
       onEnqueue?.();
-      cache.enqueueMutation(kind, threadId, payload, Date.now());
+      ctx.cache.enqueueMutation(kind, threadId, payload, Date.now());
       setOnline(false);
       emitSyncState(getWindow);
     }
   }
 
-  ipcMain.handle('auth:get-account', async (): Promise<AccountInfo | null> => {
-    if (provider) return { email: provider.email, demo: provider.demo, calendarReady: currentCalendarReady(provider.demo) };
-    return restoreSession();
-  });
+  // --- account lifecycle ---
 
-  ipcMain.handle('auth:sign-in', async (): Promise<AccountInfo> => {
+  ipcMain.handle('auth:list-accounts', async (): Promise<AccountsSnapshot> => accountsSnapshot());
+
+  ipcMain.handle('auth:add-account', async (): Promise<AccountsSnapshot> => {
     const email = await auth.signIn();
-    const session = await auth.getAuthorizedClient();
+    const session = await auth.getAuthorizedClient(email);
     if (!session) throw new Error('Sign-in did not persist a session');
-    provider = new RealGmailProvider(session.client, email);
-    calendarProvider = new RealCalendarProvider(session.client, email);
-    calendarReady = session.calendarReady;
-    return { email, demo: false, calendarReady: currentCalendarReady(false) };
+    contexts.get(email)?.cache.close(); // 재로그인(reauth)이면 기존 핸들 교체
+    contexts.set(email, makeRealContext(session));
+    accounts.addStoredAccount(email);
+    if (!activeEmail) {
+      activeEmail = email;
+      accounts.setActiveEmail(email);
+    }
+    pushAccountsChanged(getWindow);
+    return accountsSnapshot();
   });
 
-  ipcMain.handle('auth:sign-in-demo', async (): Promise<AccountInfo> => {
-    provider = new MockGmailProvider();
-    calendarProvider = new MockCalendarProvider();
-    calendarReady = true;
-    debugCalendarReady = null; // 새 데모 세션은 게이트 오버라이드를 초기화(E3 재로그인 복귀)
-    return { email: provider.email, demo: true, calendarReady: true };
+  ipcMain.handle('auth:sign-in-demo', async (): Promise<AccountsSnapshot> => {
+    for (const email of DEMO_ACCOUNT_EMAILS) {
+      if (!contexts.has(email)) contexts.set(email, makeDemoContext(email));
+    }
+    activeEmail = DEMO_ACCOUNT_EMAILS[0]; // demo@zenmail.app — accounts.json엔 미영속(D3)
+    debugCalendarReady = null; // 새 데모 세션은 게이트 오버라이드 초기화(기존 E3 시맨틱 보존)
+    pushAccountsChanged(getWindow);
+    return accountsSnapshot();
   });
 
-  ipcMain.handle('auth:sign-out', async () => {
-    await auth.signOut();
-    provider = null;
-    calendarProvider = null;
-    calendarReady = false;
-    cache.clearFollowups();
-    cache.clearLocalDeltaTracking();
+  ipcMain.handle('auth:remove-account', async (_e, email: string): Promise<AccountsSnapshot> => {
+    const ctx = contexts.get(email);
+    if (ctx) {
+      if (!ctx.demo) await auth.signOut(email);
+      ctx.cache.close();
+      contexts.delete(email);
+      // 계정 DB 파일 정리(원본 파괴는 명시적 제거 의도가 있는 이 경로에서만)
+      for (const ext of ['', '-wal', '-shm']) {
+        fs.rmSync(accounts.accountDbPath(email) + ext, { force: true });
+      }
+    }
+    const file = accounts.removeStoredAccount(email);
+    if (activeEmail === email) activeEmail = file.activeEmail ?? getContexts()[0]?.email ?? null;
+    pushAccountsChanged(getWindow);
+    return accountsSnapshot();
   });
 
-  ipcMain.handle('mail:fetch-threads', async (_e, req: FetchThreadsRequest) => {
-    const p = requireProvider();
+  ipcMain.handle('auth:set-active-account', async (_e, email: string) => {
+    if (!contexts.has(email)) throw new Error(`Unknown account ${email}`);
+    activeEmail = email;
+    accounts.setActiveEmail(email); // 미등록(데모) email이면 내부에서 no-op
+  });
+
+  // --- global settings (테마 등 — 계정 DB 아님) ---
+
+  ipcMain.handle('settings:get-global', async (_e, key: string): Promise<string | null> => {
+    return accounts.getGlobalSetting(key);
+  });
+
+  ipcMain.handle('settings:set-global', async (_e, key: string, value: string) => {
+    accounts.setGlobalSetting(key, value);
+  });
+
+  // --- mail ---
+
+  ipcMain.handle('mail:fetch-threads', async (_e, accountId: string, req: FetchThreadsRequest) => {
+    const ctx = requireContext(accountId);
+    const p = ctx.provider;
 
     // SWR cache-first cold read (F6 CP6, D11 sibling of fetch-thread). Only plain label reads are
     // eligible: search (q) must hit the provider FTS, and pagination (pageToken) must stay strictly
@@ -185,7 +327,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const swrEligible = !req.q && !req.pageToken;
     if (swrEligible) {
       const viewLabel = req.labelIds?.[0] ?? 'INBOX';
-      const cached = cache.getThreads(viewLabel);
+      const cached = ctx.cache.getThreads(viewLabel);
       if (cached.length > 0) {
         // Warm cache: return the cached page immediately, then revalidate in the background and ship
         // a pure diff (renderer merges via applyThreadsDiff, zero refetch).
@@ -212,22 +354,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           try {
             const fresh = await p.listThreads(req);
             const guarded = (id: string) =>
-              cache.hasPendingMutations(id) ||
-              cache.localDeltaSince(id, fetchStartedAt - GRACE_MS);
+              ctx.cache.hasPendingMutations(id) ||
+              ctx.cache.localDeltaSince(id, fetchStartedAt - GRACE_MS);
             // 뷰 전체 캐시 행을 stripping 전에 열거(removal 후보 소스).
-            const viewRows = cache.getViewRows(viewLabel);
+            const viewRows = ctx.cache.getViewRows(viewLabel);
             const { upserts, removals, freshRowsToCache } = computeRevalidateDiff(cached, fresh, viewRows, {
               guarded,
-              isSnoozed: cache.isSnoozed,
+              isSnoozed: (id) => ctx.cache.isSnoozed(id),
             });
-            cache.upsertThreads(freshRowsToCache);
+            ctx.cache.upsertThreads(freshRowsToCache);
             for (const id of removals) {
               // 행 삭제가 아니라 뷰 라벨 스트립(INBOX 뷰는 INBOX+STARRED 동시) — FTS·타 라벨·undo용
               // 행 보존, origin:'server'로 이 스트립이 다음 가드를 오염시키지 않게 한다(D4/D3).
-              cache.applyLabelDelta(id, [], viewMembershipLabels(viewLabel), { origin: 'server' });
+              ctx.cache.applyLabelDelta(id, [], viewMembershipLabels(viewLabel), { origin: 'server' });
             }
             if (upserts.length || removals.length) {
-              notifyThreadsChanged(getWindow, { upserts, removals, needsRefetch: false });
+              notifyThreadsChanged(getWindow, { accountId: ctx.email, upserts, removals, needsRefetch: false });
             }
           } catch (err) {
             // offline/transient — the cached list is already on screen, so stay quiet. Still an
@@ -241,37 +383,38 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     // Cold miss / search / pagination — fetch from the provider, cache it, return (unchanged flow).
     const res = await p.listThreads(req);
-    cache.upsertThreads(res.threads);
+    ctx.cache.upsertThreads(res.threads);
     return res;
   });
 
-  ipcMain.handle('mail:fetch-thread', async (_e, threadId: string) => {
-    const p = requireProvider();
+  ipcMain.handle('mail:fetch-thread', async (_e, accountId: string, threadId: string) => {
+    const ctx = requireContext(accountId);
+    const p = ctx.provider;
 
     // opportunistic follow-up resolution (D7): reuse an already-fetched detail, no extra API call.
     const resolveFollowup = (detail: ThreadDetail) => {
-      const followup = cache.getFollowup(threadId);
+      const followup = ctx.cache.getFollowup(threadId);
       if (followup && followup.status === 'pending') {
         const meEmail = p.email.toLowerCase();
         const replied = detail.messages.some(
           (m) => m.date > followup.baselineAt && m.from.email.toLowerCase() !== meEmail
         );
-        if (replied) cache.removeFollowup(threadId);
+        if (replied) ctx.cache.removeFollowup(threadId);
       }
     };
 
-    const cached = cache.getCachedThreadDetail(threadId);
+    const cached = ctx.cache.getCachedThreadDetail(threadId);
     if (cached) {
       // SWR cache-hit (D11): return the cached detail immediately, revalidate in the background.
       void (async () => {
         try {
           const fresh = await p.getThread(threadId);
-          cache.cacheThreadDetail(fresh);
+          ctx.cache.cacheThreadDetail(fresh);
           resolveFollowup(fresh);
           // JSON.stringify diff is acceptable at detail size (tens of messages); push
           // mail:thread-changed only when the fresh detail actually differs from what we returned.
           if (JSON.stringify(fresh) !== JSON.stringify(cached)) {
-            getWindow()?.webContents.send('mail:thread-changed', { threadId, detail: fresh });
+            getWindow()?.webContents.send('mail:thread-changed', { accountId: ctx.email, threadId, detail: fresh });
           }
         } catch (err) {
           // offline etc. — the cached detail is already in the UI, so stay quiet. A transient
@@ -284,23 +427,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
     // cold miss — fetch from the provider, cache it, resolve the follow-up, return (unchanged flow).
     const detail = await p.getThread(threadId);
-    cache.cacheThreadDetail(detail);
+    ctx.cache.cacheThreadDetail(detail);
     resolveFollowup(detail);
     return detail;
   });
 
-  ipcMain.handle('mail:fetch-labels', async () => {
-    return requireProvider().listLabels();
+  ipcMain.handle('mail:fetch-labels', async (_e, accountId: string) => {
+    return requireContext(accountId).provider.listLabels();
   });
 
-  ipcMain.handle('mail:send', async (_e, req: SendRequest): Promise<SendReceipt> => {
-    const p = requireProvider();
+  ipcMain.handle('mail:send', async (_e, accountId: string, req: SendRequest): Promise<SendReceipt> => {
+    const ctx = requireContext(accountId);
+    const p = ctx.provider;
     const sendId = crypto.randomUUID();
 
     if (req.sendAt) {
       // schedule send: persist and let the daemon fire it
       const sendAt = new Date(req.sendAt).getTime();
-      cache.addScheduledSend(sendId, req, sendAt);
+      ctx.cache.addScheduledSend(sendId, req, sendAt);
       return { sendId, sendAt };
     }
 
@@ -318,12 +462,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         // tells the renderer so it can reconcile (no optimistic send-state to roll back today, but
         // the compose UI already closed — surface it via the shared permanent-failure channel).
         if (classifyError(err) === 'transient') {
-          cache.addScheduledSend(sendId, req, Date.now());
+          ctx.cache.addScheduledSend(sendId, req, Date.now());
           setOnline(false);
           emitSyncState(getWindow);
         } else {
           console.error('[send] failed', err);
           getWindow()?.webContents.send('mail:mutation-permanent-failed', {
+            accountId: ctx.email,
             threadId: req.threadId ?? null,
             kind: 'send',
           });
@@ -333,7 +478,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       try {
         // 등록은 send 성공 직후 — 뒤따르는 archive가 실패해도 리마인더는 유실되지 않아야 한다
         if (req.remindDays) {
-          cache.addFollowup(result.threadId, Date.now(), Date.now() + req.remindDays * DAY_MS);
+          ctx.cache.addFollowup(result.threadId, Date.now(), Date.now() + req.remindDays * DAY_MS);
         }
         if (req.archive && req.threadId) {
           await p.modifyThread({
@@ -347,38 +492,40 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           // SWR read, and upsertThreads(fresh) can only heal *appearing* threads (re-writes rows) —
           // it never deletes, so a "should-disappear" archive left stale here would resurface on a
           // warm-cache read. Removing INBOX from the cache row now makes getThreads exclude it.
-          cache.applyLabelDelta(req.threadId, [], ['INBOX']);
+          ctx.cache.applyLabelDelta(req.threadId, [], ['INBOX']);
         }
         // Send completion is rare (≤1 per sent mail, 10s after the click) and mutates state the
         // renderer can't diff locally: a freshly-created thread id (archive) and a main-side followup
         // registration (remindDays) that the followup banner reads from listFollowups. So take the
         // needsRefetch path (refresh + refreshFollowups) rather than a pure diff — off the hot path,
         // this preserves the old threads-updated→refreshFollowups coupling exactly.
-        notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
+        notifyThreadsChanged(getWindow, { accountId: ctx.email, upserts: [], removals: [], needsRefetch: true });
       } catch (err) {
         // send itself succeeded — a failure here (followup/archive) must NOT spill to
         // scheduled_sends (that would re-send and double-deliver the message).
         console.error('[send] failed', err);
       }
     }, UNDO_WINDOW_MS);
-    pendingSends.set(sendId, timer);
+    pendingSends.set(sendId, { timer, accountId: ctx.email });
     return { sendId, sendAt };
   });
 
-  ipcMain.handle('mail:cancel-send', async (_e, sendId: string): Promise<boolean> => {
-    const timer = pendingSends.get(sendId);
-    if (timer) {
-      clearTimeout(timer);
+  ipcMain.handle('mail:cancel-send', async (_e, accountId: string, sendId: string): Promise<boolean> => {
+    const entry = pendingSends.get(sendId);
+    if (entry) {
+      clearTimeout(entry.timer);
       pendingSends.delete(sendId);
       return true;
     }
     // scheduled send?
-    cache.removeScheduledSend(sendId);
+    requireContext(accountId).cache.removeScheduledSend(sendId);
     return true;
   });
 
-  ipcMain.handle('mail:modify-labels', async (_e, req: ModifyLabelsRequest) => {
+  ipcMain.handle('mail:modify-labels', async (_e, accountId: string, req: ModifyLabelsRequest) => {
+    const ctx = requireContext(accountId);
     await attemptOrEnqueue(
+      ctx,
       'modifyLabels',
       req.threadId,
       req.addLabelIds,
@@ -386,14 +533,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       { threadId: req.threadId, addLabelIds: req.addLabelIds, removeLabelIds: req.removeLabelIds },
       async () => {
         await maybeInjectDebugFailure();
-        await requireProvider().modifyThread(req);
+        await ctx.provider.modifyThread(req);
       }
     );
   });
 
-  ipcMain.handle('mail:snooze', async (_e, req: SnoozeRequest) => {
+  ipcMain.handle('mail:snooze', async (_e, accountId: string, req: SnoozeRequest) => {
+    const ctx = requireContext(accountId);
     const until = new Date(req.until).getTime();
     await attemptOrEnqueue(
+      ctx,
       'snooze',
       req.threadId,
       // snooze label id is unknown until the provider resolves it (may fail offline), so the
@@ -404,36 +553,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       req,
       async () => {
         await maybeInjectDebugFailure();
-        const p = requireProvider();
-        const snoozeLabel = await p.snoozeLabelId();
-        await p.modifyThread({
+        const snoozeLabel = await ctx.provider.snoozeLabelId();
+        await ctx.provider.modifyThread({
           threadId: req.threadId,
           addLabelIds: [snoozeLabel],
           removeLabelIds: ['INBOX'],
         });
-        cache.addSnooze(req.threadId, until);
+        ctx.cache.addSnooze(req.threadId, until);
       },
       // snooze time is local truth — persist it on the queue paths too (transient/barrier), but
       // not on permanent failure (rethrow happens before onEnqueue), preserving TC-SP rollback.
-      () => cache.addSnooze(req.threadId, until)
+      () => ctx.cache.addSnooze(req.threadId, until)
     );
   });
 
-  ipcMain.handle('mail:search-local', async (_e, q: string) => {
-    return cache.searchLocal(q);
+  ipcMain.handle('mail:search-local', async (_e, accountId: string, q: string) => {
+    return requireContext(accountId).cache.searchLocal(q);
   });
 
-  ipcMain.handle('mail:contacts', async (_e, prefix: string) => {
-    return cache.listContacts(prefix);
+  ipcMain.handle('mail:contacts', async (_e, accountId: string, prefix: string) => {
+    return requireContext(accountId).cache.listContacts(prefix);
   });
 
-  ipcMain.handle('mail:get-splits', async (): Promise<SplitDefinition[]> => {
-    const existing = cache.getSplits();
+  ipcMain.handle('mail:get-splits', async (_e, accountId: string): Promise<SplitDefinition[]> => {
+    const ctx = requireContext(accountId);
+    const existing = ctx.cache.getSplits();
     if (existing.length > 0) return existing;
 
-    const accountDomain = provider?.email.split('@')[1] ?? '';
-    // demo mode only: seed VIP with a sender from the mock data so the split is demonstrable out of the box
-    const vipEmails = provider?.demo ? [DEMO_VIP_EMAIL] : [];
+    const accountDomain = ctx.provider.email.split('@')[1] ?? '';
+    // demo mode only: seed VIP with a sender from the mock data so the split is demonstrable out of the box.
+    // work 데모 계정엔 demo VIP 발신자가 없으므로 시드하지 않는다(계정 오염 방지).
+    const vipEmails = ctx.demo && ctx.email === 'demo@zenmail.app' ? [DEMO_VIP_EMAIL] : [];
     const seeded: SplitDefinition[] = [
       {
         id: crypto.randomUUID(),
@@ -457,41 +607,40 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         rule: { kind: 'newsletter' },
       },
     ];
-    // 로그인 전 호출이면 저장하지 않는다 — Team 도메인이 빈 채로 영구 시드되는 것 방지
-    if (provider) cache.replaceSplits(seeded);
+    ctx.cache.replaceSplits(seeded);
     return seeded;
   });
 
-  ipcMain.handle('mail:set-splits', async (_e, defs: SplitDefinition[]) => {
-    cache.replaceSplits(defs);
+  ipcMain.handle('mail:set-splits', async (_e, accountId: string, defs: SplitDefinition[]) => {
+    requireContext(accountId).cache.replaceSplits(defs);
   });
 
-  ipcMain.handle('mail:get-setting', async (_e, key: string): Promise<string | null> => {
-    return cache.getSetting(key);
+  ipcMain.handle('mail:get-setting', async (_e, accountId: string, key: string): Promise<string | null> => {
+    return requireContext(accountId).cache.getSetting(key);
   });
 
-  ipcMain.handle('mail:set-setting', async (_e, key: string, value: string) => {
-    cache.setSetting(key, value);
+  ipcMain.handle('mail:set-setting', async (_e, accountId: string, key: string, value: string) => {
+    requireContext(accountId).cache.setSetting(key, value);
   });
 
-  ipcMain.handle('mail:add-followup', async (_e, threadId: string, remindDays: number) => {
+  ipcMain.handle('mail:add-followup', async (_e, accountId: string, threadId: string, remindDays: number) => {
     await maybeInjectDebugFailure();
     const now = Date.now();
-    cache.addFollowup(threadId, now, now + remindDays * DAY_MS);
+    requireContext(accountId).cache.addFollowup(threadId, now, now + remindDays * DAY_MS);
   });
 
-  ipcMain.handle('mail:cancel-followup', async (_e, threadId: string) => {
+  ipcMain.handle('mail:cancel-followup', async (_e, accountId: string, threadId: string) => {
     await maybeInjectDebugFailure();
-    cache.removeFollowup(threadId);
+    requireContext(accountId).cache.removeFollowup(threadId);
   });
 
-  ipcMain.handle('mail:dismiss-followup', async (_e, threadId: string) => {
+  ipcMain.handle('mail:dismiss-followup', async (_e, accountId: string, threadId: string) => {
     await maybeInjectDebugFailure();
-    cache.removeFollowup(threadId);
+    requireContext(accountId).cache.removeFollowup(threadId);
   });
 
-  ipcMain.handle('mail:list-followups', async (): Promise<FollowupInfo[]> => {
-    return cache.listFollowups();
+  ipcMain.handle('mail:list-followups', async (_e, accountId: string): Promise<FollowupInfo[]> => {
+    return requireContext(accountId).cache.listFollowups();
   });
 
   // D9 accelerator: the renderer's `online` event forces an immediate drain attempt (CP3 daemon
@@ -501,26 +650,30 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     triggerReconnect();
   });
 
-  ipcMain.handle('calendar:list-events', async (_e, timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]> => {
-    return requireCalendarProvider().listEvents(timeMinISO, timeMaxISO);
+  // --- calendar ---
+
+  ipcMain.handle('calendar:list-events', async (_e, accountId: string, timeMinISO: string, timeMaxISO: string): Promise<CalendarEvent[]> => {
+    return requireCalendarProvider(accountId).listEvents(timeMinISO, timeMaxISO);
   });
 
-  ipcMain.handle('calendar:respond', async (_e, iCalUID: string, response: RsvpResponse): Promise<void> => {
-    await requireCalendarProvider().respondToEvent(iCalUID, response);
+  ipcMain.handle('calendar:respond', async (_e, accountId: string, iCalUID: string, response: RsvpResponse): Promise<void> => {
+    await requireCalendarProvider(accountId).respondToEvent(iCalUID, response);
   });
 
-  ipcMain.handle('calendar:create', async (_e, input: CreateEventInput): Promise<CalendarEvent> => {
-    return requireCalendarProvider().createEvent(input);
+  ipcMain.handle('calendar:create', async (_e, accountId: string, input: CreateEventInput): Promise<CalendarEvent> => {
+    return requireCalendarProvider(accountId).createEvent(input);
   });
 
   // E2E-only debug IPC — never registered unless ZENMAIL_E2E_PORT is set (see e2e/).
+  // 시그니처 무변경(내부적으로 main의 activeEmail 컨텍스트 대상, D6).
   if (process.env.ZENMAIL_E2E_PORT) {
     ipcMain.handle('mail:debug-simulate-reply', async (_e, threadId: string) => {
-      if (provider instanceof MockGmailProvider) {
-        provider.simulateReply(threadId);
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) {
+        ctx.provider.simulateReply(threadId);
         // the new inbound message lives only in the mock provider, not the cache — the renderer
         // must refetch to see it (needsRefetch), same as the daemon-origin path.
-        notifyThreadsChanged(getWindow, { upserts: [], removals: [], needsRefetch: true });
+        notifyThreadsChanged(getWindow, { accountId: ctx.email, upserts: [], removals: [], needsRefetch: true });
       }
     });
 
@@ -529,8 +682,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     });
 
     ipcMain.handle('mail:debug-add-followup-due-now', async (_e, threadId: string) => {
+      const ctx = activeCtx();
+      if (!ctx) return;
       const now = Date.now();
-      cache.addFollowup(threadId, now, now);
+      ctx.cache.addFollowup(threadId, now, now);
     });
 
     ipcMain.handle('mail:debug-fail-next-modify', async () => {
@@ -541,45 +696,53 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // thread — reaches the daemon drain loop (unlike debugFailNextModify, which is scoped to the
     // modify-labels/snooze IPC handlers), so a queued offline mutation can be dropped on drain.
     ipcMain.handle('mail:debug-fail-next-modify-for-thread', async (_e, threadId: string) => {
-      if (provider instanceof MockGmailProvider) provider.failNextModifyForThread(threadId);
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) ctx.provider.failNextModifyForThread(threadId);
     });
 
     // D13: offline simulation is a *coded* throw (ECONNRESET) from the mock provider, distinct from
     // the generic (permanent) debug-fail injection above. Toggling this is the only way the write
-    // path diverges from its pre-CP2 behavior.
+    // path diverges from its pre-CP2 behavior. 전 컨텍스트의 mock provider에 일괄 적용.
     ipcMain.handle('mail:debug-set-online', async (_e, v: boolean) => {
-      if (provider instanceof MockGmailProvider) provider.setOffline(!v);
+      for (const c of getContexts()) {
+        if (c.provider instanceof MockGmailProvider) c.provider.setOffline(!v);
+      }
       setOnline(v, () => emitSyncState(getWindow));
       emitSyncState(getWindow);
     });
 
+    // 전 계정 합산 큐 깊이.
     ipcMain.handle('mail:debug-queue-depth', async (): Promise<number> => {
-      return cache.mutationQueueDepth();
+      return getContexts().reduce((n, c) => n + c.cache.mutationQueueDepth(), 0);
     });
 
     // TC-SY-D1: expose the mock provider's network-method call counters so E2E can prove that a
     // mutation's diff-push (notifyThreadsChanged upsert) never triggers a list refetch.
     ipcMain.handle('mail:debug-provider-calls', async (): Promise<Record<string, number>> => {
-      if (provider instanceof MockGmailProvider) return { ...provider.callCounts };
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) return { ...ctx.provider.callCounts };
       return {};
     });
 
     // inbox-zero-starred (TC-IZ-A1/A2): "Gmail 웹에서 아카이브" 재현 — mock provider 저장소에서만
     // INBOX를 벗긴다(캐시·modifyThread 부기 우회). 다음 revalidate가 캐시/리스트에서 수렴시켜야 한다.
     ipcMain.handle('mail:debug-external-archive', async (_e, threadId: string) => {
-      if (provider instanceof MockGmailProvider) provider.externalArchive(threadId);
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) ctx.provider.externalArchive(threadId);
     });
 
     ipcMain.handle('calendar:debug-state', async (): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }> => {
-      if (calendarProvider instanceof MockCalendarProvider) return calendarProvider.snapshot();
+      const ctx = activeCtx();
+      if (ctx?.calendarProvider instanceof MockCalendarProvider) return ctx.calendarProvider.snapshot();
       return { events: [], responses: {} };
     });
 
     ipcMain.handle('calendar:debug-fail-next', async () => {
-      if (calendarProvider instanceof MockCalendarProvider) calendarProvider.failNextCalendarCall();
+      const ctx = activeCtx();
+      if (ctx?.calendarProvider instanceof MockCalendarProvider) ctx.calendarProvider.failNextCalendarCall();
     });
 
-    // 데모 calendarReady 게이트 시뮬레이션. 렌더러가 다음 auth:get-account(재시작/재로그인)에서 읽는다.
+    // 데모 calendarReady 게이트 시뮬레이션. 렌더러가 다음 listAccounts(재시작/재로그인)에서 읽는다.
     ipcMain.handle('calendar:debug-set-ready', async (_e, v: boolean) => {
       debugCalendarReady = v;
     });

@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { app, BrowserWindow, shell } from 'electron';
 import started from 'electron-squirrel-startup';
-import { openCache, getSetting } from './cache';
-import { registerIpc, getProvider } from './ipc';
+import { getGlobalSetting, migrateLegacyLayout } from './accounts';
+import { registerIpc, getContexts, initAccounts } from './ipc';
 import { startSnoozeDaemon, stopSnoozeDaemon } from './snooze';
 
 if (started) app.quit();
@@ -20,7 +20,7 @@ const createWindow = () => {
     height: 840,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: getSetting('theme') === 'dark' ? '#0f0f0f' : '#ffffff',
+    backgroundColor: getGlobalSetting('theme') === 'dark' ? '#0f0f0f' : '#ffffff',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
@@ -60,10 +60,11 @@ const createWindow = () => {
   });
 };
 
-app.whenReady().then(() => {
-  openCache();
+app.whenReady().then(async () => {
+  migrateLegacyLayout();
+  await initAccounts();
   registerIpc(() => mainWindow);
-  startSnoozeDaemon(getProvider, () => mainWindow);
+  startSnoozeDaemon(getContexts, () => mainWindow);
   createWindow();
 
   app.on('activate', () => {
