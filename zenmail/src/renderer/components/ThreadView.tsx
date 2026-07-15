@@ -176,7 +176,8 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
     return () => {
       cancelled = true;
     };
-  }, [message.id, message.attachments, fetchAttachmentImage]);
+  // message.attachments는 deps에서 의도적으로 제외 — SWR revalidate로 참조가 매번 바뀌어도 message.id가 같으면 첨부 내용은 불변
+  }, [message.id, fetchAttachmentImage]);
 
   const { srcDoc, hasQuoted } = useMemo(
     () => prepareHtml(message, { showQuoted, allowImages, theme }, inlineImages),
