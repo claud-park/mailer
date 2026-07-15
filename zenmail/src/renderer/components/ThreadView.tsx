@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMailStore, activeAccount, quoteHtml, CALENDAR_REAUTH_MSG } from '../store/mail';
-import type { MessageDetail, InviteInfo, RsvpResponse } from '../../shared/types';
+import type { AttachmentInfo, MessageDetail, InviteInfo, RsvpResponse } from '../../shared/types';
 import { labelChipFallback } from '../lib/theme';
 
 const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
@@ -8,7 +8,8 @@ const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
 /** Sanitize + prepare message HTML for the sandboxed frame. */
 function prepareHtml(
   message: MessageDetail,
-  opts: { showQuoted: boolean; allowImages: boolean; theme: 'light' | 'dark' }
+  opts: { showQuoted: boolean; allowImages: boolean; theme: 'light' | 'dark' },
+  inlineImages: Map<string, string>
 ): { srcDoc: string; hasQuoted: boolean } {
   const raw = message.bodyHtml || `<pre style="white-space:pre-wrap">${message.bodyText}</pre>`;
   const doc = new DOMParser().parseFromString(raw, 'text/html');
@@ -19,6 +20,14 @@ function prepareHtml(
     for (const attr of [...el.attributes]) {
       if (attr.name.startsWith('on')) el.removeAttribute(attr.name);
     }
+  });
+
+  // 인라인 cid: 이미지 치환(D7) — remote-image 게이트와 무관하게 항상 로드. 아직 도착 전이면
+  // 빈 상태(alt) 유지. CSP img-src는 data:를 항상 허용하므로 별도 CSP 변경 불요.
+  doc.querySelectorAll('img[src^="cid:"]').forEach((img) => {
+    const cid = (img.getAttribute('src') ?? '').slice(4).replace(/^<|>$/g, '');
+    const dataUri = inlineImages.get(cid);
+    if (dataUri) img.setAttribute('src', dataUri);
   });
 
   const quoted = doc.querySelectorAll('.gmail_quote, blockquote');
@@ -48,13 +57,36 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
   const [showQuoted, setShowQuoted] = useState(false);
   const [allowImages, setAllowImages] = useState(false);
   const [height, setHeight] = useState(120);
+  const [inlineImages, setInlineImages] = useState<Map<string, string>>(new Map());
   const frameRef = useRef<HTMLIFrameElement>(null);
 
   const theme = useMailStore((s) => s.theme);
+  const fetchAttachmentImage = useMailStore((s) => s.fetchAttachmentImage);
+
+  // 인라인 이미지 mimetype 첨부만 mount 시 병렬 fetch(D6). 도착하는 대로 contentId→dataUri 갱신 →
+  // srcDoc 재계산(useMemo deps에 inlineImages). 실패는 조용히 스킵(cid는 alt로 남음).
+  useEffect(() => {
+    const inline = (message.attachments ?? []).filter(
+      (a) => a.inline && a.contentId && a.mimeType.startsWith('image/')
+    );
+    if (inline.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      inline.map(async (a) => {
+        const res = await fetchAttachmentImage(message.id, a.attachmentId, a.mimeType);
+        if (!cancelled && 'dataUri' in res && a.contentId) {
+          setInlineImages((prev) => new Map(prev).set(a.contentId!, res.dataUri));
+        }
+      })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [message.id, message.attachments, fetchAttachmentImage]);
 
   const { srcDoc, hasQuoted } = useMemo(
-    () => prepareHtml(message, { showQuoted, allowImages, theme }),
-    [message, showQuoted, allowImages, theme]
+    () => prepareHtml(message, { showQuoted, allowImages, theme }, inlineImages),
+    [message, showQuoted, allowImages, theme, inlineImages]
   );
 
   const hasRemoteImages = useMemo(

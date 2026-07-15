@@ -209,6 +209,11 @@ interface MailState {
   cancelFollowup(threadId?: string): Promise<void>;
   dismissFollowup(threadId?: string): Promise<void>;
   showToast(msg: string): void;
+  fetchAttachmentImage(
+    messageId: string,
+    attachmentId: string,
+    mimeType: string
+  ): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
   respondToInvite(iCalUID: string, response: RsvpResponse): Promise<void>;
   openAgenda(): Promise<void>;
   closeAgenda(): void;
@@ -1202,6 +1207,18 @@ export const useMailStore = create<MailState>((set, get) => {
       setTimeout(() => {
         if (get().toast === msg) set({ toast: null });
       }, 2500);
+    },
+
+    async fetchAttachmentImage(messageId, attachmentId, mimeType) {
+      const a = aid(get());
+      if (!a) return { error: 'no account' };
+      try {
+        // IPC 핸들러가 실패를 {error}로 흡수하지만, needsReauth 등 throw 경로도 방어한다.
+        return await api().getAttachmentImage(a, messageId, attachmentId, mimeType);
+      } catch (err) {
+        console.error('getAttachmentImage failed', err);
+        return { error: String(err) };
+      }
     },
 
     async respondToInvite(iCalUID, response) {
