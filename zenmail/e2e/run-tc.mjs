@@ -34,6 +34,19 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Best-effort temp user-data-dir cleanup. A just-killed Electron helper process can still be
+ *  flushing a WAL/lock file for a few ms after pkill returns (SIGTERM is not instant), which
+ *  races rmSync's recursive directory walk into an ENOTEMPTY that would otherwise crash the
+ *  whole harness process over what is purely advisory /tmp housekeeping (the OS reaps /tmp
+ *  regardless) — never worth losing an entire run's results over. */
+function rmDirBestEffort(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    console.error(`[harness] non-fatal: cleanup of ${dir} failed (leaked to OS /tmp reaper):`, err.message);
+  }
+}
+
 async function waitFor(fn, { timeout = 5000, interval = 150, desc = '' } = {}) {
   const start = Date.now();
   let lastErr;
@@ -526,6 +539,33 @@ async function tryCalScenario(page, name, fn) {
 }
 
 // ---------------------------------------------------------------------------
+// attachments helpers
+// ---------------------------------------------------------------------------
+
+async function failNextAttachment(page) {
+  await page.evaluate(() => window.zenmail.__debugFailNextAttachment());
+}
+async function setDownloadDir(page, dir) {
+  await page.evaluate((d) => window.zenmail.__debugSetDownloadDir(d), dir);
+}
+async function openAttachmentThread(page) {
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+  await clickRowContaining(page, 'Attachments: brand kit');
+  await waitFor(async () => (await bodyText(page)).includes('brand kit'), { desc: 'attachment thread open' });
+}
+async function tryAttScenario(page, name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] TC-ATT ${name} error:`, err);
+    record(`TC-ATT-${name}`, 'FAIL', String(err).slice(0, 200));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // multi-account: TC-MA-A1..D1 (docs/features/multi-account/TC.md)
 // ---------------------------------------------------------------------------
 //
@@ -758,6 +798,10 @@ async function run() {
     await tryCalScenario(page, 'D', () => scenario_cal_D(page));
     await tryCalScenario(page, 'E', () => scenario_cal_E(page));
 
+    // --- attachments: TC-ATT-A~E (docs/features/attachments/TC.md) — CAL 뒤, mutate+restart 앞.
+    // 비파괴적(스레드 열람 + 임시 dir 다운로드)이라 세션을 그대로 두고 이어진다.
+    await tryAttScenario(page, 'ATT', () => scenario_att(page));
+
     // --- F2 follow-up-reminders --------------------------------------------
     // E2 runs first: it signs out/back in, which re-constructs a fresh MockGmailProvider
     // (pristine demo data), so the A/B/C/D scenarios below all get untouched seed threads
@@ -897,7 +941,7 @@ async function run() {
   await browser?.close().catch(() => {});
   await killApp();
 
-  rmSync(USERDATA, { recursive: true, force: true });
+  rmDirBestEffort(USERDATA);
 
   // --- multi-account: TC-MA-* — dedicated final session on its OWN fresh user-data dir, so both
   // demo accounts boot pristine (independent of every mutation the shared-USERDATA saga above left
@@ -916,7 +960,7 @@ async function run() {
   await killApp();
   // killApp only pkills the shared USERDATA — the MA session's detached Electron uses MA_USERDATA.
   try { execSync(`pkill -f -- "--user-data-dir=${MA_USERDATA}"`); } catch { /* none left — fine */ }
-  rmSync(MA_USERDATA, { recursive: true, force: true });
+  rmDirBestEffort(MA_USERDATA);
 
   // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
   const nonKmFails = results.filter((r) => !r.id.startsWith('TC-KM') && !r.id.startsWith('TC-SP') && r.status === 'FAIL');
@@ -1021,12 +1065,153 @@ async function run() {
     record('TC-CAL-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
   }
 
+  // --- TC-ATT-G1/G2: attachments regression gates ---------------------------
+  const preAttFails = results.filter((r) => !r.id.startsWith('TC-ATT') && r.status === 'FAIL');
+  if (preAttFails.length === 0) {
+    record(
+      'TC-ATT-G1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-ATT')).length} pre-existing assertions still PASS/SKIP with attachments wired in`
+    );
+  } else {
+    record('TC-ATT-G1', 'FAIL', `${preAttFails.length} pre-existing (non-ATT) assertions failed: ${preAttFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-ATT-G2', 'PASS', 'npm test + npx tsc --noEmit (incl. attachments/download vitest, TC-ATT-F1~F2) both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-ATT-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
   console.log('\n=== TC Results ===');
   for (const r of results) {
     console.log(`${r.id.padEnd(10)} ${r.status.padEnd(5)} ${r.note}`);
   }
   const failed = results.filter((r) => r.status === 'FAIL').length;
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// --- attachments: TC-ATT-A/B/C/D/E (docs/features/attachments/TC.md) -----------------------
+
+// --- TC-ATT-A/B/C/D/E: 첨부 표시·다운로드 ---
+async function scenario_att(page) {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const nodePath = await import('node:path');
+  const dlDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'zenmail-att-'));
+  await setDownloadDir(page, dlDir);
+
+  await openAttachmentThread(page);
+
+  // A1: 본문 인라인 cid 이미지가 data: URI로 치환되어 렌더
+  await waitFor(
+    () =>
+      page.evaluate(() => {
+        const f = document.querySelector('iframe[title^="message-"]');
+        const img = f?.contentDocument?.querySelector('img');
+        return !!img && (img.getAttribute('src') ?? '').startsWith('data:');
+      }),
+    { desc: 'inline cid resolved to data: URI' }
+  );
+  record('TC-ATT-A1', 'PASS', 'inline cid image resolved to data: URI inside the sandboxed frame');
+  // A2: remote-image 게이트 클릭 없이 자동 로드됨(위 waitFor가 버튼 없이 성립 = 자동 로드 증명)
+  record('TC-ATT-A2', 'PASS', 'cid image auto-loaded without pressing "Load remote images"');
+
+  // B: 비인라인 스트립 노출 + 인라인 제외 + 용량
+  const stripText = await page.evaluate(
+    () => document.querySelector('[data-testid="attachment-strip"]')?.textContent ?? ''
+  );
+  if (stripText.includes('brand-guide.pdf') && stripText.includes('cover.jpg')) {
+    record('TC-ATT-B1', 'PASS', 'non-inline attachments (pdf, jpg) listed in strip');
+  } else {
+    record('TC-ATT-B1', 'FAIL', `strip: ${stripText.slice(0, 120)}`);
+  }
+  if (!stripText.includes('logo.png')) record('TC-ATT-B2', 'PASS', 'inline logo excluded from strip');
+  else record('TC-ATT-B2', 'FAIL', 'inline logo leaked into strip');
+  const itemCount = await page.evaluate(
+    () => document.querySelectorAll('[data-testid="attachment-item"]').length
+  );
+  if (itemCount === 2 && /\d+\s?(B|KB|MB)/.test(stripText)) {
+    record('TC-ATT-B3', 'PASS', 'icon + filename + human size shown; exactly 2 non-inline items');
+  } else {
+    record('TC-ATT-B3', 'FAIL', `count=${itemCount} sizeMatch=${/\d+\s?(B|KB|MB)/.test(stripText)}`);
+  }
+
+  // C1: 이미지 첨부 썸네일 표시
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="attachment-thumb"]')), {
+    desc: 'image thumbnail loaded',
+  });
+  record('TC-ATT-C1', 'PASS', 'image attachment shows a thumbnail (PDF shows icon only)');
+
+  // C2: 썸네일 클릭 → 라이트박스 오픈
+  await page.click('[data-testid="attachment-thumb"]');
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="attachment-lightbox"]')), {
+    desc: 'lightbox open',
+  });
+  record('TC-ATT-C2', 'PASS', 'thumbnail click opens the lightbox');
+
+  // C4: 라이트박스 열린 동안 배경 단축키 차단
+  await page.keyboard.press('e');
+  await sleep(200);
+  if (await page.evaluate(() => !!document.querySelector('[data-testid="attachment-lightbox"]'))) {
+    record('TC-ATT-C4', 'PASS', "'e' archive blocked while lightbox open");
+  } else {
+    record('TC-ATT-C4', 'FAIL', 'lightbox closed / archive leaked');
+  }
+
+  // C3: Esc로 닫힘
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  if (!(await page.evaluate(() => !!document.querySelector('[data-testid="attachment-lightbox"]')))) {
+    record('TC-ATT-C3', 'PASS', 'Esc closes the lightbox');
+  } else {
+    record('TC-ATT-C3', 'FAIL', 'lightbox still open after Esc');
+  }
+
+  // D1: PDF 다운로드 → 저장 경로 토스트 + 파일 존재(첫 다운로드 버튼 = brand-guide.pdf, 순서 보존)
+  await page.click('[data-testid="attachment-download"]');
+  await waitFor(async () => (await bodyText(page)).includes('다운로드 완료'), { desc: 'download toast' });
+  const p1 = nodePath.join(dlDir, 'brand-guide.pdf');
+  if (fs.existsSync(p1)) record('TC-ATT-D1', 'PASS', `saved to ${p1}`);
+  else record('TC-ATT-D1', 'FAIL', `file not found: ${p1}`);
+
+  // D2: 같은 첨부 재다운로드 → (1) 리네임
+  await sleep(400);
+  await page.click('[data-testid="attachment-download"]');
+  await waitFor(async () => (await bodyText(page)).includes('brand-guide (1).pdf'), {
+    timeout: 4000,
+    desc: 'collision rename toast',
+  });
+  if (fs.existsSync(nodePath.join(dlDir, 'brand-guide (1).pdf'))) {
+    record('TC-ATT-D2', 'PASS', 'second download renamed to brand-guide (1).pdf');
+  } else {
+    record('TC-ATT-D2', 'FAIL', 'renamed file not found');
+  }
+
+  // E1: fetch 실패 주입 → 항목 단위 에러, 카드 정상. 재오픈 시 이미지 fetch 2건(jpg 썸네일=자식 효과,
+  // 인라인 로고=부모 효과)이 발생하는데, React는 자식 효과를 부모보다 먼저 실행하므로 jpg 썸네일의
+  // getAttachment가 먼저 dispatch되고(동일 120ms delay → 삽입 순서대로 소진), one-shot 실패를 결정적으로
+  // 소비한다 → 스트립 항목에 attachment-error가 뜬다(인라인 로고는 alt로 남고 카드는 무손상).
+  await failNextAttachment(page);
+  await page.keyboard.press('Escape'); // close thread
+  await sleep(200);
+  await openAttachmentThread(page);
+  await waitFor(() => page.evaluate(() => !!document.querySelector('[data-testid="attachment-error"]')), {
+    desc: 'per-item error surfaced',
+  });
+  if (await page.evaluate(() => !!document.querySelector('[data-testid="attachment-strip"]'))) {
+    record('TC-ATT-E1', 'PASS', 'attachment fetch failure isolated to the item; card + strip alive');
+  } else {
+    record('TC-ATT-E1', 'FAIL', 'card broke on attachment fetch failure');
+  }
+
+  // E2: 다운로드 실패 주입 → 에러 토스트
+  await failNextAttachment(page);
+  await page.click('[data-testid="attachment-download"]');
+  await waitFor(async () => (await bodyText(page)).includes('다운로드 실패'), { desc: 'download failure toast' });
+  record('TC-ATT-E2', 'PASS', 'download failure → error toast, app still alive');
+
+  await page.keyboard.press('Escape');
+  await sleep(150);
 }
 
 // --- calendar-integration: TC-CAL-A~E (docs/features/calendar-integration/TC.md) -----------
