@@ -143,6 +143,7 @@ interface MailState {
   addAccount(): Promise<void>; // 구 signIn 대체 (Login 버튼·계정 추가 공용)
   signInDemo(): Promise<void>;
   removeAccount(email: string): Promise<void>; // 구 signOut 대체
+  signOutSession(): Promise<void>; // 사이드바 "Sign out" — demo=세션 전체, real=활성 계정만(D8)
   switchAccount(email: string): Promise<void>;
   applyAccountsSnapshot(snap: AccountsSnapshot): void;
 
@@ -455,6 +456,23 @@ export const useMailStore = create<MailState>((set, get) => {
       if (wasActive) {
         set({ activeAccountId: snap.activeEmail, ...ACCOUNT_SCOPED_RESET });
         await loadActiveAccountData();
+      }
+    },
+
+    // 사이드바 "Sign out" = 세션 종료(D8). demo는 세션이 한 단위이므로 상주 mock 계정
+    // 전부를 종료해야 로그인 화면에 닿는다 — real은 활성 계정 하나만 제거(레거시 단일
+    // 계정 signOut의 파괴적 시맨틱을 계정 단위로 승계). per-account 제거는 kbar
+    // "Sign out of <email>"(removeAccount 직접 호출)이 담당한다.
+    async signOutSession() {
+      const active = activeAccount(get());
+      if (!active) return;
+      if (active.demo) {
+        const demoEmails = get().accounts.filter((a) => a.demo).map((a) => a.email);
+        for (const email of demoEmails) {
+          await get().removeAccount(email);
+        }
+      } else {
+        await get().removeAccount(active.email);
       }
     },
 

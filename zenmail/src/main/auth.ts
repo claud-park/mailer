@@ -40,7 +40,6 @@ type TokenStore = {
   get(account: string): Promise<string | null>;
   set(account: string, value: string): Promise<void>;
   del(account: string): Promise<void>;
-  list(): Promise<string[]>;
 };
 
 function fileStore(): TokenStore {
@@ -68,9 +67,6 @@ function fileStore(): TokenStore {
       delete d[account];
       write(d);
     },
-    async list() {
-      return Object.keys(read());
-    },
   };
 }
 
@@ -81,9 +77,10 @@ function keytarStore(): TokenStore | null {
     // A native Keychain call can fail at RUNTIME for reasons unrelated to keytar being
     // installed at all — ACL/signature mismatch after a rebuild, a locked keychain, a denied
     // access prompt. Every operation degrades to the file store rather than letting an
-    // uncaught native rejection crash its caller (auth:get-account, sign-in's token save,
-    // sign-out's token delete). The file store is created lazily and lives for the process
-    // lifetime, so a set() that falls back is later found by a get() that also falls back.
+    // uncaught native rejection crash its caller (account context restore via
+    // getAuthorizedClient, addAccount's token save, removeAccount's token delete). The file
+    // store is created lazily and lives for the process lifetime, so a set() that falls back
+    // is later found by a get() that also falls back.
     const fallback = fileStore();
     return {
       async get(account) {
@@ -110,15 +107,6 @@ function keytarStore(): TokenStore | null {
           console.warn('[auth] keychain delete failed, falling back to file store:', err);
         }
         await fallback.del(account);
-      },
-      async list() {
-        try {
-          const creds = await keytar.findCredentials(SERVICE);
-          return creds.map((c) => c.account);
-        } catch (err) {
-          console.warn('[auth] keychain list failed, falling back to file store:', err);
-          return fallback.list();
-        }
       },
     };
   } catch (err) {

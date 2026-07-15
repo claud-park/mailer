@@ -20,7 +20,7 @@ function AccountActions() {
   const actions = useMemo<Action[]>(() => {
     const s = useMailStore.getState;
     return [
-      ...accounts.map((a, i) => ({
+      ...accounts.map((a) => ({
         id: `switchAccount:${a.email}`,
         name: `Switch to ${a.email}${a.email === activeAccountId ? ' (current)' : ''}`,
         section: 'Accounts',
