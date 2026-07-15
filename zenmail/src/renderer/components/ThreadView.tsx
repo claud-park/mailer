@@ -115,7 +115,7 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
 
 function InlineReply() {
   const activeThread = useMailStore((s) => s.activeThread);
-  const account = useMailStore(activeAccount);
+  const accountEmail = useMailStore((s) => activeAccount(s)?.email);
   const send = useMailStore((s) => s.send);
   const [body, setBody] = useState('');
   const editorRef = useRef<HTMLDivElement>(null);
@@ -123,7 +123,7 @@ function InlineReply() {
 
   if (!activeThread || activeThread.messages.length === 0) return null;
   const last = activeThread.messages[activeThread.messages.length - 1];
-  const replyTo = last.from.email === account?.email ? last.to[0]?.email : last.from.email;
+  const replyTo = last.from.email === accountEmail ? last.to[0]?.email : last.from.email;
 
   const doSend = async (archive: boolean) => {
     if (!body.trim() || !replyTo || sending) return;

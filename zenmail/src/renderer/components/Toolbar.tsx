@@ -12,7 +12,7 @@ export function Toolbar() {
   const activeThreadId = useMailStore((s) => s.activeThreadId);
   const splitInbox = useMailStore((s) => s.splitInbox);
   const toggleSplit = useMailStore((s) => s.toggleSplit);
-  const account = useMailStore(activeAccount);
+  const accountDemo = useMailStore((s) => activeAccount(s)?.demo);
 
   const [draft, setDraft] = useState(searchQuery);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -90,7 +90,7 @@ export function Toolbar() {
       >
         Compose
       </button>
-      {account?.demo && (
+      {accountDemo && (
         <span className="app-no-drag rounded bg-label-yellow/20 px-1.5 py-0.5 text-[10px] font-medium text-label-yellow">
           DEMO
         </span>

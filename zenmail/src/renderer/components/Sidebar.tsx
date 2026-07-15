@@ -74,7 +74,8 @@ export function Sidebar() {
   const labels = useMailStore((s) => s.labels);
   const activeLabelId = useMailStore((s) => s.activeLabelId);
   const setActiveLabel = useMailStore((s) => s.setActiveLabel);
-  const account = useMailStore(activeAccount);
+  const accountEmail = useMailStore((s) => activeAccount(s)?.email);
+  const accountDemo = useMailStore((s) => activeAccount(s)?.demo);
   const sync = useMailStore((s) => s.sync);
   const accounts = useMailStore((s) => s.accounts);
   const activeAccountId = useMailStore((s) => s.activeAccountId);
@@ -158,8 +159,8 @@ export function Sidebar() {
           </div>
         )}
         <div className="flex items-center justify-between gap-2 px-1">
-          <span className="truncate text-[11px] text-text-muted" title={account?.email}>
-            {account?.demo ? 'demo mode' : account?.email}
+          <span className="truncate text-[11px] text-text-muted" title={accountEmail}>
+            {accountDemo ? 'demo mode' : accountEmail}
           </span>
           <button
             onClick={() => void signOutSession()}

@@ -165,7 +165,7 @@ export function Compose() {
       const n = v ? Number(v) : NaN;
       setRemindCustomDays(Number.isFinite(n) && n > 0 ? n : FOLLOWUP_DEFAULT_DAYS);
     });
-  }, [composeInit]);
+  }, [composeInit?.accountId]);
 
   if (!composeInit) return null;
 
