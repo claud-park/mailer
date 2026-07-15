@@ -2,6 +2,7 @@ import { google, gmail_v1, Auth } from 'googleapis';
 import {
   CATEGORY_LABELS,
   SNOOZE_LABEL_NAME,
+  type AttachmentInfo,
   type Contact,
   type FetchThreadsRequest,
   type FetchThreadsResponse,
@@ -27,6 +28,8 @@ export interface GmailProvider {
   snoozeLabelId(): Promise<string>;
   /** INBOX 안읽음 스레드 수 — 사이드바 계정 배지(60s 데몬 틱 갱신). Real은 labels.get 1콜. */
   inboxUnreadCount(): Promise<number>;
+  /** 첨부 바이트를 가져온다(base64url). 매 호출 fresh fetch — sqlite 무저장(D5). */
+  getAttachment(messageId: string, attachmentId: string): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +82,41 @@ function extractBodies(part: gmail_v1.Schema$MessagePart | undefined): {
   };
   walk(part);
   return { html, text, ics };
+}
+
+function partHeader(p: gmail_v1.Schema$MessagePart, name: string): string | undefined {
+  return p.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? undefined;
+}
+
+/**
+ * MIME 트리를 걸어 첨부 파트만 수집한다(본문 파트는 extractBodies가 처리). 첨부 판정은
+ * body.attachmentId 존재 + (filename ∨ Content-ID). 인라인 판정(D4)은 Content-ID 헤더 존재 +
+ * Content-Disposition:inline. contentId는 양끝 <>를 벗겨 cid: 참조와 매칭 가능하게 한다.
+ */
+export function extractAttachments(part: gmail_v1.Schema$MessagePart | undefined): AttachmentInfo[] {
+  const out: AttachmentInfo[] = [];
+  const walk = (p: gmail_v1.Schema$MessagePart | undefined) => {
+    if (!p) return;
+    const attachmentId = p.body?.attachmentId ?? undefined;
+    const contentIdRaw = partHeader(p, 'Content-ID');
+    const filename = p.filename ?? '';
+    if (attachmentId && (filename || contentIdRaw)) {
+      const contentId = contentIdRaw ? contentIdRaw.trim().replace(/^<|>$/g, '') : undefined;
+      const disposition = (partHeader(p, 'Content-Disposition') ?? '').toLowerCase();
+      const inline = !!contentId && disposition.startsWith('inline');
+      out.push({
+        attachmentId,
+        filename: filename || contentId || 'attachment',
+        mimeType: p.mimeType ?? 'application/octet-stream',
+        size: p.body?.size ?? 0,
+        ...(contentId ? { contentId } : {}),
+        inline,
+      });
+    }
+    p.parts?.forEach(walk);
+  };
+  walk(part);
+  return out;
 }
 
 function toBase64Url(s: string): string {
@@ -204,6 +242,7 @@ export class RealGmailProvider implements GmailProvider {
       messages: msgs.map((m) => {
         const bodies = extractBodies(m.payload);
         const invite = bodies.ics ? extractInvite(bodies.ics) : undefined;
+        const attachments = extractAttachments(m.payload);
         return {
           id: m.id!,
           threadId,
@@ -216,6 +255,7 @@ export class RealGmailProvider implements GmailProvider {
           bodyText: bodies.text,
           labelIds: m.labelIds ?? [],
           ...(invite ? { invite } : {}),
+          ...(attachments.length ? { attachments } : {}),
         };
       }),
     };
@@ -299,6 +339,17 @@ export class RealGmailProvider implements GmailProvider {
     const res = await this.gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
     return res.data.threadsUnread ?? 0;
   }
+
+  async getAttachment(messageId: string, attachmentId: string): Promise<string> {
+    const res = await this.gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+    // Gmail은 base64url을 반환. mimeType은 응답에 없으므로(렌더러가 AttachmentInfo로 이미 앎)
+    // 여기서는 바이트만 전달한다. 빈 응답이면 빈 문자열(호출부에서 처리).
+    return res.data.data ?? '';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +360,22 @@ const DEMO_SNOOZE_LABEL_ID = 'Label_snoozed';
 
 /** sender seeded as the VIP split's default in demo mode (see buildDemoData senders[0]) */
 export const DEMO_VIP_EMAIL = 'ana@linearly.dev';
+
+/**
+ * 데모 첨부 fixture 바이트(base64). 내용은 load-bearing이 아니다 — E2E는 data: URI 치환과 파일
+ * 존재만 검증한다. Mock.getAttachment가 attachmentId로 조회한다(demo_att_1 시드와 짝).
+ */
+const DEMO_ATTACHMENT_BYTES: Record<string, string> = {
+  // 1x1 PNG (투명)
+  att_logo:
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAen63NgAAAAASUVORK5CYII=',
+  // 최소 PDF (%PDF … %%EOF)
+  att_pdf:
+    'JVBERi0xLjEKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoKdHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y=',
+  // 작은 JPEG 헤더(데모용, 유효 base64)
+  att_jpg:
+    '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==',
+};
 
 interface MockThread {
   summary: ThreadSummary;
@@ -617,6 +684,43 @@ function buildDemoData(email: string): { threads: MockThread[]; labels: Label[];
     ])
   );
 
+  // attachments: 첨부 시드 1건. design@brandco.example 은 어떤 split 규칙에도 매칭되지 않고(도메인/
+  // VIP/newsletter 아님), 최고령 date라 기존 split 카운트/순서(F1~F6 · TC-* E2E)를 건드리지 않는다.
+  // 본문에 인라인 로고(cid:logo@zenmail)를 참조하고, 비인라인 PDF·JPEG 2건을 첨부한다.
+  const attFrom: Contact = { name: 'BrandCo Design', email: 'design@brandco.example' };
+  const attId = 'demo_att_1';
+  const attAttachments: AttachmentInfo[] = [
+    { attachmentId: 'att_logo', filename: 'logo.png', mimeType: 'image/png', size: 95, contentId: 'logo@zenmail', inline: true },
+    { attachmentId: 'att_pdf', filename: 'brand-guide.pdf', mimeType: 'application/pdf', size: 88, inline: false },
+    { attachmentId: 'att_jpg', filename: 'cover.jpg', mimeType: 'image/jpeg', size: 240, inline: false },
+  ];
+  const attMessage = {
+    id: `${attId}_m0`,
+    threadId: attId,
+    from: attFrom,
+    to: [{ name: 'You', email }],
+    cc: [] as Contact[],
+    date: now - 140 * h,
+    snippet: 'Brand kit — logo, guidelines PDF, and the cover image attached.',
+    bodyHtml: `<div><p>Here's the brand kit.</p><p><img src="cid:logo@zenmail" alt="BrandCo logo" width="120"></p><p>Guidelines PDF and cover image attached.</p></div>`,
+    bodyText: 'Here is the brand kit. Guidelines PDF and cover image attached.',
+    labelIds: ['INBOX'],
+    attachments: attAttachments,
+  };
+  threads.push({
+    summary: {
+      id: attId,
+      subject: 'Attachments: brand kit',
+      from: attFrom,
+      snippet: attMessage.snippet,
+      date: attMessage.date,
+      unread: false,
+      labelIds: ['INBOX'],
+      messageCount: 1,
+    },
+    detail: { id: attId, subject: 'Attachments: brand kit', labelIds: ['INBOX'], messages: [attMessage] },
+  });
+
   return { threads, labels, senders };
 }
 
@@ -680,6 +784,8 @@ export class MockGmailProvider implements GmailProvider {
   private failModifyForThread: string | null = null;
   /** E2E-only (TC-SY-D1): per-method invocation counters, read via mail:debug-provider-calls. */
   readonly callCounts: Record<string, number> = {};
+  /** E2E-only (TC-ATT-E1/E2): 다음 getAttachment 1회를 throw시킨다(one-shot, 소비형). */
+  private failNextAttachment = false;
 
   constructor(email = 'demo@zenmail.app') {
     this.email = email;
@@ -870,5 +976,22 @@ export class MockGmailProvider implements GmailProvider {
 
   async inboxUnreadCount(): Promise<number> {
     return this.threads.filter((t) => t.summary.unread && t.summary.labelIds.includes('INBOX')).length;
+  }
+
+  /** E2E-only: 다음 첨부 fetch 1회 실패를 무장. */
+  failNextAttachmentCall(): void {
+    this.failNextAttachment = true;
+  }
+
+  async getAttachment(_messageId: string, attachmentId: string): Promise<string> {
+    this.callCounts.getAttachment = (this.callCounts.getAttachment ?? 0) + 1;
+    await this.delay();
+    if (this.failNextAttachment) {
+      this.failNextAttachment = false;
+      throw new Error('attachment fetch failed (mock)');
+    }
+    const data = DEMO_ATTACHMENT_BYTES[attachmentId];
+    if (data === undefined) throw new Error(`Unknown attachment ${attachmentId}`);
+    return data;
   }
 }

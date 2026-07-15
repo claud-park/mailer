@@ -39,6 +39,19 @@ export interface InviteInfo {
   method: string;
 }
 
+export interface AttachmentInfo {
+  /** Gmail attachment id — getAttachment가 바이트를 가져오는 키 */
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  /** 바이트 크기 (body.size) */
+  size: number;
+  /** 'Content-ID' 헤더(양끝 <> 제거) — 인라인 이미지에만 존재 */
+  contentId?: string;
+  /** Content-Disposition:inline && contentId 존재 → 본문 cid 참조(스트립에서 제외) */
+  inline: boolean;
+}
+
 export type RsvpResponse = 'accepted' | 'tentative' | 'declined';
 
 export interface CalendarEvent {
@@ -74,6 +87,8 @@ export interface MessageDetail {
   labelIds: string[];
   /** METHOD:REQUEST ICS가 붙은 메시지에만 존재 (초대 배너용). extractInvite fail-safe로 파싱 실패 시 undefined. */
   invite?: InviteInfo;
+  /** 첨부 파트 메타데이터(바이트 아님). 첨부 없으면 미노출(invite와 동일 optional 패턴). */
+  attachments?: AttachmentInfo[];
 }
 
 export interface ThreadDetail {
