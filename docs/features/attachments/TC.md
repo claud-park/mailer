@@ -42,4 +42,4 @@
 - [ ] **TC-ATT-G1** If attachments 전체가 배선된 상태면, When 기존 E2E 전건을 돌리면, Then 기존 캐논이 0 FAIL로 유지되고 SKIP 집합이 `{TC-A4, TC-D5, TC-D8, TC-SY-C3, TC-SA-B4, TC-SY-B2}`의 부분집합이며(신규 SKIP 없음), 총 어서션 = 기존 총계(200) + 신규(TC-ATT 15)이다.
 - [ ] **TC-ATT-G2** If `npm test`+`npx tsc --noEmit`를 돌리면, Then 신규 vitest(`extractAttachments`·`dedupeDownloadPath`, TC-ATT-F1~F2 포함) 전부 통과한다.
 
-> 목표 집계: E2E **215 PASS · 0 FAIL · 6 SKIP**(200 + TC-ATT-A1~A2·B1~B3·C1~C4·D1~D2·E1~E2·G1~G2 = 15). F1~F2는 vitest(`npm test`)에서 커버되며 TC-ATT-G2 게이트가 이를 참조한다. SKIP 집합 무변경(신규 SKIP 없음).
+> 실측 집계: E2E **216 PASS · 0 FAIL · 5 SKIP**(200 + TC-ATT-A1~A2·B1~B3·C1~C4·D1~D2·E1~E2·G1~G2 = 15, 두 clean 런에서 결정적으로 동일). 목표치였던 215·6은 아니고 SKIP이 5인 이유는 `TC-SA-B4`가 신규 데모 첨부 스레드로 벌크 스누즈 후보 조건을 만족해 SKIP→PASS로 자연 전환했기 때문(회귀 아님). F1~F2는 vitest(`npm test`)에서 커버되며 TC-ATT-G2 게이트가 이를 참조한다.
