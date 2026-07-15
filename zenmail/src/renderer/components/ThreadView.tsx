@@ -53,6 +53,100 @@ function prepareHtml(
   return { srcDoc, hasQuoted };
 }
 
+const ATT_ICON_RULES: { test: (m: string) => boolean; icon: string }[] = [
+  { test: (m) => m.startsWith('image/'), icon: '🖼' },
+  { test: (m) => m === 'application/pdf', icon: '📄' },
+  { test: (m) => m.includes('zip') || m.includes('compressed') || m.includes('tar'), icon: '🗜' },
+  { test: (m) => m.includes('word') || m.includes('document') || m.startsWith('text/'), icon: '📝' },
+];
+function attachmentIcon(mimeType: string): string {
+  return ATT_ICON_RULES.find((r) => r.test(mimeType))?.icon ?? '📎';
+}
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentItem({ messageId, att }: { messageId: string; att: AttachmentInfo }) {
+  const fetchAttachmentImage = useMailStore((s) => s.fetchAttachmentImage);
+  const download = useMailStore((s) => s.downloadAttachment);
+  const openLightbox = useMailStore((s) => s.openLightbox);
+  const isImage = att.mimeType.startsWith('image/');
+  const [thumb, setThumb] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  // 이미지 mimetype 항목만 썸네일 fetch(D6). 항목 단위 에러 격리(FR17) — 실패해도 카드는 정상.
+  const loadThumb = useCallback(() => {
+    if (!isImage) return;
+    setError(false);
+    void fetchAttachmentImage(messageId, att.attachmentId, att.mimeType).then((res) => {
+      if ('dataUri' in res) setThumb(res.dataUri);
+      else setError(true);
+    });
+  }, [isImage, fetchAttachmentImage, messageId, att.attachmentId, att.mimeType]);
+
+  useEffect(() => {
+    loadThumb();
+  }, [loadThumb]);
+
+  return (
+    <div
+      data-testid="attachment-item"
+      className="flex items-center gap-2 rounded-md border border-bg-border bg-bg-subtle px-2 py-1.5 text-[12px]"
+    >
+      {isImage && thumb && (
+        <button aria-label={`Preview ${att.filename}`} onClick={() => openLightbox({ dataUri: thumb, filename: att.filename })}>
+          <img data-testid="attachment-thumb" src={thumb} alt={att.filename} className="h-8 w-8 rounded object-cover" />
+        </button>
+      )}
+      {isImage && !thumb && !error && (
+        <span className="flex h-8 w-8 items-center justify-center text-text-muted">…</span>
+      )}
+      {(!isImage || error) && (
+        <span className="flex h-8 w-8 items-center justify-center text-[16px]">
+          {error ? '⚠️' : attachmentIcon(att.mimeType)}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-text-primary">{att.filename}</div>
+        {error ? (
+          <button
+            data-testid="attachment-error"
+            onClick={loadThumb}
+            className="text-[11px] text-red-500 hover:underline"
+          >
+            불러오기 실패 · 재시도
+          </button>
+        ) : (
+          <div className="text-[11px] text-text-muted">{formatSize(att.size)}</div>
+        )}
+      </div>
+      <button
+        data-testid="attachment-download"
+        aria-label={`Download ${att.filename}`}
+        onClick={() => void download(messageId, att.attachmentId, att.filename)}
+        className="shrink-0 rounded px-2 py-0.5 text-[13px] text-text-secondary hover:text-text-primary"
+      >
+        ↓
+      </button>
+    </div>
+  );
+}
+
+function AttachmentStrip({ message }: { message: MessageDetail }) {
+  // D4: 비인라인 첨부만 나열(인라인 cid 이미지는 본문에서 이미 렌더 → 스트립 제외).
+  const items = (message.attachments ?? []).filter((a) => !a.inline);
+  if (items.length === 0) return null;
+  return (
+    <div data-testid="attachment-strip" className="mt-2 flex flex-col gap-1">
+      {items.map((a) => (
+        <AttachmentItem key={a.attachmentId} messageId={message.id} att={a} />
+      ))}
+    </div>
+  );
+}
+
 function MessageCard({ message, isLast }: { message: MessageDetail; isLast: boolean }) {
   const [showQuoted, setShowQuoted] = useState(false);
   const [allowImages, setAllowImages] = useState(false);
@@ -131,6 +225,8 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
           if (body) setHeight(Math.min(Math.max(body.scrollHeight + 8, 40), isLast ? 100000 : 600));
         }}
       />
+
+      <AttachmentStrip message={message} />
 
       {hasQuoted && (
         <button

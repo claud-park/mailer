@@ -80,6 +80,7 @@ export function useKeyboard(): void {
         s.followupPickerOpen ||
         s.agendaOpen ||
         s.eventComposerOpen ||
+        s.lightboxImage !== null ||
         coach.cheatSheetOpen ||
         coach.statsOpen
       ) {
@@ -88,6 +89,7 @@ export function useKeyboard(): void {
           s.closeLabelPicker();
           if (s.agendaOpen) s.closeAgenda();
           if (s.eventComposerOpen) s.closeEventComposer();
+          if (s.lightboxImage) s.closeLightbox();
           if (coach.cheatSheetOpen) coach.closeCheatSheet();
           if (coach.statsOpen) coach.closeStats();
         }

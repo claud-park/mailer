@@ -11,6 +11,7 @@ import { Compose } from './components/Compose';
 import { SnoozePicker } from './components/SnoozePicker';
 import { AgendaPanel } from './components/AgendaPanel';
 import { EventComposer } from './components/EventComposer';
+import { Lightbox } from './components/Lightbox';
 import { FollowupPicker } from './components/FollowupPicker';
 import { LabelPicker } from './components/LabelPicker';
 import { SplitSettings } from './components/SplitSettings';
@@ -45,6 +46,7 @@ function Shell() {
       <SnoozePicker />
       <AgendaPanel />
       <EventComposer />
+      <Lightbox />
       <FollowupPicker />
       <LabelPicker />
       <SplitSettings />

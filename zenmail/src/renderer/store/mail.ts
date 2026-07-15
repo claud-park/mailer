@@ -63,6 +63,7 @@ const ACCOUNT_SCOPED_RESET = {
   agendaEvents: [] as CalendarEvent[],
   agendaLoading: false,
   agendaError: null as string | null,
+  lightboxImage: null as { dataUri: string; filename: string } | null,
   composeInit: null as ComposeInit | null,
   snoozePickerOpen: false,
   labelPickerOpen: false,
@@ -214,6 +215,10 @@ interface MailState {
     attachmentId: string,
     mimeType: string
   ): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
+  lightboxImage: { dataUri: string; filename: string } | null;
+  openLightbox(img: { dataUri: string; filename: string }): void;
+  closeLightbox(): void;
+  downloadAttachment(messageId: string, attachmentId: string, filename: string): Promise<void>;
   respondToInvite(iCalUID: string, response: RsvpResponse): Promise<void>;
   openAgenda(): Promise<void>;
   closeAgenda(): void;
@@ -383,6 +388,7 @@ export const useMailStore = create<MailState>((set, get) => {
     agendaEvents: [],
     agendaLoading: false,
     agendaError: null,
+    lightboxImage: null,
     eventComposerOpen: false,
 
     async init() {
@@ -1218,6 +1224,27 @@ export const useMailStore = create<MailState>((set, get) => {
       } catch (err) {
         console.error('getAttachmentImage failed', err);
         return { error: String(err) };
+      }
+    },
+
+    openLightbox(img) {
+      set({ lightboxImage: img });
+    },
+
+    closeLightbox() {
+      set({ lightboxImage: null });
+    },
+
+    async downloadAttachment(messageId, attachmentId, filename) {
+      const a = aid(get());
+      if (!a) return;
+      try {
+        const res = await api().downloadAttachment(a, messageId, attachmentId, filename);
+        if ('savedPath' in res) get().showToast(`다운로드 완료 · ${res.savedPath}`);
+        else get().showToast('다운로드 실패');
+      } catch (err) {
+        console.error('downloadAttachment failed', err);
+        get().showToast('다운로드 실패');
       }
     },
 
