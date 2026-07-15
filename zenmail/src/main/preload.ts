@@ -55,6 +55,11 @@ const api: ZenmailApi = {
   createEvent: (accountId: string, input: CreateEventInput) =>
     ipcRenderer.invoke('calendar:create', accountId, input),
 
+  getAttachmentImage: (accountId: string, messageId: string, attachmentId: string, mimeType: string) =>
+    ipcRenderer.invoke('mail:get-attachment-image', accountId, messageId, attachmentId, mimeType),
+  downloadAttachment: (accountId: string, messageId: string, attachmentId: string, filename: string) =>
+    ipcRenderer.invoke('mail:download-attachment', accountId, messageId, attachmentId, filename),
+
   notifyOnline: () => ipcRenderer.invoke('mail:renderer-online'),
 
   onThreadsChanged: (
@@ -117,6 +122,8 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugCalendarState = () => ipcRenderer.invoke('calendar:debug-state');
   api.__debugFailNextCalendar = () => ipcRenderer.invoke('calendar:debug-fail-next');
   api.__debugSetCalendarReady = (v: boolean) => ipcRenderer.invoke('calendar:debug-set-ready', v);
+  api.__debugFailNextAttachment = () => ipcRenderer.invoke('mail:debug-fail-next-attachment');
+  api.__debugSetDownloadDir = (dir: string) => ipcRenderer.invoke('mail:debug-set-download-dir', dir);
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);

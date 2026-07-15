@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { ipcMain, type BrowserWindow } from 'electron';
+import { app, ipcMain, type BrowserWindow } from 'electron';
 import type { Auth } from 'googleapis';
 import type {
   AccountsSnapshot,
@@ -21,6 +21,7 @@ import * as accounts from './accounts';
 import * as auth from './auth';
 import { MockCalendarProvider, RealCalendarProvider, type CalendarProvider } from './calendar';
 import { AccountCache } from './cache';
+import { writeDownload } from './download';
 import {
   DEMO_ACCOUNT_EMAILS,
   DEMO_VIP_EMAIL,
@@ -63,6 +64,12 @@ let activeEmail: string | null = null;
 
 /** E2E-only: 데모에서 calendarReady 게이트를 강제로 덮어씀(null이면 계산값 사용). 전역(활성 데모 대상). */
 let debugCalendarReady: boolean | null = null;
+
+/** E2E-only: 다운로드 저장 디렉터리 오버라이드(null이면 OS Downloads 사용). */
+let downloadDirOverride: string | null = null;
+function downloadsDir(): string {
+  return downloadDirOverride ?? app.getPath('downloads');
+}
 
 export function getContexts(): AccountContext[] {
   return [...contexts.values()];
@@ -693,6 +700,49 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return requireCalendarProvider(accountId).createEvent(input);
   });
 
+  // --- attachments ---
+
+  ipcMain.handle(
+    'mail:get-attachment-image',
+    async (
+      _e,
+      accountId: string,
+      messageId: string,
+      attachmentId: string,
+      mimeType: string
+    ): Promise<{ dataUri: string; mimeType: string } | { error: string }> => {
+      try {
+        // 매 호출 fresh fetch — sqlite 무저장(D5). Gmail은 base64url 반환 → data URI용 표준 base64로 정규화.
+        const data = await requireContext(accountId).provider.getAttachment(messageId, attachmentId);
+        const b64 = Buffer.from(data, 'base64url').toString('base64');
+        return { dataUri: `data:${mimeType};base64,${b64}`, mimeType };
+      } catch (err) {
+        console.error('[attachment] get-image failed', err);
+        return { error: String(err) };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    'mail:download-attachment',
+    async (
+      _e,
+      accountId: string,
+      messageId: string,
+      attachmentId: string,
+      filename: string
+    ): Promise<{ savedPath: string } | { error: string }> => {
+      try {
+        const data = await requireContext(accountId).provider.getAttachment(messageId, attachmentId);
+        const savedPath = await writeDownload(downloadsDir(), filename, Buffer.from(data, 'base64url'));
+        return { savedPath };
+      } catch (err) {
+        console.error('[attachment] download failed', err);
+        return { error: String(err) };
+      }
+    }
+  );
+
   // E2E-only debug IPC — never registered unless ZENMAIL_E2E_PORT is set (see e2e/).
   // 시그니처 무변경(내부적으로 main의 activeEmail 컨텍스트 대상, D6).
   if (process.env.ZENMAIL_E2E_PORT) {
@@ -774,6 +824,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // 데모 calendarReady 게이트 시뮬레이션. 렌더러가 다음 listAccounts(재시작/재로그인)에서 읽는다.
     ipcMain.handle('calendar:debug-set-ready', async (_e, v: boolean) => {
       debugCalendarReady = v;
+    });
+
+    ipcMain.handle('mail:debug-fail-next-attachment', async () => {
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) ctx.provider.failNextAttachmentCall();
+    });
+
+    // E2E 다운로드 dir 오버라이드 — 실제 사용자 Downloads 오염 방지 + 저장 경로/충돌 리네임 검증.
+    ipcMain.handle('mail:debug-set-download-dir', async (_e, dir: string) => {
+      downloadDirOverride = dir;
     });
   }
 }

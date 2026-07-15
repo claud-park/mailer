@@ -233,6 +233,22 @@ export interface ZenmailApi {
   respondToEvent(accountId: string, iCalUID: string, response: RsvpResponse): Promise<void>;
   createEvent(accountId: string, input: CreateEventInput): Promise<CalendarEvent>;
 
+  /** 이미지 첨부 바이트를 data URI로 가져온다(인라인 cid 렌더 + 스트립 썸네일). mimeType은 렌더러가
+   *  AttachmentInfo로 이미 아는 값을 전달(Gmail attachments.get이 mimeType을 안 주기 때문). */
+  getAttachmentImage(
+    accountId: string,
+    messageId: string,
+    attachmentId: string,
+    mimeType: string
+  ): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
+  /** 첨부를 다운로드 폴더로 저장(다이얼로그 없음, 충돌 시 (1) 리네임). */
+  downloadAttachment(
+    accountId: string,
+    messageId: string,
+    attachmentId: string,
+    filename: string
+  ): Promise<{ savedPath: string } | { error: string }>;
+
   /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
   notifyOnline(): Promise<void>;
 
@@ -283,6 +299,10 @@ export interface ZenmailApi {
   __debugFailNextCalendar?(): Promise<void>;
   /** E2E-only: 데모 세션의 calendarReady 게이트 시뮬레이션(재시작/재로그인 전까지 유지). */
   __debugSetCalendarReady?(v: boolean): Promise<void>;
+  /** E2E-only: 다음 getAttachment 호출 1회를 실패시킴(one-shot). */
+  __debugFailNextAttachment?(): Promise<void>;
+  /** E2E-only: 다운로드 저장 디렉터리 오버라이드(실제 Downloads 오염 방지 + 저장 경로/리네임 검증). */
+  __debugSetDownloadDir?(dir: string): Promise<void>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';
