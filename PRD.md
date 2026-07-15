@@ -26,6 +26,8 @@
 **Non-Goals (v1)**
 - AI 기능, iOS/iPadOS, 비-Gmail 계정(IMAP/Outlook/iCloud), 팀 기능, 라이트 모드, 플러그인
 
+> **업데이트(2026-07-15, `multi-account` post-roadmap)**: "싱글 유저" Target은 여전히 유효하나, 동일 사용자가 여러 **Gmail** 계정(예: 개인+업무)을 함께 쓰는 것은 v1 범위에 포함됐다(계정 스위처 — 통합 인박스 아님). 위 Non-Goals의 "비-Gmail 계정"은 여전히 배제 대상이며 이 변경으로 완화되지 않는다. 상세: `docs/features/multi-account/PRD.md`.
+
 ## 3. Tech Stack
 
 | Layer | Choice |

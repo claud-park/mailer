@@ -281,6 +281,8 @@ zenmail/
 - Light mode (dark only for v1)
 - Plugin system
 
+> **Update (2026-07-15, `multi-account` post-roadmap)**: multiple **Gmail** accounts (account switcher, not a unified inbox) shipped and is no longer out of scope — see `docs/features/multi-account/PRD.md`. Non-Gmail accounts remain out of scope. §6's state-model example below predates this and shows a single-account shape; the shipped renderer store instead holds `accounts: AccountInfo[]` + `activeAccountId`.
+
 ---
 
 ## 10. Key dependencies

@@ -4,7 +4,7 @@
 > Obsidian checkpoint: `_obsidian/Projects/ZenMail.md`
 > Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 ## 0. 프로젝트 셋업
 - [x] PRD.md / TODO.md 작성
@@ -102,3 +102,4 @@ Last updated: 2026-07-14
 
 - [x] `calendar-integration` — Google Calendar 메일 중심 연동: 초대 RSVP 배너(ICS 자체 파서+낙관 5단계)·이벤트 생성 폼(규칙 프리필, No AI)·`g→c` 아젠다 패널·calendar.events scope+calendarReady 게이트 — 2026-07-14 완료, E2E 183 PASS·0 FAIL·6 SKIP ×2(집계 캐논 재해석 D10: 총 189=164+25) (docs/features/calendar-integration/)
 - [x] `inbox-zero-starred` — 사용자 실계정 버그 리포트(외부 아카이브 84행 미수렴) + 제품 요구(인박스=INBOX∪STARRED) — 2026-07-14 완료, 근본원인: SWR revalidate가 removal 미계산+60s 폴 무한 루프, 수정: 뷰 전체 캐시 행 열거 기반 removal 수렴 + 공유 술어(src/shared/view.ts) + 실계정 전용 15s grace 가드(mock=0, D10). E2E TC-IZ 9건 전건 PASS + 전체 스위트 0 FAIL·6 SKIP ×2, 실계정 스모크로 84→22행 수렴·STARRED 20건 확인 (docs/features/inbox-zero-starred/)
+- [x] `multi-account` — 2개 이상 Gmail 계정 동시 연동(계정 스위처, 통합 인박스 아님) — 2026-07-15 완료. accountId=email, `accounts.json`+계정별 SQLite 캐시 파일(레거시 `zenmail.db` rename 마이그레이션, all-or-nothing 롤백), main `AccountContext` Map, 60s 데몬 전 계정 순회(스누즈·예약전송·팔로우업·드레인·배지, 계정별 try/catch 격리), IPC 전 데이터 메서드 accountId 필수, ⌃1~⌃9/사이드바 아바타/kbar 전환, 데모 mock 2계정(`demo@zenmail.app`+`work@zenmail.app`). SDD(태스크별 subagent+2단계 리뷰) 9태스크 완주 + 최종 전체 브랜치 리뷰(Opus, With fixes) + react-best-practices 게이트(재렌더 회귀 1건 수정) + code-review low. E2E TC-MA 7건 신규 + 전체 스위트 **200 PASS·0 FAIL·6 SKIP ×2 결정적**(캐논 SKIP 집합 동일). (docs/features/multi-account/)
