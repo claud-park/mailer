@@ -618,6 +618,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   // 제거한다(mail:snooze와 대칭, 큐잉 없이 즉시 처리 — undo 창은 5초로 짧아 오프라인 큐잉 이점이
   // 적다). 순서가 중요하다 — 먼저 캐시에서 스누즈 행을 지우고 나중에 modifyThread가 실패하면,
   // 데몬이 더 이상 이 스레드를 깨울 방법이 없는 채로 서버엔 스누즈 라벨이 영구히 남는다.
+  //
+  // D9: 여기서 캐시 행(label_ids)에 곧바로 applyLabelDelta로 INBOX를 반영해보는 시도는 되돌렸다 —
+  // E2E(TC-UNDO-A4, reload 후 생존 확인)에서 2/2 재현되는 회귀를 만들었고(정확한 원인은 미확정 —
+  // localDeltaAt 가드/revalidate 타이밍과의 상호작용으로 추정), 이 캐시 갱신 자체는 리뷰가 Minor·
+  // self-healing(다음 revalidate가 provider의 fresh 상태로 자연히 upsert)로 판정한 항목이라 원래
+  // 동작(캐시는 다음 revalidate가 치유)으로 롤백하는 편이 새 회귀를 감수하는 것보다 안전하다.
   ipcMain.handle('mail:cancel-snooze', async (_e, accountId: string, threadId: string): Promise<void> => {
     const ctx = requireContext(accountId);
     const snoozeLabel = await ctx.provider.snoozeLabelId();
@@ -626,10 +632,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       addLabelIds: ['INBOX'],
       removeLabelIds: [snoozeLabel],
     });
-    // whole-branch 리뷰 발견: send&archive(위 참고)와 동일한 이유로 캐시 행도 갱신해야 한다 —
-    // 이 호출은 provider를 직접 건드리므로 attemptOrEnqueue의 applyLabelDelta를 안 타, 캐시 행이
-    // INBOX 없이 남으면 다음 warm-cache 읽기가 스냅샷 복원을 반영 못 하고 잠깐 빠뜨릴 수 있다.
-    ctx.cache.applyLabelDelta(threadId, ['INBOX'], [snoozeLabel]);
     ctx.cache.removeSnooze(threadId);
   });
 
