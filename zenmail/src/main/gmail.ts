@@ -90,10 +90,16 @@ function partHeader(p: gmail_v1.Schema$MessagePart, name: string): string | unde
 
 /**
  * MIME 트리를 걸어 첨부 파트만 수집한다(본문 파트는 extractBodies가 처리). 첨부 판정은
- * body.attachmentId 존재 + (filename ∨ Content-ID). 인라인 판정(D4)은 Content-ID 헤더 존재 +
- * Content-Disposition:inline. contentId는 양끝 <>를 벗겨 cid: 참조와 매칭 가능하게 한다.
+ * body.attachmentId 존재 + (filename ∨ Content-ID). 인라인 판정(D4, 실계정 리포트로 수정)은
+ * Content-ID 헤더 존재 + (Content-Disposition:inline ∨ 본문 HTML이 해당 cid:를 실제로 참조).
+ * Content-Disposition만으로는 부족하다 — Outlook 등 다수의 실 발신자가 인라인 이미지에도
+ * Content-Disposition을 생략하거나 attachment로 보내면서 cid: 참조만으로 인라인을 표현한다
+ * (RFC 2392 방식). contentId는 양끝 <>를 벗겨 cid: 참조와 매칭 가능하게 한다.
  */
-export function extractAttachments(part: gmail_v1.Schema$MessagePart | undefined): AttachmentInfo[] {
+export function extractAttachments(
+  part: gmail_v1.Schema$MessagePart | undefined,
+  html = ''
+): AttachmentInfo[] {
   const out: AttachmentInfo[] = [];
   const walk = (p: gmail_v1.Schema$MessagePart | undefined) => {
     if (!p) return;
@@ -103,7 +109,8 @@ export function extractAttachments(part: gmail_v1.Schema$MessagePart | undefined
     if (attachmentId && (filename || contentIdRaw)) {
       const contentId = contentIdRaw ? contentIdRaw.trim().replace(/^<|>$/g, '') : undefined;
       const disposition = (partHeader(p, 'Content-Disposition') ?? '').toLowerCase();
-      const inline = !!contentId && disposition.startsWith('inline');
+      const referencedByBody = !!contentId && html.includes(`cid:${contentId}`);
+      const inline = !!contentId && (disposition.startsWith('inline') || referencedByBody);
       out.push({
         attachmentId,
         filename: filename || contentId || 'attachment',
@@ -242,7 +249,7 @@ export class RealGmailProvider implements GmailProvider {
       messages: msgs.map((m) => {
         const bodies = extractBodies(m.payload);
         const invite = bodies.ics ? extractInvite(bodies.ics) : undefined;
-        const attachments = extractAttachments(m.payload);
+        const attachments = extractAttachments(m.payload, bodies.html);
         return {
           id: m.id!,
           threadId,

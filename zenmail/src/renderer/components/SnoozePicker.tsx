@@ -64,7 +64,7 @@ export function SnoozePicker() {
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="zen-fade-in w-72 rounded-lg border border-bg-border bg-bg-subtle p-2 shadow-2xl outline-none"
+        className="zen-fade-in w-88 rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // keep global single-key shortcuts (kbar) from firing behind the modal
@@ -72,28 +72,30 @@ export function SnoozePicker() {
           e.stopPropagation();
         }}
       >
-        <div className="px-2 py-1.5 text-[11px] font-semibold tracking-wider text-text-muted uppercase">
+        <div className="px-1 pb-2 text-[11px] font-semibold tracking-wider text-text-muted uppercase">
           Snooze until…
         </div>
-        {PRESETS.map((p) => {
-          const at = p.at();
-          return (
-            <button
-              key={p.label}
-              onClick={() => void (bulkSelectedIds.size > 0 ? snoozeSelected(at) : snoozeThread(at))}
-              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-text-primary hover:bg-bg-border"
-            >
-              {p.label}
-              <span className="text-[11px] text-text-muted">{p.hint(at)}</span>
-            </button>
-          );
-        })}
-        <div className="mt-1 flex items-center gap-2 border-t border-bg-border px-2 pt-2 pb-1">
+        <div className="flex flex-col gap-1">
+          {PRESETS.map((p) => {
+            const at = p.at();
+            return (
+              <button
+                key={p.label}
+                onClick={() => void (bulkSelectedIds.size > 0 ? snoozeSelected(at) : snoozeThread(at))}
+                className="flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left text-[13px] text-text-primary hover:bg-bg-border"
+              >
+                {p.label}
+                <span className="text-[11px] text-text-muted">{p.hint(at)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-2 flex items-center gap-2 border-t border-bg-border px-1 pt-3">
           <input
             type="datetime-local"
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
-            className="flex-1 rounded border border-bg-border bg-bg px-2 py-1 text-[12px] text-text-primary"
+            className="flex-1 rounded border border-bg-border bg-bg px-2.5 py-1.5 text-[12px] text-text-primary"
           />
           <button
             disabled={!custom}
@@ -102,7 +104,7 @@ export function SnoozePicker() {
                 ? snoozeSelected(new Date(custom))
                 : snoozeThread(new Date(custom)))
             }
-            className="rounded bg-accent px-2 py-1 text-[12px] text-white disabled:opacity-40"
+            className="rounded bg-accent px-3 py-1.5 text-[12px] text-white disabled:opacity-40"
           >
             Set
           </button>

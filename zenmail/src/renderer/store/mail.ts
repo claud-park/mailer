@@ -749,6 +749,7 @@ export const useMailStore = create<MailState>((set, get) => {
         return;
       }
 
+      const wasActive = s.activeThreadId === id;
       const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
@@ -756,7 +757,7 @@ export const useMailStore = create<MailState>((set, get) => {
         return {
           threads,
           selectedIndex: clampSelection(next),
-          ...(st.activeThreadId === id ? { activeThreadId: null, activeThread: null } : {}),
+          ...(wasActive ? { activeThreadId: null, activeThread: null } : {}),
         };
       });
       done();
@@ -768,6 +769,15 @@ export const useMailStore = create<MailState>((set, get) => {
         get().showToast('Archive failed — restored');
         void get().refresh();
         return;
+      }
+      // 아카이브한 스레드가 열려 있던 상세 뷰였다면, 리딩 패인을 비우는 대신 새로 선택된
+      // 다음 메일을 자동으로 연다(j/k가 이미 하는 "선택 = 상세" 불변식을 archive에도 적용).
+      // modifyLabels 성공 확인 뒤에 열어야 한다 — 먼저 열면 그 스레드가 unread일 때 openThread의
+      // markRead()가 자체 modifyLabels 호출을 트리거해, 위 archive 호출과 경합하게 된다.
+      if (wasActive) {
+        const after = get();
+        const nextThread = visibleThreads(after)[after.selectedIndex];
+        if (nextThread) void after.openThread(nextThread.id);
       }
       if (!opts?.silent) get().showToast('Archived');
       useCoachStore.getState().bumpStat('archive');
