@@ -876,6 +876,29 @@ async function run() {
     // --- arrow-key navigation: ArrowDown/ArrowUp alias j/k (useKeyboard) — non-destructive
     await tryRpScenario(page, 'NavArrows', () => scenario_nav_arrows(page));
 
+    // --- undo-toast: TC-UNDO-* (docs/features/undo-toast/TC.md) — runs after select-all-in-view's
+    // own bulk scenarios (so Newsletter-tab consumption by TC-SA-B1 is already done) and before the
+    // mutate+restart block. Every single-item/bulk action here fully restores its target thread via
+    // Undo before moving on, except TC-UNDO-A5 (intentionally permanent once the undo window expires)
+    // — which always lands on a non-reserved row so it never breaks a later by-name assertion.
+    // Bulk (B1) runs before Single (A1-A5) — both fully self-restore via Undo except Single's own
+    // A5 (intentionally permanent post-expiry archive), so running Bulk first gives it first pick of
+    // whatever reserved-free throwaway-split candidates select-all-in-view's own bulk destructive
+    // tests didn't already permanently consume, minimizing (not eliminating) a SKIP from A5 also
+    // having claimed one of the same small pool of eligible senders.
+    await tryUndoScenario(page, 'Bulk', () => scenario_undo_bulk(page));
+    await tryUndoScenario(page, 'Single', () => scenario_undo_single(page));
+    await tryUndoScenario(page, 'Regression', () => scenario_undo_regression(page));
+
+    // --- label-crud: TC-LBL-* (docs/features/label-crud/TC.md) — creates and deletes its own
+    // throwaway label ("E2E-New-Label-<ts>"), so it never collides with any earlier scenario's own
+    // label enumeration (e.g. TC-SA-B5's bulk-label-apply already ran and picked a different label).
+    await tryLblScenario(page, 'All', () => scenario_lbl(page));
+
+    // --- snippets-inline-reply: TC-SNIP-* (docs/features/snippets-inline-reply/TC.md) — mirrors
+    // Compose's own ⌘; snippet flow (TC-DD-B*) but scoped to ThreadView's InlineReply editor.
+    await trySnipScenario(page, 'Inline', () => scenario_snip_inline(page));
+
     // --- F1/F2/F4: mutate + restart -----------------------------------
     await scenario_prepare_restart_state(page);
   } catch (err) {
@@ -1082,6 +1105,57 @@ async function run() {
     record('TC-ATT-G2', 'PASS', 'npm test + npx tsc --noEmit (incl. attachments/download vitest, TC-ATT-F1~F2) both exit 0 (reusing TC-KM-G2/G3)');
   } else {
     record('TC-ATT-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-UNDO-G1/G2: undo-toast regression gates ---------------------------
+  const preUndoFails = results.filter((r) => !r.id.startsWith('TC-UNDO') && r.status === 'FAIL');
+  if (preUndoFails.length === 0) {
+    record(
+      'TC-UNDO-G1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-UNDO')).length} pre-existing assertions still PASS/SKIP with undo-toast wired in`
+    );
+  } else {
+    record('TC-UNDO-G1', 'FAIL', `${preUndoFails.length} pre-existing (non-UNDO) assertions failed: ${preUndoFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-UNDO-G2', 'PASS', 'npm test + npx tsc --noEmit both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-UNDO-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-LBL-G1/G2: label-crud regression gates ----------------------------
+  const preLblFails = results.filter((r) => !r.id.startsWith('TC-LBL') && r.status === 'FAIL');
+  if (preLblFails.length === 0) {
+    record(
+      'TC-LBL-G1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-LBL')).length} pre-existing assertions still PASS/SKIP with label-crud wired in`
+    );
+  } else {
+    record('TC-LBL-G1', 'FAIL', `${preLblFails.length} pre-existing (non-LBL) assertions failed: ${preLblFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-LBL-G2', 'PASS', 'npm test + npx tsc --noEmit both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-LBL-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-SNIP-G1/G2: snippets-inline-reply regression gates ----------------
+  const preSnipFails = results.filter((r) => !r.id.startsWith('TC-SNIP') && r.status === 'FAIL');
+  if (preSnipFails.length === 0) {
+    record(
+      'TC-SNIP-G1',
+      'PASS',
+      `all ${results.filter((r) => !r.id.startsWith('TC-SNIP')).length} pre-existing assertions still PASS/SKIP with snippets-inline-reply wired in`
+    );
+  } else {
+    record('TC-SNIP-G1', 'FAIL', `${preSnipFails.length} pre-existing (non-SNIP) assertions failed: ${preSnipFails.map((r) => r.id).join(', ')}`);
+  }
+  if (kmG2?.status === 'PASS' && kmG3?.status === 'PASS') {
+    record('TC-SNIP-G2', 'PASS', 'npm test + npx tsc --noEmit both exit 0 (reusing TC-KM-G2/G3)');
+  } else {
+    record('TC-SNIP-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
   }
 
   console.log('\n=== TC Results ===');
@@ -4760,6 +4834,705 @@ async function scenario_sa_bulk_destructive(page) {
   await clickTab(page, 'Inbox').catch(() => {});
   await deleteSplit(page, 'SA-Snooze').catch(() => {});
   await clickTab(page, 'Inbox').catch(() => {});
+}
+
+// ===========================================================================
+// undo-toast: TC-UNDO-* (docs/features/undo-toast/TC.md)
+// ===========================================================================
+
+/** picks the first row not matching SA_RESERVED_SUBJECTS (threads later restart/CAL/FUP scenarios
+ *  still depend on by name) and not already used by an earlier assertion in the same scenario run —
+ *  reused here since undo-toast's single-item tests need the same "never permanently destroy a
+ *  reserved thread" guarantee as select-all-in-view's destructive tests (TC-UNDO-A5 is the one case
+ *  that doesn't get undone, so it must never land on a reserved row). */
+function pickNonReservedRow(rows, excludeTexts = []) {
+  return rows.find(
+    (r) => !SA_RESERVED_SUBJECTS.some((s) => r.text.includes(s)) && !excludeTexts.includes(r.text)
+  );
+}
+
+/** clicks a row by its stable data-thread-id rather than a text substring — used by
+ *  scenario_undo_single to repeatedly re-select the SAME single target thread across A1-A5 (each
+ *  step fully self-restores via Undo except the final A5, so the whole test only ever needs to find
+ *  ONE eligible non-reserved row, not five — this suite's shared Inbox pool can be down to just a
+ *  handful of non-reserved rows by the time this late-running scenario executes, since almost every
+ *  destructive scenario before it carefully avoids the reserved set, which is exactly why the reserved
+ *  rows are disproportionately what's LEFT by this point). Row text (sender/date/subject) can also
+ *  drift across a long run (formatDate()'s relative "Xm/Xh ago" text), which id-based lookup sidesteps. */
+async function clickRowById(page, id) {
+  const handle = await page.evaluateHandle((tid) => document.querySelector(`[data-thread-id="${tid}"]`), id);
+  const el = handle.asElement();
+  if (!el) throw new Error(`row not found for id: ${id}`);
+  await el.click();
+}
+
+/** whether a row with this data-thread-id is currently rendered (id-based — immune to the row's own
+ *  formatDate() text drifting between "Xm ago" buckets across a long-running suite, unlike a raw
+ *  full-row-text substring comparison against a stale baseline). */
+async function rowExistsById(page, id) {
+  return page.evaluate((tid) => !!document.querySelector(`[data-thread-id="${tid}"]`), id);
+}
+
+/** ground-truth labelIds for a single thread via the real (always-on) fetchThread IPC. Used instead
+ *  of row-chip DOM text wherever a thread must be OPEN to drive the interaction (applying a label via
+ *  the 'l' picker requires the row to be selected/open) — ThreadList renders in "compact" mode (no
+ *  label chips at all) whenever a thread is open (`compact = !!activeThreadId` in ThreadList.tsx), so
+ *  chip-presence DOM checks are unusable there regardless of whether the label actually applied. */
+async function threadLabelIds(page, threadId) {
+  return page.evaluate(async (id) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    const detail = await window.zenmail.fetchThread(activeEmail, id);
+    return detail.labelIds;
+  }, threadId);
+}
+
+function sameLabelSet(a, b) {
+  return a.length === b.length && a.every((l) => b.includes(l));
+}
+
+async function tryUndoScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] UNDO scenario "${label}" failed:`, err);
+    record(`TC-UNDO-${label}-error`, 'FAIL', String(err));
+    try {
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await clickTab(page, 'Inbox');
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+/** TC-UNDO-A1/A2/A3/A4/A5: single-item undo across all four undo-capable actions (D1), plus the
+ *  expiry case. All five steps reuse the SAME ONE target thread (by data-thread-id, via
+ *  clickRowById) rather than picking a fresh non-reserved row per step — A1-A4 each fully restore it
+ *  via Undo before the next step runs, so reuse is safe, and it means this whole scenario only ever
+ *  needs to find ONE eligible non-reserved row rather than five. That matters concretely: by the time
+ *  this late-running scenario executes, the shared Inbox pool can be down to a handful of rows, and
+ *  they skew heavily toward the reserved set (every earlier destructive scenario in this suite
+ *  carefully avoids touching reserved rows, which is exactly why they're disproportionately what's
+ *  left — this was observed to exhaust a 3-non-reserved-row budget with A1-A5 needing 5 distinct
+ *  rows). Only A5 permanently changes the thread's state (no undo, by design), so it runs last. */
+async function scenario_undo_single(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  const rows = await rowsInfo(page);
+  const target = pickNonReservedRow(rows)?.text;
+  if (!target) throw new Error('TC-UNDO single: no eligible row found');
+  const id = await threadIdOfRowContaining(page, target);
+
+  // TC-UNDO-A1: archive -> Undo within 5s -> row reappears (INBOX restored), survives a renderer
+  // reload (proves the server-side modifyLabels(+INBOX) actually landed, not just a local zustand
+  // restore, since a reload discards all in-memory store state and refetches from scratch). Matches
+  // by data-thread-id throughout, not raw row text — a full-row-text substring baseline would flake
+  // as formatDate()'s relative "Xm/Xh ago" text drifts across this suite's long real-world runtime.
+  await clickRowById(page, id);
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('e');
+  const archivedA1 = await waitFor(async () => (await bodyText(page)).includes('Archived'), {
+    desc: 'A1 archived toast',
+  }).then(() => true, () => false);
+  const goneA1 = !(await rowExistsById(page, id));
+  await page.locator('button:has-text("Undo")').first().click();
+  await waitFor(async () => rowExistsById(page, id), { timeout: 5000, desc: 'A1 row restored' });
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  const survivedA1 = await rowExistsById(page, id);
+  record(
+    'TC-UNDO-A1',
+    archivedA1 && goneA1 && survivedA1 ? 'PASS' : 'FAIL',
+    `archivedA1=${archivedA1} goneA1=${goneA1} survivedA1=${survivedA1}`
+  );
+
+  // TC-UNDO-A2: trash -> Undo -> row reappears in Inbox (TRASH removed, INBOX re-added), survives reload.
+  await clickTab(page, 'Inbox');
+  await clickRowById(page, id);
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('#');
+  const trashedA2 = await waitFor(async () => (await bodyText(page)).includes('Moved to trash'), {
+    desc: 'A2 trash toast',
+  }).then(() => true, () => false);
+  const goneA2 = !(await rowExistsById(page, id));
+  await page.locator('button:has-text("Undo")').first().click();
+  await waitFor(async () => rowExistsById(page, id), { timeout: 5000, desc: 'A2 row restored' });
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  const survivedA2 = await rowExistsById(page, id);
+  record(
+    'TC-UNDO-A2',
+    trashedA2 && goneA2 && survivedA2 ? 'PASS' : 'FAIL',
+    `trashedA2=${trashedA2} goneA2=${goneA2} survivedA2=${survivedA2}`
+  );
+
+  // TC-UNDO-A3: label-apply undo removes only that label, leaving every other label on the thread
+  // untouched. Seeds its own throwaway label directly via the always-on createLabel IPC (bypasses
+  // the label-crud UI entirely, keeping this independent of that feature's own tests), then a
+  // renderer reload so store.loadLabels() (init-only) picks it up for the LabelPicker to offer it.
+  // Verifies via ground-truth fetchThread labelIds, not row-chip DOM text — ThreadList renders in
+  // "compact" mode (no chips at all) whenever a thread is open (`compact = !!activeThreadId` in
+  // ThreadList.tsx), which this flow requires (the label picker targets the open/selected thread).
+  await clickTab(page, 'Inbox');
+  // deliberately does NOT contain "undo" (case-insensitive) — Playwright's `:has-text("Undo")`
+  // (used below to find the toast's own Undo button) is a case-insensitive substring match, and the
+  // Sidebar renders every user label as a `<button>{name}</button>` too, so a label literally named
+  // "...undo..." would give `button:has-text("Undo")` a second, unrelated match (the sidebar's own
+  // label row) racing with `.first()` against the real toast button — this bit exactly that way once.
+  const A3_LABEL = `e2e-lbl-apply-${Date.now()}`;
+  const createdA3 = await page.evaluate(async (name) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.createLabel(activeEmail, name);
+  }, A3_LABEL);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  await clickRowById(page, id);
+  // opening an unread thread fires its own fire-and-forget markRead()->modifyLabels() call (D5/D1-D2
+  // of the openThread flow) which would otherwise show up as a spurious labelIds diff unrelated to
+  // this test's own apply/undo — capture "before" only after that settles (mirrors scenario_sp_
+  // rollback's identical 400ms note for the same reason).
+  await sleep(400);
+  const labelsBeforeA3 = await threadLabelIds(page, id);
+  await focusBody(page);
+  await page.keyboard.press('l');
+  await page.waitForSelector('input[placeholder^="Apply label"]', { timeout: 5000 });
+  await page.keyboard.type(A3_LABEL);
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  const appliedA3 = await waitFor(
+    async () => (await threadLabelIds(page, id)).includes(createdA3.id),
+    { timeout: 4000, desc: 'A3 label applied' }
+  ).then(() => true, () => false);
+  await page.locator('button:has-text("Undo")').first().click();
+  await waitFor(async () => !(await threadLabelIds(page, id)).includes(createdA3.id), {
+    timeout: 5000,
+    desc: 'A3 label removed by undo',
+  });
+  const labelsAfterUndoA3 = await threadLabelIds(page, id);
+  const restoredExactlyA3 = sameLabelSet(labelsBeforeA3, labelsAfterUndoA3);
+  record(
+    'TC-UNDO-A3',
+    appliedA3 && restoredExactlyA3 ? 'PASS' : 'FAIL',
+    `appliedA3=${appliedA3} restoredExactlyA3=${restoredExactlyA3} before=${JSON.stringify(labelsBeforeA3)} after=${JSON.stringify(labelsAfterUndoA3)}`
+  );
+
+  // cleanup: remove the throwaway label so it doesn't linger for later scenarios/enumerations
+  await page.evaluate(async (labelId) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail.deleteLabel(activeEmail, labelId);
+  }, createdA3.id);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+
+  // TC-UNDO-A4: snooze -> Undo -> thread reappears in Inbox IMMEDIATELY (no waiting for the daemon
+  // tick — cancelSnooze restores INBOX synchronously per D5), survives reload.
+  await clickRowById(page, id);
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('b');
+  await page.waitForSelector('button:has-text("Later today")', { timeout: 5000 });
+  await page.locator('button:has-text("Later today")').first().click();
+  const snoozedA4 = await waitFor(async () => (await bodyText(page)).includes('Snoozed until'), {
+    desc: 'A4 snooze toast',
+  }).then(() => true, () => false);
+  const goneA4 = !(await rowExistsById(page, id));
+  await page.locator('button:has-text("Undo")').first().click();
+  const restoredFastA4 = await waitFor(async () => rowExistsById(page, id), {
+    timeout: 2500,
+    desc: 'A4 row restored immediately (no daemon tick)',
+  }).then(() => true, () => false);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  const survivedA4 = await rowExistsById(page, id);
+  record(
+    'TC-UNDO-A4',
+    snoozedA4 && goneA4 && restoredFastA4 && survivedA4 ? 'PASS' : 'FAIL',
+    `snoozedA4=${snoozedA4} goneA4=${goneA4} restoredFastA4=${restoredFastA4} survivedA4=${survivedA4}`
+  );
+
+  // TC-UNDO-A5: archive, let the 5s undo window fully elapse without clicking Undo -> the Undo
+  // button disappears (toast auto-cleared) and the thread stays archived permanently (no restore).
+  // Reuses the same thread one final time — by now it's back to its normal (pre-A1) state via A4's
+  // own restore, and this is the last step in the whole scenario, so leaving it archived is safe.
+  await clickRowById(page, id);
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('e');
+  await waitFor(async () => (await page.locator('button:has-text("Undo")').count()) > 0, {
+    desc: 'A5 undo button appears',
+  });
+  await sleep(5500); // past the 5s undo window (D4)
+  const undoGoneA5 = (await page.locator('button:has-text("Undo")').count()) === 0;
+  const stillArchivedA5 = !(await rowExistsById(page, id));
+  record(
+    'TC-UNDO-A5',
+    undoGoneA5 && stillArchivedA5 ? 'PASS' : 'FAIL',
+    `undoGoneA5=${undoGoneA5} stillArchivedA5=${stillArchivedA5}`
+  );
+
+  await clickTab(page, 'Inbox');
+}
+
+/** TC-UNDO-B1: bulk archive undo restores every selected thread via one combined callback (D6).
+ *  Isolates a reserved-free sender in a throwaway split (same infra as TC-SA-B2/B4) rather than the
+ *  Newsletter tab, since select-all-in-view's own TC-SA-B1 already destructively (no-undo) archived
+ *  the Newsletter tab earlier in this same session. */
+async function scenario_undo_bulk(page) {
+  await clickTab(page, 'Inbox').catch(() => {});
+  let candidates = [];
+  try {
+    candidates = await safeBulkSenderCandidates(page);
+  } catch (err) {
+    console.error('[harness] UNDO-B1 candidate lookup failed:', err);
+  }
+  let n = 0;
+  let used = null;
+  for (const email of candidates) {
+    const count = await isolateInThrowawaySplit(page, 'UNDO-B1', email);
+    if (count > 0) {
+      n = count;
+      used = email;
+      break;
+    }
+  }
+  if (n === 0) {
+    record('TC-UNDO-B1', 'SKIP', 'no reserved-free INBOX sender left to isolate for a bulk-undo test');
+    await clickTab(page, 'Inbox').catch(() => {});
+    return;
+  }
+  await page.keyboard.press('Meta+A');
+  await waitFor(async () => (await bulkBannerText(page)) === `${n} selected`, {
+    timeout: 4000,
+    desc: 'UNDO-B1 banner',
+  }).catch(() => {});
+  await page.keyboard.press('e');
+  const toast = await waitFor(
+    async () => {
+      const t = await bodyText(page);
+      return t.includes(`${n}개 아카이브됨`) ? t : null;
+    },
+    { timeout: 10000, desc: 'UNDO-B1 aggregate archive toast' }
+  ).catch(() => '');
+  const rowsGone = (await rowsInfo(page)).length === 0;
+  const undoBtnVisible = (await page.locator('button:has-text("Undo")').count()) > 0;
+  await page.locator('button:has-text("Undo")').first().click();
+  await waitFor(async () => (await rowsInfo(page)).length === n, { timeout: 8000, desc: 'UNDO-B1 rows restored' });
+  const restored = (await rowsInfo(page)).length === n;
+  record(
+    'TC-UNDO-B1',
+    rowsGone && undoBtnVisible && toast.includes(`${n}개 아카이브됨`) && restored ? 'PASS' : 'FAIL',
+    `n=${n} used=${used} rowsGone=${rowsGone} undoBtnVisible=${undoBtnVisible} restored=${restored}`
+  );
+  await clickTab(page, 'Inbox').catch(() => {});
+  await deleteSplit(page, 'UNDO-B1').catch(() => {});
+}
+
+/** TC-UNDO-C1: existing failure-rollback path (archive fails -> "Archive failed — restored") is
+ *  unaffected by the new undo feature — no Undo button on a toast for an action that never actually
+ *  succeeded (mirrors scenario_sp_rollback's armFailNextModify pattern, TC-SP-C1/C4). */
+async function scenario_undo_regression(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  const rows = await rowsInfo(page);
+  const target = pickNonReservedRow(rows)?.text;
+  if (!target) throw new Error('TC-UNDO-C1: no eligible row found');
+  const idC1 = await threadIdOfRowContaining(page, target);
+  await clickRowContaining(page, target);
+  await sleep(400);
+  await armFailNextModify(page);
+  await focusBody(page);
+  await page.keyboard.press('e');
+  await waitFor(async () => (await bodyText(page)).includes('Archive failed'), {
+    timeout: 3000,
+    desc: 'C1 failure toast',
+  });
+  const undoVisible = (await page.locator('button:has-text("Undo")').count()) > 0;
+  await waitFor(async () => rowExistsById(page, idC1), {
+    timeout: 5000,
+    desc: 'C1 row restored (rollback)',
+  });
+  record('TC-UNDO-C1', !undoVisible ? 'PASS' : 'FAIL', `undoVisible(shouldBeFalse)=${undoVisible}`);
+  await clickTab(page, 'Inbox');
+}
+
+// ===========================================================================
+// label-crud: TC-LBL-* (docs/features/label-crud/TC.md)
+// ===========================================================================
+
+async function tryLblScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] LBL scenario "${label}" failed:`, err);
+    record(`TC-LBL-${label}-error`, 'FAIL', String(err));
+    try {
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await clickTab(page, 'Inbox');
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+/** visible text of every user-created label row in the sidebar — LabelDot renders no text, so this
+ *  is exactly the label name (plus any trailing unread-count digits if the label has unread mail,
+ *  hence callers match with .includes() rather than exact equality). */
+async function sidebarLabelNames(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('aside nav div.group.relative button')).map((btn) =>
+      btn.textContent.trim()
+    )
+  );
+}
+
+/** the sidebar item (system item or user label) currently marked active (SidebarRow's own active
+ *  className combo) — confirms which view is on screen without reaching into the store directly. */
+async function activeSidebarItemText(page) {
+  return page.evaluate(() => {
+    const btn = document.querySelector('aside nav button.bg-bg-border.text-text-primary');
+    return btn ? btn.textContent.trim() : null;
+  });
+}
+
+/** clicks the Sidebar's own "Inbox" nav item (SYSTEM_ITEMS row, `store.setActiveLabel('INBOX')`) —
+ *  NOT the split-tab-bar "Inbox" tab that `clickTab` uses (`store.switchTab`, which per TC-D7
+ *  deliberately leaves any open thread open). setActiveLabel explicitly resets
+ *  activeThreadId/activeThread to null, so this is the reliable way to actually close the reading
+ *  pane in this suite — plain Escape depends on keyboard focus already being in the top document,
+ *  which isn't guaranteed once a message's sandboxed iframe has ever taken it. Needed here because
+ *  ThreadList's `compact` mode (no label chips rendered at all) is `!!activeThreadId` — a single
+ *  list-wide flag, not per-row — so as long as ANY thread stays open, every row hides its chips. */
+async function closeThreadViaSidebar(page) {
+  await page.locator('aside nav button:has-text("Inbox")').first().click();
+  await sleep(200);
+}
+
+/** current textContent of the row with this data-thread-id, or null if not rendered — only
+ *  meaningful for label-chip checks once no thread is open (see closeThreadViaSidebar's comment on
+ *  ThreadList's list-wide `compact` mode, which hides chips entirely while any thread is active). */
+async function rowTextById(page, id) {
+  return page.evaluate((tid) => {
+    const btn = document.querySelector(`[data-thread-id="${tid}"]`);
+    return btn ? btn.textContent.trim() : null;
+  }, id);
+}
+
+async function labelDeleteButtonOpacity(page, name) {
+  return page.evaluate((n) => {
+    const btn = document.querySelector(`button[aria-label="Delete ${n}"]`);
+    return btn ? getComputedStyle(btn).opacity : null;
+  }, name);
+}
+
+/** TC-LBL-A1~A5 (creation) + B1~B5 (deletion) — creates and deletes its own throwaway label
+ *  ("E2E-New-Label-<ts>"), so it never collides with any earlier scenario's label enumeration
+ *  (e.g. TC-SA-B5's bulk-label-apply, which already ran and picked whatever label was first). */
+async function scenario_lbl(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+
+  // TC-LBL-A1: the '+' add-label button is present next to the "Labels" header (not hover-gated,
+  // unlike the per-row delete icon covered by B1 below)
+  const addBtnVisibleA1 = await page.evaluate(() => {
+    const btn = document.querySelector('button[aria-label="Add label"]');
+    return !!btn && btn.offsetParent !== null;
+  });
+  record('TC-LBL-A1', addBtnVisibleA1 ? 'PASS' : 'FAIL', `Add label button present=${addBtnVisibleA1}`);
+
+  // TC-LBL-A4: Esc while the inline input is open cancels — no label created, input closes
+  const labelsBeforeA4 = await sidebarLabelNames(page);
+  await page.click('button[aria-label="Add label"]');
+  await page.waitForSelector('input[aria-label="New label name"]', { timeout: 3000 });
+  await page.keyboard.type('E2E-Cancelled-Label');
+  await page.keyboard.press('Escape');
+  await sleep(150);
+  const inputGoneA4 = !(await page.evaluate(() => !!document.querySelector('input[aria-label="New label name"]')));
+  const labelsAfterA4 = await sidebarLabelNames(page);
+  const noNewLabelA4 =
+    labelsAfterA4.length === labelsBeforeA4.length && !labelsAfterA4.some((t) => t.includes('E2E-Cancelled-Label'));
+  record(
+    'TC-LBL-A4',
+    inputGoneA4 && noNewLabelA4 ? 'PASS' : 'FAIL',
+    `inputGoneA4=${inputGoneA4} before=${labelsBeforeA4.length} after=${labelsAfterA4.length}`
+  );
+
+  // TC-LBL-A2: '+' -> type name -> Enter -> appears immediately in the sidebar, persists across a
+  // renderer reload — the mock provider's labels array is main-process/session-scoped and untouched
+  // by a renderer-only reload, so this proves a real server-side create, not just local zustand state.
+  const NEW_LABEL = `E2E-New-Label-${Date.now()}`;
+  await page.click('button[aria-label="Add label"]');
+  await page.waitForSelector('input[aria-label="New label name"]', { timeout: 3000 });
+  await page.keyboard.type(NEW_LABEL);
+  await page.keyboard.press('Enter');
+  const appearedA2 = await waitFor(async () => (await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL)), {
+    timeout: 4000,
+    desc: 'A2 label appears in sidebar',
+  }).then(() => true, () => false);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  const persistedA2 = (await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL));
+  record('TC-LBL-A2', appearedA2 && persistedA2 ? 'PASS' : 'FAIL', `appearedA2=${appearedA2} persistedA2=${persistedA2}`);
+
+  // resolve NEW_LABEL's id via the always-on fetchLabels IPC — A3/B3 below verify via ground-truth
+  // fetchThread labelIds rather than row-chip DOM text, since ThreadList renders in "compact" mode
+  // (no label chips at all) whenever a thread is open (`compact = !!activeThreadId`), which A3's
+  // own flow requires (the label picker targets the open/selected thread).
+  const newLabelObj = await page.evaluate(async (name) => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    const labels = await window.zenmail.fetchLabels(activeEmail);
+    return labels.find((l) => l.name === name) ?? null;
+  }, NEW_LABEL);
+  const NEW_LABEL_ID = newLabelObj?.id;
+
+  // TC-LBL-A5: creation-failure rollback (사이드바에 추가되지 않고 실패 토스트). SKIP: no existing
+  // failure-injection hook covers mail:create-label — __debugFailNextModify only arms the next
+  // mail:modify-labels/mail:snooze call (src/main/ipc.ts maybeInjectDebugFailure call sites), and
+  // MockGmailProvider.createLabel never throws on its own. store.createLabel awaits the real IPC
+  // before ever touching local state, so this path is genuinely unreachable via any existing E2E
+  // hook without adding new main-process instrumentation — out of scope for an e2e-only change.
+  // Divergence noted in docs/features/label-crud/TC.md.
+  record(
+    'TC-LBL-A5',
+    'SKIP',
+    'no failure-injection hook covers mail:create-label (only modify-labels/snooze/followup do) — not exercisable via CDP without a new main-process hook; see TC.md note'
+  );
+
+  // TC-LBL-A3: the newly created label can be applied to a thread via the label picker ('l') —
+  // verified via ground-truth fetchThread labelIds (see NEW_LABEL_ID comment above), not row DOM.
+  const rowsA3 = await rowsInfo(page);
+  const targetA3 = rowsA3.find((r) => !r.text.includes(NEW_LABEL))?.text;
+  if (!targetA3) throw new Error('TC-LBL-A3: no eligible row found');
+  const idA3lbl = await threadIdOfRowContaining(page, targetA3);
+  await clickRowContaining(page, targetA3);
+  await sleep(200);
+  await focusBody(page);
+  await page.keyboard.press('l');
+  await page.waitForSelector('input[placeholder^="Apply label"]', { timeout: 5000 });
+  await page.keyboard.type(NEW_LABEL);
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  const appliedA3 = await waitFor(
+    async () => (await threadLabelIds(page, idA3lbl)).includes(NEW_LABEL_ID),
+    { timeout: 4000, desc: 'A3 label applied (ground truth)' }
+  ).then(() => true, () => false);
+  record('TC-LBL-A3', appliedA3 ? 'PASS' : 'FAIL', `appliedA3=${appliedA3}`);
+
+  // close the thread before B1-B5: they're sidebar-only interactions, and B3 below needs the row
+  // back in classic (non-compact) mode so its label chip is actually rendered (see
+  // closeThreadViaSidebar's comment) — clickTab('Inbox') alone would NOT do this (switchTab
+  // deliberately leaves an open thread open, TC-D7).
+  await closeThreadViaSidebar(page);
+
+  // TC-LBL-B1: delete icon hidden by default (opacity 0), hover-revealed (opacity 1)
+  await page.mouse.move(2, 2);
+  await sleep(100);
+  const opacityDefault = await labelDeleteButtonOpacity(page, NEW_LABEL);
+  await page.hover(`button[aria-label="Delete ${NEW_LABEL}"]`);
+  await sleep(150);
+  const opacityHover = await labelDeleteButtonOpacity(page, NEW_LABEL);
+  record(
+    'TC-LBL-B1',
+    opacityDefault === '0' && opacityHover === '1' ? 'PASS' : 'FAIL',
+    `opacityDefault=${opacityDefault} opacityHover=${opacityHover}`
+  );
+
+  // TC-LBL-B2: click delete icon -> confirm dialog opens, label NOT yet deleted
+  await page.locator(`button[aria-label="Delete ${NEW_LABEL}"]`).first().click();
+  await waitFor(async () => (await bodyText(page)).includes('라벨을 삭제하면 모든 메일에서 제거됩니다'), {
+    desc: 'B2 dialog opens',
+  });
+  const stillPresentB2 = (await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL));
+  record('TC-LBL-B2', stillPresentB2 ? 'PASS' : 'FAIL', `stillPresentB2=${stillPresentB2}`);
+
+  // TC-LBL-B4: cancel in the dialog leaves the label untouched
+  await page.locator('button:has-text("취소")').first().click();
+  await sleep(150);
+  const dialogClosedB4 = !(await bodyText(page)).includes('라벨을 삭제하면');
+  const stillPresentB4 = (await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL));
+  record(
+    'TC-LBL-B4',
+    dialogClosedB4 && stillPresentB4 ? 'PASS' : 'FAIL',
+    `dialogClosedB4=${dialogClosedB4} stillPresentB4=${stillPresentB4}`
+  );
+
+  // TC-LBL-B5 setup: switch to viewing the label itself before deleting it
+  await page.locator(`button:has-text("${NEW_LABEL}")`).first().click();
+  await sleep(300);
+  const viewingLabelB5 = (await activeSidebarItemText(page))?.includes(NEW_LABEL) ?? false;
+
+  // TC-LBL-B3/B5: confirm delete -> gone from the sidebar, chip gone from the thread it was applied
+  // to (A3), current view switches to Inbox (was viewing the label being deleted), persists across
+  // a renderer reload.
+  await page.locator(`button[aria-label="Delete ${NEW_LABEL}"]`).first().click();
+  await waitFor(async () => (await bodyText(page)).includes('라벨을 삭제하면 모든 메일에서 제거됩니다'), {
+    desc: 'B3/B5 dialog re-opens',
+  });
+  await page.locator('button:has-text("삭제")').first().click();
+  await sleep(300);
+
+  const goneFromSidebar = !(await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL));
+  // SidebarRow's own textContent for the Inbox system item appends its unread-count badge digits
+  // with no separator (e.g. "Inbox14") whenever unreadCount>0 — startsWith, not exact equality.
+  const viewSwitchedToInboxB5 = !!(await activeSidebarItemText(page))?.startsWith('Inbox');
+  record(
+    'TC-LBL-B5',
+    viewingLabelB5 && viewSwitchedToInboxB5 ? 'PASS' : 'FAIL',
+    `viewingLabelB5=${viewingLabelB5} viewSwitchedToInboxB5=${viewSwitchedToInboxB5}`
+  );
+
+  await clickTab(page, 'Inbox');
+  // DOM-based (row is back in classic mode via closeThreadViaSidebar above), not ground-truth
+  // fetchThread — unlike modifyLabels (TC-LBL-A3's own apply, which patches the cache's threads-row
+  // synchronously as part of its optimistic delta), deleteLabel's IPC handler never touches the
+  // cache at all; getCachedThreadDetail's labelIds come from that same threads-row cache (cache.ts),
+  // which only a later list-level SWR resync would refresh — not observable on any predictable
+  // timeline from here, only after the reload below forces a real cold re-init.
+  const rowTextGoneA3 = await rowTextById(page, idA3lbl);
+  const chipGone = !rowTextGoneA3?.includes(NEW_LABEL);
+  await reloadApp(page);
+  await clickTab(page, 'Inbox');
+  const persistedGoneAfterReload = !(await sidebarLabelNames(page)).some((t) => t.includes(NEW_LABEL));
+  const chipGoneAfterReload = !(await threadLabelIds(page, idA3lbl)).includes(NEW_LABEL_ID);
+  record(
+    'TC-LBL-B3',
+    goneFromSidebar && chipGone && persistedGoneAfterReload && chipGoneAfterReload ? 'PASS' : 'FAIL',
+    `goneFromSidebar=${goneFromSidebar} chipGone=${chipGone} persisted=${persistedGoneAfterReload} chipGoneAfterReload=${chipGoneAfterReload}`
+  );
+}
+
+// ===========================================================================
+// snippets-inline-reply: TC-SNIP-* (docs/features/snippets-inline-reply/TC.md)
+// ===========================================================================
+
+async function trySnipScenario(page, label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] SNIP scenario "${label}" failed:`, err);
+    record(`TC-SNIP-${label}-error`, 'FAIL', String(err));
+    try {
+      await page.keyboard.press('Escape');
+      await sleep(150);
+      await clickTab(page, 'Inbox');
+    } catch {
+      /* best-effort only */
+    }
+  }
+}
+
+/** ThreadView's InlineReply editor — same [contenteditable] attribute Compose uses, distinguished
+ *  by InlineReply's own unique data-placeholder ("Reply to …", set in ThreadView.tsx), since
+ *  Compose's own editor is scoped under `.z-30` (see composeEditorHandle's own comment). */
+async function inlineReplyEditorHandle(page) {
+  const handle = await page.evaluateHandle(() =>
+    document.querySelector('[data-placeholder^="Reply to"][contenteditable]')
+  );
+  const el = handle.asElement();
+  if (!el) throw new Error('inline reply editor not found (is a thread open?)');
+  return el;
+}
+
+async function inlineReplyText(page) {
+  return page.evaluate(
+    () => document.querySelector('[data-placeholder^="Reply to"][contenteditable]')?.innerText ?? null
+  );
+}
+
+/** opens the first Inbox row and waits for InlineReply's editor to render; returns the row's text. */
+async function inlineReplyOpenFirstRow(page) {
+  await clickTab(page, 'Inbox');
+  await focusBody(page);
+  const rows = await rowsInfo(page);
+  await clickRowContaining(page, rows[0].text);
+  await waitFor(
+    async () => page.evaluate(() => !!document.querySelector('[data-placeholder^="Reply to"][contenteditable]')),
+    { desc: 'InlineReply editor rendered' }
+  );
+  return rows[0].text;
+}
+
+/** TC-SNIP-A1~A5: mirrors Compose's own ⌘; snippet flow (TC-DD-B1~B4) but scoped to ThreadView's
+ *  InlineReply editor. B1/B2 (no regression in Compose's TC-DD-B-series / SnippetsManager's
+ *  TC-DD-C-series) need no new code here — covered by those existing assertions still passing. */
+async function scenario_snip_inline(page) {
+  const SNIP_BODY = 'Best,\nInlineYR';
+  await seedSnippets(page, [{ id: 'e2e-snip-inline', name: 'inline-sig', body: SNIP_BODY, createdAt: Date.now() }]);
+
+  await inlineReplyOpenFirstRow(page);
+
+  // TC-SNIP-A1: ⌘; opens the Snippets picker from InlineReply's own editor
+  const editorA1 = await inlineReplyEditorHandle(page);
+  await editorA1.click();
+  await page.keyboard.press('Meta+;');
+  const pickerOpenA1 = await waitFor(() => snippetPickerOpen(page), { desc: 'A1 picker opens' }).then(
+    () => true,
+    () => false
+  );
+  record('TC-SNIP-A1', pickerOpenA1 ? 'PASS' : 'FAIL', `pickerOpenA1=${pickerOpenA1}`);
+
+  // TC-SNIP-A5: Esc closes only the picker (still open from A1) — no insertion, text unchanged
+  const textBeforeA5 = await inlineReplyText(page);
+  await page.keyboard.press('Escape');
+  await sleep(150);
+  const pickerClosedA5 = !(await snippetPickerOpen(page));
+  const textAfterA5 = await inlineReplyText(page);
+  record(
+    'TC-SNIP-A5',
+    pickerClosedA5 && textAfterA5 === textBeforeA5 ? 'PASS' : 'FAIL',
+    `pickerClosedA5=${pickerClosedA5} before=${JSON.stringify(textBeforeA5)} after=${JSON.stringify(textAfterA5)}`
+  );
+
+  // TC-SNIP-A2: caret-position insert — "Hello world", caret placed between "Hello " and "world" -> ⌘;
+  const editorA2 = await inlineReplyEditorHandle(page);
+  await editorA2.click();
+  await page.keyboard.type('Hello world');
+  for (let i = 0; i < 'world'.length; i++) await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'A2 picker opens' });
+  await page.keyboard.type('inline-sig');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+  const textA2 = await inlineReplyText(page);
+  const a2ok = normalizeNoNewlines(textA2) === normalizeNoNewlines('Hello ' + SNIP_BODY + 'world');
+  record('TC-SNIP-A2', a2ok ? 'PASS' : 'FAIL', `text=${JSON.stringify(textA2)}`);
+
+  // TC-SNIP-A3: caret lands right after the inserted snippet — further typing doesn't corrupt it
+  await page.keyboard.type('!');
+  const textA3 = await inlineReplyText(page);
+  const a3ok = normalizeNoNewlines(textA3) === normalizeNoNewlines('Hello ' + SNIP_BODY + '!world');
+  record('TC-SNIP-A3', a3ok ? 'PASS' : 'FAIL', `text=${JSON.stringify(textA3)}`);
+
+  // TC-SNIP-A4: fresh empty editor (no saved caret was ever set this mount) -> insert lands at
+  // start=end. Closes and reopens the thread so InlineReply remounts with a clean body/editorRef.
+  // focusBody first: useKeyboard's global Escape->closeThread is gated by isTyping(e.target), and
+  // focus is still inside the InlineReply contentEditable from A2/A3's typing above — pressing Escape
+  // without blurring it first is a silent no-op (the thread never closes, so "reopening" just
+  // re-selects the already-open thread and InlineReply's state is never reset).
+  await focusBody(page);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  await inlineReplyOpenFirstRow(page);
+  const editorA4 = await inlineReplyEditorHandle(page);
+  await editorA4.click();
+  await page.keyboard.press('Meta+;');
+  await waitFor(() => snippetPickerOpen(page), { desc: 'A4 picker opens' });
+  await page.keyboard.type('inline-sig');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+  const textA4 = await inlineReplyText(page);
+  const a4ok = normalizeNoNewlines(textA4) === normalizeNoNewlines(SNIP_BODY);
+  record('TC-SNIP-A4', a4ok ? 'PASS' : 'FAIL', `text=${JSON.stringify(textA4)}`);
+
+  await focusBody(page);
+  await page.keyboard.press('Escape');
+  await clickTab(page, 'Inbox');
 }
 
 // --- F1/F2/F4 restart persistence --------------------------------------
