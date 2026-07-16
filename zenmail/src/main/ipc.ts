@@ -626,6 +626,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       addLabelIds: ['INBOX'],
       removeLabelIds: [snoozeLabel],
     });
+    // whole-branch 리뷰 발견: send&archive(위 참고)와 동일한 이유로 캐시 행도 갱신해야 한다 —
+    // 이 호출은 provider를 직접 건드리므로 attemptOrEnqueue의 applyLabelDelta를 안 타, 캐시 행이
+    // INBOX 없이 남으면 다음 warm-cache 읽기가 스냅샷 복원을 반영 못 하고 잠깐 빠뜨릴 수 있다.
+    ctx.cache.applyLabelDelta(threadId, ['INBOX'], [snoozeLabel]);
     ctx.cache.removeSnooze(threadId);
   });
 

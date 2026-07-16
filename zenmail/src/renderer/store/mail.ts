@@ -997,15 +997,21 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(s);
       if (!a) return;
       set({ labelPickerOpen: false });
-      const undoApplyLabel = async () => {
-        set((st) => ({ threads: removeLabelId(st.threads, id, labelId) }));
-        try {
-          await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: [labelId] });
-        } catch (err) {
-          console.error('apply-label undo failed', err);
-          get().showToast('Undo failed');
-        }
-      };
+      // undo-toast 리뷰 발견: 이 스레드가 이미 그 라벨을 갖고 있었다면 apply는 no-op이므로(아래
+      // set의 !includes 가드) undo도 없어야 한다 — 무조건 제거하면 사용자가 원래부터 갖고 있던
+      // 라벨 연결을 서버에서 영구 삭제해버린다(자가치유 불가, D7과 동일 클래스의 버그).
+      const alreadyHadLabel = s.threads.find((t) => t.id === id)?.labelIds.includes(labelId) ?? false;
+      const undoApplyLabel = alreadyHadLabel
+        ? undefined
+        : async () => {
+            set((st) => ({ threads: removeLabelId(st.threads, id, labelId) }));
+            try {
+              await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: [labelId] });
+            } catch (err) {
+              console.error('apply-label undo failed', err);
+              get().showToast('Undo failed');
+            }
+          };
       set((st) => {
         const threads = st.threads.map((t) =>
           t.id === id && !t.labelIds.includes(labelId)
@@ -1547,18 +1553,24 @@ export const useMailStore = create<MailState>((set, get) => {
     async applyLabelSelected(labelId) {
       const ids = Array.from(get().bulkSelectedIds);
       if (ids.length === 0) return;
+      // undo-toast 리뷰 발견: 이미 그 라벨을 갖고 있던 스레드는 apply가 no-op이므로 undo 대상에서
+      // 빼야 한다 — 아니면 undo가 사용자가 원래부터 갖고 있던 라벨을 서버에서 영구 제거해버린다.
+      const threadsBefore = get().threads;
+      const newlyAppliedIds = ids.filter(
+        (id) => !threadsBefore.find((t) => t.id === id)?.labelIds.includes(labelId)
+      );
       for (const id of ids) {
         await get().applyLabel(labelId, id, { silent: true });
       }
       const undoAll = async () => {
         set((st) => {
           let threads = st.threads;
-          for (const id of ids) threads = removeLabelId(threads, id, labelId);
+          for (const id of newlyAppliedIds) threads = removeLabelId(threads, id, labelId);
           return { threads };
         });
         const a = aid(get());
         if (!a) return;
-        for (const id of ids) {
+        for (const id of newlyAppliedIds) {
           try {
             await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: [labelId] });
           } catch (err) {
@@ -1567,7 +1579,7 @@ export const useMailStore = create<MailState>((set, get) => {
           }
         }
       };
-      get().showToast(`${ids.length}개 라벨 적용됨`, { undo: undoAll });
+      get().showToast(`${ids.length}개 라벨 적용됨`, { undo: newlyAppliedIds.length > 0 ? undoAll : undefined });
       get().clearBulkSelection();
     },
 

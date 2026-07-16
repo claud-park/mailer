@@ -33,3 +33,14 @@
 - **컨텍스트**: 최초 구현은 `cache.removeSnooze(threadId)`를 `modifyThread` 호출 **전에** 실행했다. `modifyThread`(네트워크 호출)가 실패하면 스누즈 행은 이미 캐시에서 사라진 뒤라, 스누즈 데몬이 이 스레드를 다시는 깨울 방법이 없는데 서버엔 스누즈 라벨이 영구히 남는 상태가 된다.
 - **선택**: 순서를 뒤집어 `modifyThread` 성공 이후에만 `removeSnooze`를 호출.
 - **이유**: 실패 시 캐시의 스누즈 행이 그대로 남아있으면 데몬이 다음 tick에 다시 시도할 기회가 있다(자연 self-heal) — 반대 순서는 실패를 영구 고아 상태로 만든다. archiveThread/trashThread류의 "서버 호출 실패 시 로컬 롤백" 패턴과 동일한 원칙(로컬 상태 변경은 서버 확정 이후에, 또는 실패 시 되돌릴 수 있게)을 여기도 적용.
+
+## D8. `applyLabel`/`applyLabelSelected`의 undo는 실제로 새로 추가된 스레드만 대상으로 한다 — 최종 전체 브랜치 리뷰 발견·수정
+- **컨텍스트**: `applyLabel`의 낙관적 적용은 `!labelIds.includes(labelId)`일 때만 라벨을 추가한다(이미 그 라벨을 가진 스레드엔 no-op) — 그런데 최초 undo 구현은 이 조건 없이 무조건 `removeLabelId`+서버 remove를 수행했다. 벌크 라벨 적용(예: 10개 선택 후 "Work" 적용, 그중 2개는 이미 "Work"를 갖고 있었음)에서 Undo를 누르면, 원래부터 "Work"를 갖고 있던 2개에서도 라벨이 서버에서 영구 제거된다 — D7과 같은 "self-heal 불가능한 영구 손실" 클래스의 버그(D7은 방향이 반대: 로컬 추적 유실, 이건 서버 데이터 파괴).
+- **선택**: 적용 시점에 `!includes(labelId)`로 "이번에 실제로 추가됐는지"를 캡처(단건은 boolean, 벌크는 `newlyAppliedIds` 배열로 필터)해, 이미 갖고 있던 스레드는 undo 대상에서 제외. 애초에 아무것도 새로 추가되지 않았다면(전부 이미 보유) undo 버튼 자체를 안 붙인다(제거할 게 없으므로).
+- **이유**: undo는 "이 액션이 실제로 한 일"만 되돌려야 한다 — 이 액션이 손대지 않은 스레드의 기존 라벨 연결까지 건드리는 건 undo의 정의를 벗어난 부작용이다. 다른 3종(archive/trash/snooze)은 이미 `captureRemoval`로 "액션 직전 상태"를 스냅샷해 이 문제가 구조적으로 없었는데, applyLabel만 캡처 없이 구현된 것이 원인이었다.
+- **검증**: 기존 happy-path E2E(TC-UNDO-A3, 매번 새 throwaway 라벨 사용)는 무영향(그 경로에선 항상 `alreadyHadLabel=false`이므로 undo가 여전히 정상 붙음) — 이번 수정으로 새로 생긴 회귀는 없음. pre-existing 라벨 케이스에 대한 전용 E2E는 이번 범위에 추가하지 않음(리뷰가 코드 추적만으로 확정한 버그라 vitest/코드 레벨 확신도가 이미 높음, E2E 하네스 확장은 후속 과제 후보로 남김).
+
+## D9. Minor로 판정하고 수정하지 않은 항목 (최종 전체 브랜치 리뷰)
+- **`restoreCapture`의 patch-in-place가 undo 창(5초) 동안의 동시 합법적 변경을 덮어쓸 수 있음**: 예를 들어 Starred 뷰에서 archive(행 잔류) 직후 5초 안에 백그라운드 revalidate가 그 스레드에 새 라벨을 얹었는데 그 사이 Undo를 누르면, capture 시점 라벨로 되돌아가며 그 변경분이 잠깐 사라진다. 다음 revalidate가 서버 진실로 자가 치유. 트리거 조건이 좁고(같은 5초 창 안에 같은 스레드가 외부에서 또 바뀌어야 함) 결과가 일시적이라 수정하지 않음.
+- **undo의 보정 API 호출이 실패해도 로컬 낙관 복원을 되돌리지 않음**: "Undo failed" 토스트만 뜨고 로컬은 복원된 채로 남는데, 다음 revalidate가 서버 진실(여전히 archive/snooze 상태)로 재수렴시키며 스레드가 다시 사라지는 깜빡임이 생긴다. D7과 달리 self-heal 가능한 방향이라 best-effort로 수용.
+- **`mail:cancel-snooze`가 캐시 행에 INBOX를 즉시 반영 안 함**(→ D8과 별개로 이미 수정 완료, 위 구현에 반영됨: `send&archive`와 동일하게 `applyLabelDelta(threadId, ['INBOX'], [snoozeLabel])` 추가).
