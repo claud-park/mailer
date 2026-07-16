@@ -614,17 +614,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     );
   });
 
-  // undo-toast D5: 스누즈 취소 — 대기 중인 스누즈 행 제거 + 원래 라벨(INBOX) 복원을 원자적으로 수행.
-  // mail:snooze와 대칭(큐잉 없이 즉시 처리 — undo 창은 5초로 짧아 오프라인 큐잉 이점이 적다).
+  // undo-toast D5: 스누즈 취소 — 원래 라벨(INBOX) 복원 성공을 확인한 뒤에만 대기 중인 스누즈 행을
+  // 제거한다(mail:snooze와 대칭, 큐잉 없이 즉시 처리 — undo 창은 5초로 짧아 오프라인 큐잉 이점이
+  // 적다). 순서가 중요하다 — 먼저 캐시에서 스누즈 행을 지우고 나중에 modifyThread가 실패하면,
+  // 데몬이 더 이상 이 스레드를 깨울 방법이 없는 채로 서버엔 스누즈 라벨이 영구히 남는다.
   ipcMain.handle('mail:cancel-snooze', async (_e, accountId: string, threadId: string): Promise<void> => {
     const ctx = requireContext(accountId);
-    ctx.cache.removeSnooze(threadId);
     const snoozeLabel = await ctx.provider.snoozeLabelId();
     await ctx.provider.modifyThread({
       threadId,
       addLabelIds: ['INBOX'],
       removeLabelIds: [snoozeLabel],
     });
+    ctx.cache.removeSnooze(threadId);
   });
 
   ipcMain.handle('mail:search-local', async (_e, accountId: string, q: string) => {
