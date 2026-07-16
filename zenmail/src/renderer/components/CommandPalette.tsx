@@ -147,6 +147,7 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
       },
       { id: 'search', name: 'Search mail', shortcut: ['/'], section: 'Navigation', perform: () => s().focusSearch() },
       { id: 'inbox', name: 'Go to inbox', shortcut: ['g', 'i'], section: 'Navigation', perform: () => s().setActiveLabel('INBOX') },
+      { id: 'starred', name: 'Go to starred', shortcut: ['g', 't'], section: 'Navigation', perform: () => s().setActiveLabel('STARRED') },
       { id: 'sent', name: 'Go to sent', shortcut: ['g', 's'], section: 'Navigation', perform: () => s().setActiveLabel('SENT') },
       { id: 'drafts', name: 'Go to drafts', shortcut: ['g', 'd'], section: 'Navigation', perform: () => s().setActiveLabel('DRAFT') },
       { id: 'labelJump', name: 'Jump to label…', shortcut: ['g', 'l'], section: 'Navigation', perform: () => s().openLabelPicker() },

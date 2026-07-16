@@ -721,14 +721,16 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(s);
       if (!a) return;
 
-      // D5: a starred thread stays visible after archive (INBOX∪STARRED predicate) — update the
-      // row in place instead of removing it, but only while the INBOX view (no search) is on screen.
+      // starred-view D5: archiving from the Starred view leaves the row in place (archive strips
+      // INBOX, never STARRED, so it stays in-view) — archiving from Inbox now always removes it,
+      // since isInInboxView is pure INBOX again (no more STARRED union keeping it alive).
       const thread = s.threads.find((t) => t.id === id);
       const nextLabels = thread ? thread.labelIds.filter((l) => l !== 'INBOX') : null;
+      const viewLabel = s.activeLabelId || 'INBOX';
       const keepInPlace =
         nextLabels !== null &&
-        inLabelView(nextLabels, 'INBOX', snoozeLabelIdOf(s)) &&
-        (s.activeLabelId === 'INBOX' || !s.activeLabelId) &&
+        inLabelView(nextLabels, viewLabel, snoozeLabelIdOf(s)) &&
+        (s.activeLabelId === 'INBOX' || s.activeLabelId === 'STARRED' || !s.activeLabelId) &&
         !s.searchQuery;
 
       if (keepInPlace) {
@@ -816,8 +818,9 @@ export const useMailStore = create<MailState>((set, get) => {
 
     /**
      * D7: minimal star toggle. Starring always updates in place. Unstarring drops the row only when
-     * it would fall out of the INBOX view predicate (archived-starred in the INBOX view, D5's mirror
-     * on the way out) — everywhere else (search, non-INBOX view, or still-in-INBOX) it's in-place too.
+     * it would fall out of the current view's predicate via inLabelView (starred-view D5's mirror on
+     * the way out, generalized to whichever view — INBOX or STARRED — is on screen) — everywhere else
+     * (search, or still in view) it's in-place too.
      */
     async toggleStar(threadId) {
       const done = instrument('star');
@@ -860,8 +863,7 @@ export const useMailStore = create<MailState>((set, get) => {
 
       const nextLabels = thread.labelIds.filter((l) => l !== 'STARRED');
       const viewLabel = s.activeLabelId || 'INBOX';
-      const keepInPlace =
-        !!s.searchQuery || viewLabel !== 'INBOX' || inLabelView(nextLabels, 'INBOX', snoozeLabelIdOf(s));
+      const keepInPlace = !!s.searchQuery || inLabelView(nextLabels, viewLabel, snoozeLabelIdOf(s));
 
       if (keepInPlace) {
         set((st) => ({
@@ -886,7 +888,7 @@ export const useMailStore = create<MailState>((set, get) => {
         return;
       }
 
-      // archived-starred thread leaving the INBOX view on unstar (D5 mirror)
+      // thread falling out of the current view (Inbox or Starred) on unstar (D5 mirror)
       const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);

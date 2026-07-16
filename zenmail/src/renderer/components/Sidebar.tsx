@@ -4,6 +4,7 @@ import { SNOOZE_LABEL_NAME, type Label, type AccountInfo } from '../../shared/ty
 
 const SYSTEM_ITEMS: { id: string; name: string }[] = [
   { id: 'INBOX', name: 'Inbox' },
+  { id: 'STARRED', name: 'Starred' },
   { id: 'SENT', name: 'Sent' },
   { id: 'DRAFT', name: 'Drafts' },
 ];
@@ -126,7 +127,7 @@ export function Sidebar() {
               useCoachStore.getState().recordMouse('goToLabel');
               useCoachStore.getState().maybeHint('goToLabel');
             }}
-            unread={item.id === 'INBOX' ? byId.get('INBOX')?.unreadCount : undefined}
+            unread={item.id === 'INBOX' || item.id === 'STARRED' ? byId.get(item.id)?.unreadCount : undefined}
           >
             {item.name}
           </SidebarRow>
