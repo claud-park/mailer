@@ -13,7 +13,7 @@
 - [x] DECISIONS.md(D1~D4 사용자 확정 + D5~D8 추천안)
 
 ## Goal 5: 구현 (SDD — 체크포인트별 fresh subagent + 리뷰 게이트)
-- [ ] **선행 단계(오케스트레이터 직접, TDD)**: `src/shared/view.ts` — `isInInboxView` 순수 INBOX로 축소, 신규 `isInStarredView`, `inLabelView` 양쪽 분기, `viewMembershipLabels` 단순화 + `view.test.ts` 진리표 갱신. CP1/CP2가 공유 의존하므로 먼저 완료해야 병렬 착수 가능.
+- [x] **선행 단계(오케스트레이터 직접, TDD)**: `src/shared/view.ts` — `isInInboxView` 순수 INBOX로 축소, 신규 `isInStarredView`, `inLabelView` 양쪽 분기, `viewMembershipLabels` 단순화 + `view.test.ts` 진리표 갱신(vitest 26 PASS). CP1/CP2가 공유 의존하므로 먼저 완료 — 병렬 착수 가능해짐.
 - [ ] **CP1 (main, fast-worker/Sonnet)**: `gmail.ts`(Real STARRED q 번역, Mock STARRED 필터+시드 라벨+`__debugExternalUnstar` 훅, "단일 라벨+!q" 가드 공용 헬퍼로 정리), `cache.ts`(`getThreads`/`getViewRows` STARRED SQL 분기), `ipc.ts`(externalUnstar 디버그 IPC 배선, 기존 externalArchive 패턴 대칭) + 해당 vitest.
 - [ ] **CP2 (renderer, fast-worker/Sonnet, CP1과 병렬)**: `store/mail.ts`(`archiveThread`/`toggleStar` 게이트를 INBOX∪STARRED로 확장, DECISIONS D5 그대로), `Sidebar.tsx`(STARRED 시스템 항목+배지), `CommandPalette.tsx`(`g t` 액션) + 해당 vitest(게이트 매트릭스 유닛).
 - [ ] **CP3 (E2E, fast-worker/Sonnet, CP1+CP2 완료 후)**: `e2e/run-tc.mjs` — TC-IZ-B1/B2/B3/B7 재작성(TC.md 매핑대로), TC-STAR-* 전건 신설, 전체 스위트 1회 실행으로 자가 검증.
