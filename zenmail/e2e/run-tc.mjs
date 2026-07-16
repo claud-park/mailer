@@ -921,22 +921,24 @@ async function run() {
   await browser?.close().catch(() => {});
   await killApp();
 
-  // --- inbox-zero-starred: TC-IZ-* (docs/features/inbox-zero-starred/TC.md) — a dedicated final
-  // session, launched AFTER every restart cycle above. It must run last because TC-IZ-A2 archives
-  // the entire inbox to inbox-zero (destructive to the shared seed pool) and TC-IZ-B2/B3 mutate the
-  // 'Starred: keep me visible' seed — running before the F1/F2/F4 restart block (which reads
-  // "Design tokens v2"/demo_3 and asserts a non-empty cold-read list, TC-FUP-E1/TC-SY-C2) would rob
-  // those. A fresh launch reconstructs a pristine MockGmailProvider (both starred seeds present),
-  // and no later scenario depends on this session's inbox state.
+  // --- starred-view: TC-IZ-* (rewritten) + TC-STAR-* (new) (docs/features/starred-view/TC.md) —
+  // a dedicated final session, launched AFTER every restart cycle above. It must run last because
+  // TC-IZ-A2 archives the entire inbox to inbox-zero (destructive to the shared seed pool) and
+  // TC-IZ-B2/TC-STAR-B2/TC-STAR-B3 mutate the 'Starred: keep me visible' seed — running before the
+  // F1/F2/F4 restart block (which reads "Design tokens v2"/demo_3 and asserts a non-empty cold-read
+  // list, TC-FUP-E1/TC-SY-C2) would rob those. A fresh launch reconstructs a pristine MockGmailProvider
+  // (both starred seeds present), and no later scenario depends on this session's inbox state.
   launchApp(PORT, USERDATA);
   try {
     ({ browser, page } = await connectPage(PORT));
     await demoLogin(page);
-    await runIzSession(page);
+    await runIzAndStarSession(page);
   } catch (err) {
-    console.error('[harness] scenario error (inbox-zero-starred):', err);
+    console.error('[harness] scenario error (starred-view TC-IZ/TC-STAR):', err);
     // surface a session-fatal error against the first TC so 0-FAIL bars can't silently pass.
-    if (!results.some((r) => r.id.startsWith('TC-IZ'))) record('TC-IZ-B1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+    if (!results.some((r) => r.id.startsWith('TC-IZ') || r.id.startsWith('TC-STAR'))) {
+      record('TC-IZ-B1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+    }
   }
   await browser?.close().catch(() => {});
   await killApp();
@@ -5223,10 +5225,14 @@ async function scenario_nav_arrows(page) {
 }
 
 // ---------------------------------------------------------------------------
-// inbox-zero-starred: TC-IZ-* (docs/features/inbox-zero-starred/TC.md)
+// starred-view: TC-IZ-* (rewritten) + TC-STAR-* (new) — docs/features/starred-view/TC.md
 //
-// Runs in its own final session (see run()). The inbox view is the shared predicate
-// INBOX ∪ (STARRED − TRASH − SPAM − snoozed): starred threads stay visible even after archive.
+// Runs in its own final session (see run()). R1 (starred-view) made the Inbox view a pure
+// predicate (INBOX ∧ ¬TRASH ∧ ¬SPAM ∧ ¬snoozed — the STARRED union is gone) and added a
+// dedicated Starred view (STARRED ∧ ¬TRASH ∧ ¬SPAM ∧ ¬snoozed, archive-independent). The old
+// TC-IZ-* Starred-semantics cases (B1-B3, B7) are rewritten to the new (often inverted)
+// expectations; the exclusion cases (B4-B6) and external-convergence cases (A1/A3) are
+// mechanically unaffected and kept as-is. TC-STAR-* covers the new Starred view itself.
 // All targeting is by data-thread-id (discovered at runtime, never hardcoded) so it works for the
 // two oldest seeds too, which sort to the very bottom of the virtualized list.
 // ---------------------------------------------------------------------------
@@ -5246,13 +5252,25 @@ async function izSetSplit(page, on) {
 }
 
 /** ground-truth inbox VIEW straight from the cache/provider (fetchThreads applies the shared
- *  INBOX∪STARRED predicate) — independent of virtualization, unlike DOM reads. */
+ *  pure-INBOX predicate, isInInboxView) — independent of virtualization, unlike DOM reads. */
 async function izInboxView(page) {
   return page.evaluate(async () => {
     const { activeEmail } = await window.zenmail.listAccounts();
     return window.zenmail
       .fetchThreads(activeEmail, { labelIds: ['INBOX'] })
       .then((r) => r.threads.map((t) => ({ id: t.id, subject: t.subject, labelIds: t.labelIds })));
+  });
+}
+
+/** ground-truth Starred VIEW (mirrors izInboxView, labelIds:['STARRED'] — applies isInStarredView:
+ *  STARRED ∧ ¬TRASH ∧ ¬SPAM ∧ ¬snoozed, archive-independent). `unread` is carried through (unlike
+ *  izInboxView) because TC-STAR-B1 needs it to cross-check the sidebar's unread badge. */
+async function starView(page) {
+  return page.evaluate(async () => {
+    const { activeEmail } = await window.zenmail.listAccounts();
+    return window.zenmail
+      .fetchThreads(activeEmail, { labelIds: ['STARRED'] })
+      .then((r) => r.threads.map((t) => ({ id: t.id, subject: t.subject, labelIds: t.labelIds, unread: t.unread })));
   });
 }
 
@@ -5266,6 +5284,67 @@ async function izRefresh(page) {
   await page.keyboard.press('g');
   await page.keyboard.press('i');
   await sleep(500);
+}
+
+/** re-load the STARRED list (kbar g→t → setActiveLabel('STARRED') → loadThreads → SWR warm read +
+ *  background revalidate) — starred-view's equivalent of izRefresh, targeting the Starred view. */
+async function starRefresh(page) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(120);
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('t');
+  await sleep(500);
+}
+
+/** click the sidebar's fixed "Starred" nav item (Sidebar.tsx SYSTEM_ITEMS) — same
+ *  clone-and-strip-badge text match as clickTab, but scoped to `nav button` (sidebar rows), not
+ *  `[role="tab"]` (split tabs). */
+async function starClickSidebar(page) {
+  const handle = await page.evaluateHandle(() =>
+    Array.from(document.querySelectorAll('nav button')).find((b) => {
+      const clone = b.cloneNode(true);
+      const badgeEl = clone.querySelector('span.rounded-full');
+      if (badgeEl) badgeEl.remove();
+      return clone.textContent.trim() === 'Starred';
+    }) ?? null
+  );
+  const el = handle.asElement();
+  if (!el) throw new Error('Starred sidebar item not found');
+  await el.click();
+  await sleep(500);
+}
+
+/** the currently-active sidebar nav row's label text (Sidebar.tsx SidebarRow: `active` adds the
+ *  `bg-bg-border` class, which is otherwise absent from every inactive row's static classList —
+ *  inactive rows only get it via a `hover:` pseudo-class, never present in a DOM query's evaluate). */
+async function starActiveSidebarLabel(page) {
+  return page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('nav button')).find((b) => b.classList.contains('bg-bg-border'));
+    if (!btn) return null;
+    const clone = btn.cloneNode(true);
+    const badgeEl = clone.querySelector('span.rounded-full');
+    if (badgeEl) badgeEl.remove();
+    return clone.textContent.trim();
+  });
+}
+
+/** the numeric unread badge on a sidebar system-item row (Sidebar.tsx SidebarRow: `unread` prop
+ *  renders a `<span class="rounded-full …">` only when > 0 — mirrors accountAvatarBadge's
+ *  0-when-absent convention). */
+async function sidebarBadge(page, label) {
+  return page.evaluate((want) => {
+    const btn = Array.from(document.querySelectorAll('nav button')).find((b) => {
+      const clone = b.cloneNode(true);
+      const badgeEl = clone.querySelector('span.rounded-full');
+      if (badgeEl) badgeEl.remove();
+      return clone.textContent.trim() === want;
+    });
+    if (!btn) return null;
+    const badge = btn.querySelector('span.rounded-full');
+    const n = badge ? parseInt(badge.textContent.trim(), 10) : 0;
+    return Number.isNaN(n) ? 0 : n;
+  }, label);
 }
 
 /** the inbox rows currently rendered in the main list, with their thread id + ★ + selection state */
@@ -5326,74 +5405,106 @@ async function izSelectById(page, id) {
   await focusBody(page);
 }
 
-async function tryIzScenario(page, name, fn) {
+async function tryScenario(page, name, fn) {
   try {
     await fn();
   } catch (err) {
-    console.error(`[harness] TC-IZ ${name} error:`, err);
+    console.error(`[harness] TC-IZ/STAR ${name} error:`, err);
     const owned =
       {
         B1: ['TC-IZ-B1'],
         B4: ['TC-IZ-B4'],
         B7: ['TC-IZ-B7'],
-        B2B3: ['TC-IZ-B2', 'TC-IZ-B3'],
-        B5: ['TC-IZ-B5'],
-        B6: ['TC-IZ-B6'],
+        STAR_B4: ['TC-STAR-B4'],
+        STAR_B1: ['TC-STAR-B1'],
+        STAR_D1: ['TC-STAR-D1'],
+        STAR_D2: ['TC-STAR-D2'],
+        B2_STARB2: ['TC-IZ-B2', 'TC-STAR-B2'],
+        STAR_B3: ['TC-STAR-B3'],
+        B5_STARB5: ['TC-IZ-B5', 'TC-STAR-B5'],
+        B6_STARB6: ['TC-IZ-B6', 'TC-STAR-B6'],
         A1: ['TC-IZ-A1'],
         A3: ['TC-IZ-A3'],
+        STAR_C1: ['TC-STAR-C1'],
         A2: ['TC-IZ-A2'],
       }[name] ?? [`TC-IZ-${name}`];
     for (const id of owned) if (!results.some((r) => r.id === id)) record(id, 'FAIL', String(err).slice(0, 160));
   }
 }
 
-async function runIzSession(page) {
+async function runIzAndStarSession(page) {
   await izSetSplit(page, false);
   await izRefresh(page);
-  // discover the two starred seeds by subject (their ids are the mock's — never hardcode them);
-  // a fresh provider is pristine, but a persisted cache may still be reconciling, so poll until both
-  // are present in the inbox view.
+  // discover the two starred seeds by subject (their ids are the mock's — never hardcode them).
+  // Under R1, 'keep' ([INBOX,STARRED]) still lives in the Inbox view, but 'arch' ([STARRED] only)
+  // no longer does — it must be discovered via the Starred view instead. A fresh provider is
+  // pristine, but a persisted cache may still be reconciling, so poll until both are found.
   let seeds;
   try {
     seeds = await waitFor(
       async () => {
-        const view = await izInboxView(page);
-        const keep = view.find((t) => t.subject === 'Starred: keep me visible');
-        const arch = view.find((t) => t.subject === 'Starred archived: still here');
+        const inboxView = await izInboxView(page);
+        const starredView = await starView(page);
+        const keep = inboxView.find((t) => t.subject === 'Starred: keep me visible');
+        const arch = starredView.find((t) => t.subject === 'Starred archived: still here');
         return keep && arch ? { keepId: keep.id, archId: arch.id } : null;
       },
-      { timeout: 20000, interval: 500, desc: 'both starred seeds present in the inbox view' }
+      { timeout: 20000, interval: 500, desc: 'both starred seeds discoverable (keep via Inbox, archived via Starred)' }
     );
   } catch (err) {
-    const view = await izInboxView(page).catch(() => []);
-    console.error('[harness] TC-IZ seed discovery failed — inbox view subjects:', JSON.stringify(view.map((t) => t.subject)));
+    const inboxView = await izInboxView(page).catch(() => []);
+    const starredView = await starView(page).catch(() => []);
+    console.error(
+      '[harness] TC-IZ/STAR seed discovery failed —',
+      JSON.stringify({ inbox: inboxView.map((t) => t.subject), starred: starredView.map((t) => t.subject) })
+    );
     throw err;
   }
 
-  // non-destructive first (B1/B4/B7), then the B2→B3 chain, then star-your-own actions (B5/B6),
-  // then archive-convergence on expendable rows (A1/A3), and finally the destructive inbox-zero A2.
-  await tryIzScenario(page, 'B1', () => scenario_iz_b1(page, seeds));
-  await tryIzScenario(page, 'B4', () => scenario_iz_b4(page));
-  await tryIzScenario(page, 'B7', () => scenario_iz_b7(page, seeds));
-  await tryIzScenario(page, 'B2B3', () => scenario_iz_b2_b3(page, seeds));
-  await tryIzScenario(page, 'B5', () => scenario_iz_b5(page));
-  await tryIzScenario(page, 'B6', () => scenario_iz_b6(page));
-  await tryIzScenario(page, 'A1', () => scenario_iz_a1(page));
-  await tryIzScenario(page, 'A3', () => scenario_iz_a3(page));
-  await tryIzScenario(page, 'A2', () => scenario_iz_a2(page, seeds));
+  // Ordering discipline (same principle as the original inbox-zero-starred session): non-destructive
+  // reads first (B1/B4/B7/STAR-B4/STAR-B1/STAR-D1/STAR-D2), then the B2→STAR-B2→STAR-B3 mutation
+  // chain on the 'keep' seed, then star-your-own-row actions (B5/STAR-B5, B6/STAR-B6), then external-
+  // convergence on expendable rows (A1/A3/STAR-C1), and finally the destructive inbox-zero drain (A2)
+  // last of all.
+  await tryScenario(page, 'B1', () => scenario_iz_b1(page, seeds));
+  await tryScenario(page, 'B4', () => scenario_iz_b4(page));
+  await tryScenario(page, 'B7', () => scenario_iz_b7(page, seeds));
+  await tryScenario(page, 'STAR_B4', () => scenario_star_b4(page, seeds));
+  await tryScenario(page, 'STAR_B1', () => scenario_star_b1(page));
+  await tryScenario(page, 'STAR_D1', () => scenario_star_d1(page));
+  await tryScenario(page, 'STAR_D2', () => scenario_star_d2(page));
+  await tryScenario(page, 'B2_STARB2', () => scenario_iz_b2_star_b2(page, seeds));
+  await tryScenario(page, 'STAR_B3', () => scenario_star_b3(page, seeds));
+  await tryScenario(page, 'B5_STARB5', () => scenario_iz_b5_star_b5(page));
+  await tryScenario(page, 'B6_STARB6', () => scenario_iz_b6_star_b6(page));
+  await tryScenario(page, 'A1', () => scenario_iz_a1(page));
+  await tryScenario(page, 'A3', () => scenario_iz_a3(page));
+  await tryScenario(page, 'STAR_C1', () => scenario_star_c1(page));
+  await tryScenario(page, 'A2', () => scenario_iz_a2(page, seeds));
 }
 
-// --- TC-IZ-B1: starred-archived seed is visible with a ★ ---------------------
+// --- TC-IZ-B1 (rewritten, R1): starred-archived seed is ABSENT from the Inbox ------------------
 async function scenario_iz_b1(page, seeds) {
   await izSetSplit(page, false);
   await izRefresh(page);
-  await izScrollToId(page, seeds.archId);
-  const row = await izRowDomById(page, seeds.archId);
+  // izScrollToId's own retry loop scrolls the virtualized list to the bottom repeatedly looking for
+  // the row — under R1 it never renders no matter how much we scroll (the underlying data itself
+  // excludes it), so the expected outcome here is that it *times out*.
+  let scrolledIntoView = true;
+  try {
+    await izScrollToId(page, seeds.archId);
+  } catch {
+    scrolledIntoView = false;
+  }
   const inView = (await izInboxView(page)).some((t) => t.id === seeds.archId);
-  if (row && row.starred && inView) {
-    record('TC-IZ-B1', 'PASS', `starred-archived seed ("${row.text.slice(0, 30)}") shows in the inbox list with a ★`);
+  if (!scrolledIntoView && !inView) {
+    record(
+      'TC-IZ-B1',
+      'PASS',
+      'archived-only-starred seed ("Starred archived: still here") is absent from the Inbox view (R1: pure INBOX predicate, no more STARRED union)'
+    );
   } else {
-    record('TC-IZ-B1', 'FAIL', `row=${JSON.stringify(row)} inView=${inView}`);
+    record('TC-IZ-B1', 'FAIL', `scrolledIntoView=${scrolledIntoView} inView=${inView}`);
   }
 }
 
@@ -5432,38 +5543,149 @@ async function scenario_iz_b4(page) {
   }
 }
 
-// --- TC-IZ-B7: split inbox reflects the starred-archived seed ----------------
+// --- TC-IZ-B7 (rewritten, R1): split tabs never load the starred-archived seed either ----------
 async function scenario_iz_b7(page, seeds) {
   await izSetSplit(page, true);
   await sleep(400);
   const tabs = (await tabsInfo(page)).map((t) => t.label);
-  if (!tabs.includes('Other')) {
-    record('TC-IZ-B7', 'SKIP', `no "Other" tab present in split mode (tabs: ${tabs.join(',')})`);
+  if (tabs.length === 0) {
+    record('TC-IZ-B7', 'SKIP', 'split inbox produced no tabs to check');
     await izSetSplit(page, false);
     return;
   }
-  await clickTab(page, 'Other');
+  // The seed is absent from the underlying Inbox data itself now (R1), so it can't surface under
+  // ANY split tab — check the always-present "Inbox" tab (the old code's core assertion, inverted),
+  // plus "Other" (its old catch-all destination, if the split ruleset still produces one) as a bonus.
+  await clickTab(page, 'Inbox').catch(() => {});
   await sleep(300);
-  await izScrollToId(page, seeds.archId);
-  const inOther = !!(await izRowDomById(page, seeds.archId));
-  await clickTab(page, 'Inbox');
-  await sleep(300);
-  await izScrollToId(page, seeds.archId);
-  const inInboxTab = !!(await izRowDomById(page, seeds.archId));
+  let inInboxTab = true;
+  try {
+    await izScrollToId(page, seeds.archId);
+  } catch {
+    inInboxTab = false;
+  }
+
+  let inOther = false;
+  const checkedOther = tabs.includes('Other');
+  if (checkedOther) {
+    await clickTab(page, 'Other');
+    await sleep(300);
+    try {
+      await izScrollToId(page, seeds.archId);
+      inOther = true;
+    } catch {
+      inOther = false;
+    }
+  }
   await izSetSplit(page, false);
-  if (inOther && inInboxTab) {
-    record('TC-IZ-B7', 'PASS', 'starred-archived seed appears under its Other tab and in the unfiltered Inbox tab (split on)');
+
+  if (!inInboxTab && !inOther) {
+    record(
+      'TC-IZ-B7',
+      'PASS',
+      `starred-archived seed is absent from the split Inbox tab${checkedOther ? ' and the Other tab' : ' (no Other tab present)'} — split inbox no longer loads a row the pure-INBOX predicate excludes upstream`
+    );
   } else {
-    record('TC-IZ-B7', 'FAIL', `inOther=${inOther} inInboxTab=${inInboxTab}`);
+    record('TC-IZ-B7', 'FAIL', `inInboxTab=${inInboxTab} inOther=${inOther} tabs=${tabs.join(',')}`);
   }
 }
 
-// --- TC-IZ-B2 (archive-keeps-starred) + TC-IZ-B3 (unstar-removes-archived) ---
-async function scenario_iz_b2_b3(page, seeds) {
+// --- TC-STAR-B4: archived-only-starred seed is visible in Starred (and absent from Inbox) ------
+async function scenario_star_b4(page, seeds) {
+  await starRefresh(page);
+  await izScrollToId(page, seeds.archId);
+  const row = await izRowDomById(page, seeds.archId);
+  const inStarView = (await starView(page)).some((t) => t.id === seeds.archId);
+  // self-contained cross-check with TC-IZ-B1 (absence from Inbox) — ground-truth only, no need to
+  // re-scroll/timeout in the Inbox view since TC-IZ-B1 already proves the DOM half of that claim.
+  const inInboxView = (await izInboxView(page)).some((t) => t.id === seeds.archId);
+  if (row && row.starred && inStarView && !inInboxView) {
+    record(
+      'TC-STAR-B4',
+      'PASS',
+      `archived-only-starred seed ("${row.text.slice(0, 30)}") shows in the Starred view with a ★, and is absent from the Inbox view`
+    );
+  } else {
+    record('TC-STAR-B4', 'FAIL', `row=${JSON.stringify(row)} inStarView=${inStarView} inInboxView=${inInboxView}`);
+  }
+}
+
+// --- TC-STAR-B1: sidebar navigation shows every STARRED thread + unread badge matches -----------
+async function scenario_star_b1(page) {
+  await izRefresh(page); // Inbox baseline, so clicking the sidebar item is a real navigation
+  await starClickSidebar(page);
+  const activeLabel = await starActiveSidebarLabel(page);
+  const truth = await starView(page);
+  // per-id DOM presence check (virtualization-safe — scroll-then-check one id at a time, mirroring
+  // every other iz*/star* per-row assertion in this file, rather than assume simultaneous rendering).
+  let allPresent = truth.length > 0;
+  for (const t of truth) {
+    await izScrollToId(page, t.id).catch(() => {
+      allPresent = false;
+    });
+    if (!(await izRowDomById(page, t.id))) allPresent = false;
+  }
+  const expectedUnread = truth.filter((t) => t.unread).length;
+  const badge = await sidebarBadge(page, 'Starred');
+  if (activeLabel === 'Starred' && truth.length >= 2 && allPresent && badge === expectedUnread) {
+    record(
+      'TC-STAR-B1',
+      'PASS',
+      `Starred view shows ${truth.length} thread(s) matching the ground-truth fetch; sidebar badge=${badge} matches unread count=${expectedUnread}`
+    );
+  } else {
+    record(
+      'TC-STAR-B1',
+      'FAIL',
+      `activeLabel=${activeLabel} truthCount=${truth.length} allPresent=${allPresent} badge=${badge} expectedUnread=${expectedUnread}`
+    );
+  }
+}
+
+// --- TC-STAR-D1: `g` `t` switches the active view to Starred from anywhere ----------------------
+async function scenario_star_d1(page) {
+  await izRefresh(page); // start from Inbox — "anywhere", not already in Starred
+  const before = await starActiveSidebarLabel(page);
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('t');
+  await sleep(500);
+  const after = await starActiveSidebarLabel(page);
+  const rows = await izDomRows(page); // list re-rendered with Starred content
+  if (before === 'Inbox' && after === 'Starred' && rows.length > 0) {
+    record('TC-STAR-D1', 'PASS', `\`g\` \`t\` switched the active view from "${before}" to "${after}" and the list re-rendered`);
+  } else {
+    record('TC-STAR-D1', 'FAIL', `before=${before} after=${after} rows=${rows.length}`);
+  }
+}
+
+// --- TC-STAR-D2: Starred is a flat list — no split tab bar even with Split Inbox on -------------
+async function scenario_star_d2(page) {
+  await izRefresh(page); // Inbox baseline
+  await izSetSplit(page, true); // turn the GLOBAL split-inbox setting on (visible now, in Inbox)
+  await starRefresh(page);
+  await sleep(300);
+  const tablistInStarred = await izSplitOn(page);
+  // sanity: the global toggle itself is genuinely on (unaffected by which view we're in) — re-enter
+  // Inbox and confirm the tab bar is back, so a false PASS above can't hide a toggle that silently
+  // never turned on in the first place.
+  await izRefresh(page);
+  const tablistBackInInbox = await izSplitOn(page);
+  await izSetSplit(page, false); // reset the global toggle off — other scenarios expect it off
+  if (!tablistInStarred && tablistBackInInbox) {
+    record('TC-STAR-D2', 'PASS', 'Split Inbox tab bar is not rendered in the Starred view even with the global toggle on (flat list, Sent/Drafts parity)');
+  } else {
+    record('TC-STAR-D2', 'FAIL', `tablistInStarred=${tablistInStarred} tablistBackInInbox=${tablistBackInInbox}`);
+  }
+}
+
+// --- TC-IZ-B2 (rewritten, R1: archive unconditionally removes from Inbox) +
+//     TC-STAR-B2 (the same archive action leaves the row visible in Starred) ---------------------
+async function scenario_iz_b2_star_b2(page, seeds) {
   await izSetSplit(page, false);
   await izRefresh(page);
 
-  // B2 (part 1): a plain non-starred row + 'e' disappears (the contrast case).
+  // contrast case (unchanged): a plain non-starred row + 'e' disappears from the Inbox.
   const rows = await izDomRows(page);
   const plain = rows.find((r) => !r.starred && r.id && r.id !== seeds.keepId && r.id !== seeds.archId);
   let plainGone = false;
@@ -5480,53 +5702,90 @@ async function scenario_iz_b2_b3(page, seeds) {
     ).then(() => true, () => false);
   }
 
-  // B2 (part 2): the [INBOX,STARRED] seed + 'e' stays in place (★ kept, only INBOX stripped).
+  // the [INBOX,STARRED] seed + 'e': under R1 this now disappears from the Inbox unconditionally
+  // (no more "stays because starred" — that shortcut is exactly what R1 removed).
   await izSelectById(page, seeds.keepId);
   await page.keyboard.press('e');
-  const keptEntry = await waitFor(
-    async () => {
-      const t = (await izInboxView(page)).find((x) => x.id === seeds.keepId);
-      return t && t.labelIds.includes('STARRED') && !t.labelIds.includes('INBOX') ? t : null;
-    },
-    { timeout: 6000, desc: 'B2 archived-starred seed stays without INBOX' }
-  ).then((t) => t, () => null);
-  await izScrollToId(page, seeds.keepId).catch(() => {});
-  const keptRow = await izRowDomById(page, seeds.keepId);
-  if (plainGone && keptEntry && keptRow && keptRow.starred) {
-    record('TC-IZ-B2', 'PASS', `archive keeps the starred row (labels→[${keptEntry.labelIds}], ★ shown); a non-starred row + 'e' disappears`);
-  } else {
-    record('TC-IZ-B2', 'FAIL', `plainGone=${plainGone} keptEntry=${JSON.stringify(keptEntry)} keptRow=${JSON.stringify(keptRow)}`);
-  }
-
-  // B3: unstar the now archived-starred seed → it drops out of the inbox view; stays gone on re-entry.
-  await izSelectById(page, seeds.keepId);
-  await page.keyboard.press('s');
-  const b3Gone = await waitFor(
+  const goneFromInbox = await waitFor(
     async () => {
       const dom = await izRowDomById(page, seeds.keepId);
       const v = await izInboxView(page);
       return !dom && !v.some((t) => t.id === seeds.keepId) ? true : null;
     },
-    { timeout: 6000, desc: 'B3 unstar removes the archived-starred row' }
+    { timeout: 6000, desc: 'B2 archived-starred seed disappears from the Inbox view' }
   ).then(() => true, () => false);
-  await izRefresh(page);
-  const b3StillGone =
-    !(await izRowDomById(page, seeds.keepId)) && !(await izInboxView(page)).some((t) => t.id === seeds.keepId);
-  if (b3Gone && b3StillGone) {
-    record('TC-IZ-B3', 'PASS', 'unstar of the archived-starred seed removes it from the inbox and it stays gone on re-entry');
+
+  if (plainGone && goneFromInbox) {
+    record(
+      'TC-IZ-B2',
+      'PASS',
+      "archive removes the [INBOX,STARRED] seed from the Inbox unconditionally now (pure INBOX predicate); a plain non-starred row + 'e' also disappears"
+    );
   } else {
-    record('TC-IZ-B3', 'FAIL', `b3Gone=${b3Gone} b3StillGone=${b3StillGone}`);
+    record('TC-IZ-B2', 'FAIL', `plainGone=${plainGone} goneFromInbox=${goneFromInbox}`);
+  }
+
+  // TC-STAR-B2: the very same archive action above must leave the row visible in the Starred view
+  // (★ kept, only INBOX stripped) — asserted straight off that mutation instead of re-doing it.
+  await starRefresh(page);
+  await izScrollToId(page, seeds.keepId).catch(() => {});
+  const starRow = await izRowDomById(page, seeds.keepId);
+  const starEntry = await waitFor(
+    async () => {
+      const t = (await starView(page)).find((x) => x.id === seeds.keepId);
+      return t && t.labelIds.includes('STARRED') && !t.labelIds.includes('INBOX') ? t : null;
+    },
+    { timeout: 6000, desc: 'STAR-B2 archived-starred seed stays visible in Starred without INBOX' }
+  ).then((t) => t, () => null);
+  if (starRow && starRow.starred && starEntry) {
+    record(
+      'TC-STAR-B2',
+      'PASS',
+      `archiving the [INBOX,STARRED] seed drops it from the Inbox but it remains visible in Starred (labels→[${starEntry.labelIds}], ★ shown)`
+    );
+  } else {
+    record('TC-STAR-B2', 'FAIL', `starRow=${JSON.stringify(starRow)} starEntry=${JSON.stringify(starEntry)}`);
   }
 }
 
-// --- TC-IZ-B5: star an INBOX row, then '#' trash removes it despite the ★ ----
-async function scenario_iz_b5(page) {
+// --- TC-STAR-B3 (was TC-IZ-B3, moved here since the archived-starred seed no longer lives in the
+//     Inbox to begin with — see B1): unstar from the Starred view removes it, stays gone cold -----
+async function scenario_star_b3(page, seeds) {
+  await starRefresh(page);
+  await izSelectById(page, seeds.keepId);
+  await page.keyboard.press('s'); // unstar
+  const gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, seeds.keepId);
+      const v = await starView(page);
+      return !dom && !v.some((t) => t.id === seeds.keepId) ? true : null;
+    },
+    { timeout: 6000, desc: 'STAR-B3 unstar removes the archived-starred row from Starred' }
+  ).then(() => true, () => false);
+  await starRefresh(page); // cold read
+  const stillGone =
+    !(await izRowDomById(page, seeds.keepId)) && !(await starView(page)).some((t) => t.id === seeds.keepId);
+  if (gone && stillGone) {
+    record(
+      'TC-STAR-B3',
+      'PASS',
+      'unstar of the archived-starred seed removes it from the Starred view immediately and it stays gone on re-entry (cold read)'
+    );
+  } else {
+    record('TC-STAR-B3', 'FAIL', `gone=${gone} stillGone=${stillGone}`);
+  }
+}
+
+// --- TC-IZ-B5 (unchanged logic) + TC-STAR-B5 (same trashed-starred row is also gone from
+//     Starred — TRASH exclusion applies there too, D2): star an INBOX row, '#' trash it ----------
+async function scenario_iz_b5_star_b5(page) {
   await izSetSplit(page, false);
   await izRefresh(page);
   const rows = await izDomRows(page);
   const target = rows.find((r) => !r.starred && r.id);
   if (!target) {
     record('TC-IZ-B5', 'FAIL', 'no plain INBOX row to star');
+    record('TC-STAR-B5', 'FAIL', 'no plain INBOX row to star (shared setup with TC-IZ-B5)');
     return;
   }
   await izSelectById(page, target.id);
@@ -5539,7 +5798,7 @@ async function scenario_iz_b5(page) {
     { timeout: 4000, desc: 'B5 star applied' }
   );
   await page.keyboard.press('#'); // trash despite the star
-  const gone = await waitFor(
+  const goneFromInbox = await waitFor(
     async () => {
       const dom = await izRowDomById(page, target.id);
       const v = await izInboxView(page);
@@ -5547,26 +5806,40 @@ async function scenario_iz_b5(page) {
     },
     { timeout: 6000, desc: 'B5 starred row trashed out of the inbox' }
   ).then(() => true, () => false);
-  if (gone) record('TC-IZ-B5', 'PASS', `starred INBOX row ("${target.text.slice(0, 24)}") trashed → removed from the inbox despite the ★`);
-  else record('TC-IZ-B5', 'FAIL', 'starred row still present after trash');
+  if (goneFromInbox) {
+    record('TC-IZ-B5', 'PASS', `starred INBOX row ("${target.text.slice(0, 24)}") trashed → removed from the inbox despite the ★`);
+  } else {
+    record('TC-IZ-B5', 'FAIL', 'starred row still present after trash');
+  }
+
+  await starRefresh(page);
+  const goneFromStar = !(await izRowDomById(page, target.id)) && !(await starView(page)).some((t) => t.id === target.id);
+  if (goneFromStar) {
+    record('TC-STAR-B5', 'PASS', 'the trashed starred row is also absent from the Starred view (TRASH exclusion applies to Starred too)');
+  } else {
+    record('TC-STAR-B5', 'FAIL', 'trashed starred row still visible in the Starred view');
+  }
 }
 
-// --- TC-IZ-B6: star an INBOX row, snooze it → hidden and does not reappear ----
-async function scenario_iz_b6(page) {
+// --- TC-IZ-B6 (unchanged logic) + TC-STAR-B6 (same snoozed-starred row is also gone from
+//     Starred — snooze exclusion applies there too, D2): star an INBOX row, snooze it -----------
+async function scenario_iz_b6_star_b6(page) {
   await izSetSplit(page, false);
   await izRefresh(page);
   const rows = await izDomRows(page);
   const target = rows.find((r) => !r.starred && r.id);
   if (!target) {
     record('TC-IZ-B6', 'FAIL', 'no plain INBOX row to star');
+    record('TC-STAR-B6', 'FAIL', 'no plain INBOX row to star (shared setup with TC-IZ-B6)');
     return;
   }
   await izSelectById(page, target.id);
   await page.keyboard.press('s'); // star
   // Wait for the star to FULLY commit (cache shows STARRED) before snoozing: otherwise the star's
   // modifyLabels round-trip ships a threads-changed upsert (labels incl. STARRED) that lands AFTER
-  // the snooze's optimistic removal and re-inserts the row (inView via STARRED). Settling the star
-  // first means its single diff-push is already applied when the snooze removes the row.
+  // the snooze's optimistic removal and re-inserts the row. Settling the star first means its single
+  // diff-push is already applied when the snooze removes the row (still relevant post-R1: the star
+  // diff itself, not a STARRED-union view membership, is what would otherwise race the snooze).
   await waitFor(
     async () => {
       const t = (await izInboxView(page)).find((x) => x.id === target.id);
@@ -5581,7 +5854,7 @@ async function scenario_iz_b6(page) {
   // Assert on the converged state (D6 "refresh/tick 후에도 재출현 없음"): after a refresh the cache
   // read excludes the thread via the snoozes table (label-independent), so it is reliably hidden.
   await izRefresh(page);
-  const gone = await waitFor(
+  const goneFromInbox = await waitFor(
     async () => {
       const dom = await izRowDomById(page, target.id);
       const v = await izInboxView(page);
@@ -5590,12 +5863,20 @@ async function scenario_iz_b6(page) {
     { timeout: 8000, desc: 'B6 snoozed starred row hidden from the inbox after refresh' }
   ).then(() => true, () => false);
   await izRefresh(page);
-  const stillGone =
+  const stillGoneFromInbox =
     !(await izRowDomById(page, target.id)) && !(await izInboxView(page)).some((t) => t.id === target.id);
-  if (gone && stillGone) {
+  if (goneFromInbox && stillGoneFromInbox) {
     record('TC-IZ-B6', 'PASS', `snoozed starred row hidden and does not reappear after refresh (INBOX/STARRED/snooze 3-way exclusion)`);
   } else {
-    record('TC-IZ-B6', 'FAIL', `gone=${gone} stillGone=${stillGone}`);
+    record('TC-IZ-B6', 'FAIL', `goneFromInbox=${goneFromInbox} stillGoneFromInbox=${stillGoneFromInbox}`);
+  }
+
+  await starRefresh(page);
+  const goneFromStar = !(await izRowDomById(page, target.id)) && !(await starView(page)).some((t) => t.id === target.id);
+  if (goneFromStar) {
+    record('TC-STAR-B6', 'PASS', 'the snoozed starred row is also absent from the Starred view (snooze exclusion applies to Starred too)');
+  } else {
+    record('TC-STAR-B6', 'FAIL', 'snoozed starred row still visible in the Starred view');
   }
 }
 
@@ -5660,16 +5941,66 @@ async function scenario_iz_a3(page) {
   }
 }
 
-// --- TC-IZ-A2: full external archive + unstar reaches inbox-zero empty state -
+// --- TC-STAR-C1: external unstar of an expendable starred row converges out of Starred ----------
+async function scenario_star_c1(page) {
+  await izSetSplit(page, false);
+  await izRefresh(page);
+  const target = (await izDomRows(page)).find((r) => !r.starred && r.id);
+  if (!target) {
+    record('TC-STAR-C1', 'FAIL', 'no expendable inbox row available to star');
+    return;
+  }
+  await izSelectById(page, target.id);
+  await page.keyboard.press('s'); // star it
+  await waitFor(
+    async () => {
+      const r = await izRowDomById(page, target.id);
+      return r && r.starred ? true : null;
+    },
+    { timeout: 4000, desc: 'C1 star applied' }
+  );
+  await starRefresh(page);
+  const visibleInStar = await waitFor(
+    async () => ((await starView(page)).some((t) => t.id === target.id) ? true : null),
+    { timeout: 5000, desc: 'C1 starred row shows in the Starred view' }
+  ).then(() => true, () => false);
+
+  // "Gmail-web unstar": strip STARRED from the provider copy only (cache/list untouched until refresh).
+  await page.evaluate((id) => window.zenmail.__debugExternalUnstar(id), target.id);
+  await starRefresh(page); // warm read + background revalidate → convergence
+  const gone = await waitFor(
+    async () => {
+      const dom = await izRowDomById(page, target.id);
+      const v = await starView(page);
+      return !dom && !v.some((t) => t.id === target.id) ? true : null;
+    },
+    { timeout: 12000, interval: 400, desc: 'C1 externally-unstarred row converges out of the Starred view' }
+  ).then(() => true, () => false);
+  await starRefresh(page); // re-enter (cold read of the now-converged cache)
+  const stillGone = !(await izRowDomById(page, target.id)) && !(await starView(page)).some((t) => t.id === target.id);
+  if (visibleInStar && gone && stillGone) {
+    record(
+      'TC-STAR-C1',
+      'PASS',
+      `external unstar of "${target.text.slice(0, 24)}" converges out of the Starred view after refresh and stays gone on re-entry (cache converged)`
+    );
+  } else {
+    record('TC-STAR-C1', 'FAIL', `visibleInStar=${visibleInStar} gone=${gone} stillGone=${stillGone}`);
+  }
+}
+
+// --- TC-IZ-A2 (simplified, R1): full external archive reaches inbox-zero empty state ------------
 async function scenario_iz_a2(page, seeds) {
   await izSetSplit(page, false);
   await izRefresh(page);
-  // Drain the inbox to zero. External archive (Gmail-web, provider-only) is the feature's core
-  // convergence path (already proven by TC-IZ-A1), but a thread with a recent LOCAL delta is
-  // guarded from revalidate stripping for 15s (D3) — earlier TC-IZ scenarios locally touched some
-  // rows (star/markRead), so external-archive alone can't reach empty in-window. So: external-archive
-  // untouched rows, and for survivors (guarded) fall back to an app-side 'e' archive; unstar any
-  // archived-starred rows (they leave the view on unstar). Loop until the inbox view is empty.
+  // Drain the inbox to zero. Under R1 (pure INBOX predicate) external-archive (Gmail-web,
+  // provider-only) works uniformly for EVERY row now — the old starred-vs-plain branching here
+  // (unstar for archived-starred rows, forced app-side archive for starred-in-inbox rows) existed
+  // only because the STARRED union used to keep those rows in view; that union is gone, so archiving
+  // (stripping INBOX) removes any row from the Inbox regardless of its star. What's still real:
+  // a thread with a recent LOCAL delta is guarded from revalidate stripping for 15s (D3, unrelated to
+  // STARRED) — earlier scenarios locally touched some rows (star/trash/snooze/markRead), so external-
+  // archive alone can't always reach empty in one pass; survivors fall back to an app-side 'e' archive.
   let prevExternal = new Set();
   let drained = false;
   for (let iter = 0; iter < 12 && !drained; iter++) {
@@ -5680,17 +6011,8 @@ async function scenario_iz_a2(page, seeds) {
     }
     const nowExternal = new Set();
     for (const t of view) {
-      const starred = t.labelIds.includes('STARRED');
-      const inbox = t.labelIds.includes('INBOX');
-      if (starred && !inbox) {
-        // archived-starred → unstar drops it out of the INBOX∪STARRED view.
-        await izSelectById(page, t.id);
-        await page.keyboard.press('s');
-        await sleep(150);
-      } else if (prevExternal.has(t.id) || (starred && inbox)) {
-        // survived an external archive (guarded), or starred-in-inbox (external archive would leave
-        // the star) → force removal app-side ('e'); a starred one becomes archived-starred, handled
-        // on the next iteration.
+      if (prevExternal.has(t.id)) {
+        // survived an external archive last iteration (local-delta guarded) → force removal app-side.
         await izSelectById(page, t.id);
         await page.keyboard.press('e');
         await sleep(150);
@@ -5714,7 +6036,11 @@ async function scenario_iz_a2(page, seeds) {
   await izRefresh(page); // re-enter — must stay empty
   const stillEmpty = (await izInboxView(page)).length === 0 && (await izDomRows(page)).length === 0;
   if (emptyView && emptyStateShown && stillEmpty) {
-    record('TC-IZ-A2', 'PASS', 'archiving every inbox thread (external + app-side for guarded rows) and unstarring the starred seeds reaches the inbox-zero empty state ("Inbox zero. Enjoy the quiet."); stays empty on re-entry');
+    record(
+      'TC-IZ-A2',
+      'PASS',
+      'archiving every inbox thread (external + app-side fallback for local-delta-guarded rows) reaches the inbox-zero empty state ("Inbox zero. Enjoy the quiet."); stays empty on re-entry'
+    );
   } else {
     const left = await izInboxView(page);
     record('TC-IZ-A2', 'FAIL', `emptyView=${emptyView} emptyStateShown=${emptyStateShown} stillEmpty=${stillEmpty} remaining=${JSON.stringify(left.map((t) => t.id))} (seeds ${seeds.keepId}/${seeds.archId})`);
