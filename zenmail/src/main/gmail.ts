@@ -752,6 +752,8 @@ export const DEMO_ACCOUNT_EMAILS = ['demo@zenmail.app', 'work@zenmail.app'] as c
 function buildWorkDemoData(email: string): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
   const labels: Label[] = [
     { id: 'INBOX', name: 'Inbox', type: 'system', unreadCount: 0, visible: true },
+    // starred-view D7: 사이드바 Starred 배지가 읽는 시스템 라벨 시드(실계정은 Gmail이 자동 제공) — 두 데모 계정 모두 필요(패리티).
+    { id: 'STARRED', name: 'Starred', type: 'system', unreadCount: 0, visible: true },
     { id: 'SENT', name: 'Sent', type: 'system', unreadCount: 0, visible: true },
     { id: 'DRAFT', name: 'Drafts', type: 'system', unreadCount: 0, visible: true },
     { id: 'TRASH', name: 'Trash', type: 'system', unreadCount: 0, visible: false },
