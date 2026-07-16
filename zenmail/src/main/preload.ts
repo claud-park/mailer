@@ -119,6 +119,8 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugProviderCalls = () => ipcRenderer.invoke('mail:debug-provider-calls');
   api.__debugExternalArchive = (threadId: string) =>
     ipcRenderer.invoke('mail:debug-external-archive', threadId);
+  api.__debugExternalUnstar = (threadId: string) =>
+    ipcRenderer.invoke('mail:debug-external-unstar', threadId);
   api.__debugCalendarState = () => ipcRenderer.invoke('calendar:debug-state');
   api.__debugFailNextCalendar = () => ipcRenderer.invoke('calendar:debug-fail-next');
   api.__debugSetCalendarReady = (v: boolean) => ipcRenderer.invoke('calendar:debug-set-ready', v);

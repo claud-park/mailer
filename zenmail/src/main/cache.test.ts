@@ -68,6 +68,45 @@ describe('AccountCache — per-account isolation', () => {
     expect(b.getThreads('INBOX')).toEqual([]);
   });
 
+  // starred-view D3: getThreads('INBOX')는 이제 순수 INBOX라 STARRED-only 행을 배제해야 한다
+  // (inbox-zero-starred 시절엔 이 케이스가 "포함"이었다 — 뒤집힌 회귀 케이스로 명시).
+  it('getThreads(INBOX) excludes STARRED-only threads (no more INBOX∪STARRED union)', () => {
+    a.upsertThreads([
+      { ...t('t1'), labelIds: ['INBOX'] },
+      { ...t('t2'), labelIds: ['STARRED'] },
+    ]);
+    expect(a.getThreads('INBOX').map((x) => x.id)).toEqual(['t1']);
+  });
+
+  it('getThreads(STARRED) returns STARRED threads regardless of INBOX membership', () => {
+    a.upsertThreads([
+      { ...t('t1'), labelIds: ['INBOX', 'STARRED'] }, // still in inbox, starred
+      { ...t('t2'), labelIds: ['STARRED'] }, // archived-only, starred
+      { ...t('t3'), labelIds: ['INBOX'] }, // not starred — must not appear
+    ]);
+    expect(new Set(a.getThreads('STARRED').map((x) => x.id))).toEqual(new Set(['t1', 't2']));
+  });
+
+  it('getThreads(STARRED) excludes TRASH/SPAM', () => {
+    a.upsertThreads([
+      { ...t('t1'), labelIds: ['STARRED', 'TRASH'] },
+      { ...t('t2'), labelIds: ['STARRED', 'SPAM'] },
+      { ...t('t3'), labelIds: ['STARRED'] },
+    ]);
+    expect(a.getThreads('STARRED').map((x) => x.id)).toEqual(['t3']);
+  });
+
+  it('getViewRows(STARRED) matches getThreads(STARRED) membership (SQL prefilter vs JS filter consistency)', () => {
+    a.upsertThreads([
+      { ...t('t1'), labelIds: ['INBOX', 'STARRED'] },
+      { ...t('t2'), labelIds: ['STARRED'] },
+      { ...t('t3'), labelIds: ['STARRED', 'TRASH'] },
+    ]);
+    expect(new Set(a.getViewRows('STARRED').map((r) => r.id))).toEqual(
+      new Set(a.getThreads('STARRED').map((x) => x.id))
+    );
+  });
+
   it('contacts/search stay scoped per cache (TC-MA-C1 unit twin)', () => {
     a.upsertThreads([t('t1', 'only-in-a@a.io')]);
     expect(a.listContacts('only-in-a')).toHaveLength(1);

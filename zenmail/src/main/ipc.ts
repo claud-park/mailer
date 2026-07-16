@@ -810,6 +810,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       if (ctx?.provider instanceof MockGmailProvider) ctx.provider.externalArchive(threadId);
     });
 
+    // starred-view D8 (TC-STAR-C1): "Gmail 웹에서 별표 해제" 재현 — mock provider 저장소에서만
+    // STARRED를 벗긴다. 다음 revalidate가 Starred 뷰에서 수렴시켜야 한다.
+    ipcMain.handle('mail:debug-external-unstar', async (_e, threadId: string) => {
+      const ctx = activeCtx();
+      if (ctx?.provider instanceof MockGmailProvider) ctx.provider.externalUnstar(threadId);
+    });
+
     ipcMain.handle('calendar:debug-state', async (): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }> => {
       const ctx = activeCtx();
       if (ctx?.calendarProvider instanceof MockCalendarProvider) return ctx.calendarProvider.snapshot();

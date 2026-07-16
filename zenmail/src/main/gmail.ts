@@ -13,7 +13,7 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '../shared/types';
-import { isInInboxView } from '../shared/view';
+import { isInInboxView, isInStarredView } from '../shared/view';
 import { extractInvite } from './ics';
 
 export interface GmailProvider {
@@ -130,6 +130,14 @@ function toBase64Url(s: string): string {
   return Buffer.from(s).toString('base64url');
 }
 
+/**
+ * starred-view D5(gmail.ts 메모): INBOX·STARRED 단일 뷰 라우팅 가드가 각자 인라인 조건이던 것을
+ * 공통화 — "라벨이 정확히 하나만 요청됐고 그게 label이며 q가 없다"는 조건은 뷰가 늘어도 동일하다.
+ */
+function matchesSingleLabelView(req: FetchThreadsRequest, label: string): boolean {
+  return req.labelIds?.length === 1 && req.labelIds[0] === label && !req.q;
+}
+
 export function buildMime(req: SendRequest, from: string): string {
   const boundary = `zenmail_${Math.random().toString(36).slice(2)}`;
   const headers = [
@@ -179,17 +187,22 @@ export class RealGmailProvider implements GmailProvider {
   }
 
   async listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse> {
-    // inbox-zero-starred D2: 인박스 뷰 술어를 프로바이더 내부에서만 Gmail q로 번역한다. q를 IPC
-    // 요청(req.q)에 싣지 않으므로 SWR warm-cache 자격(!req.q)이 보존된다 — 요청에 q가 실리면
-    // 인박스 웜캐시 읽기 전체가 무력화된다. threads.list의 labelIds는 순수 AND라 (INBOX ∨ STARRED)를
-    // 표현 못 해 q로 번역하고, pageToken은 그대로 통과시킨다.
-    const isInboxView = req.labelIds?.length === 1 && req.labelIds[0] === 'INBOX' && !req.q;
+    // inbox-zero-starred D2 / starred-view D3: 뷰 술어를 프로바이더 내부에서만 Gmail q로 번역한다.
+    // q를 IPC 요청(req.q)에 싣지 않으므로 SWR warm-cache 자격(!req.q)이 보존된다 — 요청에 q가 실리면
+    // 웜캐시 읽기 전체가 무력화된다. INBOX 뷰는 이제 순수 INBOX라 labelIds AND만으로도 표현 가능하지만,
+    // STARRED 뷰는 TRASH/SPAM/스누즈 배제가 섞여 labelIds의 순수 AND로 표현 못 해 q로 번역한다.
+    // pageToken은 그대로 통과시킨다.
+    const isInboxView = matchesSingleLabelView(req, 'INBOX');
+    const isStarredView = matchesSingleLabelView(req, 'STARRED');
+    const isSingleLabelView = isInboxView || isStarredView;
     const res = await this.gmail.users.threads.list({
       userId: 'me',
-      labelIds: isInboxView ? undefined : req.labelIds,
+      labelIds: isSingleLabelView ? undefined : req.labelIds,
       q: isInboxView
-        ? `(in:inbox OR is:starred) -in:trash -in:spam -label:${SNOOZE_LABEL_NAME}`
-        : req.q,
+        ? `in:inbox -in:trash -in:spam -label:${SNOOZE_LABEL_NAME}`
+        : isStarredView
+          ? `is:starred -in:trash -in:spam -label:${SNOOZE_LABEL_NAME}`
+          : req.q,
       pageToken: req.pageToken,
       maxResults: 50,
     });
@@ -399,6 +412,8 @@ function demoBody(paragraphs: string[], quoted?: string): string {
 function buildDemoData(email: string): { threads: MockThread[]; labels: Label[]; senders: Contact[] } {
   const labels: Label[] = [
     { id: 'INBOX', name: 'Inbox', type: 'system', unreadCount: 0, visible: true },
+    // starred-view D7: 사이드바 Starred 배지가 읽는 시스템 라벨 시드(실계정은 Gmail이 자동 제공).
+    { id: 'STARRED', name: 'Starred', type: 'system', unreadCount: 0, visible: true },
     { id: 'SENT', name: 'Sent', type: 'system', unreadCount: 0, visible: true },
     { id: 'DRAFT', name: 'Drafts', type: 'system', unreadCount: 0, visible: true },
     { id: 'TRASH', name: 'Trash', type: 'system', unreadCount: 0, visible: false },
@@ -829,11 +844,15 @@ export class MockGmailProvider implements GmailProvider {
     this.failIfOffline();
     // !req.q mirrors RealGmailProvider's routing guard (D2) — a combined labelIds+q request must
     // fall through to the plain AND-match + substring-filter path on both providers, not diverge.
-    const isInboxView = req.labelIds?.length === 1 && req.labelIds[0] === 'INBOX' && !req.q;
+    const isInboxView = matchesSingleLabelView(req, 'INBOX');
+    const isStarredView = matchesSingleLabelView(req, 'STARRED');
     let rows = this.threads.filter((t) => !t.summary.labelIds.includes('TRASH') || req.labelIds?.includes('TRASH'));
     if (isInboxView) {
-      // inbox-zero-starred D1: 인박스 뷰 술어 공유 — (INBOX ∨ STARRED) − TRASH − SPAM − snoozed.
+      // starred-view D3: 인박스 뷰 술어 — INBOX − TRASH − SPAM − snoozed(STARRED 유니온 제거).
       rows = rows.filter((t) => isInInboxView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID));
+    } else if (isStarredView) {
+      // starred-view D1/D2: Starred 전용 뷰 술어 — STARRED − TRASH − SPAM − snoozed(archive 여부 무관).
+      rows = rows.filter((t) => isInStarredView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID));
     } else if (req.labelIds?.length) {
       rows = rows.filter((t) => req.labelIds!.every((l) => t.summary.labelIds.includes(l)));
     }
@@ -955,6 +974,18 @@ export class MockGmailProvider implements GmailProvider {
     if (!t) return;
     t.summary.labelIds = t.summary.labelIds.filter((l) => l !== 'INBOX');
     t.detail.labelIds = t.detail.labelIds.filter((l) => l !== 'INBOX');
+  }
+
+  /**
+   * starred-view D8: "Gmail 웹에서 별표 해제" 재현 — externalArchive와 동일 구조로 STARRED만 벗긴다
+   * (modifyThread 부기·캐시·mutations 큐 우회). Starred 뷰의 외부 변경 수렴(TC-STAR-C1)을 검증하는
+   * E2E 전용 훅. mock 전용(real provider엔 없음).
+   */
+  externalUnstar(threadId: string): void {
+    const t = this.threads.find((t) => t.summary.id === threadId);
+    if (!t) return;
+    t.summary.labelIds = t.summary.labelIds.filter((l) => l !== 'STARRED');
+    t.detail.labelIds = t.detail.labelIds.filter((l) => l !== 'STARRED');
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {

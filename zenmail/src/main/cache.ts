@@ -10,7 +10,7 @@ import type {
   ThreadSummary,
 } from '../shared/types';
 import { backoffDelayMs } from '../shared/sync';
-import { isInInboxView } from '../shared/view';
+import { isInInboxView, isInStarredView } from '../shared/view';
 
 function rowToSummary(r: Record<string, unknown>): ThreadSummary {
   return {
@@ -208,7 +208,7 @@ export class AccountCache {
     const label = labelId ?? 'INBOX';
     const d = this.db;
     if (label === 'INBOX') {
-      // inbox-zero-starred D1/D6: 인박스 뷰 = (INBOX ∨ STARRED) − snoozed − TRASH/SPAM.
+      // starred-view D3: 인박스 뷰 = INBOX − snoozed − TRASH/SPAM(STARRED 유니온 제거로 단일 라벨).
       // 캐시 리더는 라벨 id를 모르므로 snooze 배제는 로컬 truth인 snoozes 테이블 서브쿼리로 한다(D6).
       // TRASH/SPAM은 SQL에서 직접 배제한다(isInInboxView와 동일 조건) — LIKE 프리필터 뒤에 JS 필터를
       // 얹고 LIMIT을 먼저 적용하면, 상위 N행에 TRASH/SPAM 잔류 행이 몰릴 때 유효 행이 limit보다 적게
@@ -217,7 +217,7 @@ export class AccountCache {
       const rows = d
         .prepare(
           `SELECT * FROM threads
-           WHERE (label_ids LIKE '%"INBOX"%' OR label_ids LIKE '%"STARRED"%')
+           WHERE label_ids LIKE '%"INBOX"%'
              AND label_ids NOT LIKE '%"TRASH"%'
              AND label_ids NOT LIKE '%"SPAM"%'
              AND id NOT IN (SELECT thread_id FROM snoozes)
@@ -225,6 +225,21 @@ export class AccountCache {
         )
         .all(limit) as Record<string, unknown>[];
       return rows.map(rowToSummary).filter((t) => isInInboxView(t.labelIds));
+    }
+    if (label === 'STARRED') {
+      // starred-view D1/D2: Starred 뷰 = STARRED − snoozed − TRASH/SPAM(archive 여부 무관).
+      // INBOX 분기와 동일한 이유로 SQL 프리필터가 정확해야 LIMIT이 안전하다(위 주석 참고).
+      const rows = d
+        .prepare(
+          `SELECT * FROM threads
+           WHERE label_ids LIKE '%"STARRED"%'
+             AND label_ids NOT LIKE '%"TRASH"%'
+             AND label_ids NOT LIKE '%"SPAM"%'
+             AND id NOT IN (SELECT thread_id FROM snoozes)
+           ORDER BY date DESC LIMIT ?`
+        )
+        .all(limit) as Record<string, unknown>[];
+      return rows.map(rowToSummary).filter((t) => isInStarredView(t.labelIds));
     }
     const rows = d
       .prepare('SELECT * FROM threads WHERE label_ids LIKE ? ORDER BY date DESC LIMIT ?')
@@ -245,7 +260,7 @@ export class AccountCache {
       const rows = d
         .prepare(
           `SELECT id, label_ids, date FROM threads
-           WHERE (label_ids LIKE '%"INBOX"%' OR label_ids LIKE '%"STARRED"%')
+           WHERE label_ids LIKE '%"INBOX"%'
              AND label_ids NOT LIKE '%"TRASH"%'
              AND label_ids NOT LIKE '%"SPAM"%'
              AND id NOT IN (SELECT thread_id FROM snoozes)`
@@ -253,6 +268,20 @@ export class AccountCache {
         .all() as { id: string; label_ids: string; date: number }[];
       return rows
         .filter((r) => isInInboxView(JSON.parse(r.label_ids) as string[]))
+        .map((r) => ({ id: r.id, date: r.date }));
+    }
+    if (label === 'STARRED') {
+      const rows = d
+        .prepare(
+          `SELECT id, label_ids, date FROM threads
+           WHERE label_ids LIKE '%"STARRED"%'
+             AND label_ids NOT LIKE '%"TRASH"%'
+             AND label_ids NOT LIKE '%"SPAM"%'
+             AND id NOT IN (SELECT thread_id FROM snoozes)`
+        )
+        .all() as { id: string; label_ids: string; date: number }[];
+      return rows
+        .filter((r) => isInStarredView(JSON.parse(r.label_ids) as string[]))
         .map((r) => ({ id: r.id, date: r.date }));
     }
     return d
