@@ -210,10 +210,16 @@ export interface ZenmailApi {
   fetchThreads(accountId: string, req: FetchThreadsRequest): Promise<FetchThreadsResponse>;
   fetchThread(accountId: string, threadId: string): Promise<ThreadDetail>;
   fetchLabels(accountId: string): Promise<Label[]>;
+  /** 라벨 생성(label-crud R1) — 이름만 받고 색상은 Gmail 자동 할당(D2). */
+  createLabel(accountId: string, name: string): Promise<Label>;
+  /** 라벨 삭제(label-crud R2) — 그 라벨을 가진 모든 메일에서도 제거된다(서버측 동작, mock은 D4로 흉내). */
+  deleteLabel(accountId: string, labelId: string): Promise<void>;
   send(accountId: string, req: SendRequest): Promise<SendReceipt>;
   cancelSend(accountId: string, sendId: string): Promise<boolean>;
   modifyLabels(accountId: string, req: ModifyLabelsRequest): Promise<void>;
   snooze(accountId: string, req: SnoozeRequest): Promise<void>;
+  /** 스누즈 취소(undo-toast D5) — 대기 중인 스누즈 해제 + 원래 라벨(INBOX) 복원을 원자적으로 수행. */
+  cancelSnooze(accountId: string, threadId: string): Promise<void>;
   searchLocal(accountId: string, q: string): Promise<ThreadSummary[]>;
   listContacts(accountId: string, prefix: string): Promise<Contact[]>;
   getSplits(accountId: string): Promise<SplitDefinition[]>;

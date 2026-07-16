@@ -3,6 +3,7 @@ import type {
   AccountsSnapshot,
   CreateEventInput,
   FetchThreadsRequest,
+  Label,
   ModifyLabelsRequest,
   RsvpResponse,
   SendRequest,
@@ -25,11 +26,16 @@ const api: ZenmailApi = {
   fetchThread: (accountId: string, threadId: string) =>
     ipcRenderer.invoke('mail:fetch-thread', accountId, threadId),
   fetchLabels: (accountId: string) => ipcRenderer.invoke('mail:fetch-labels', accountId),
+  createLabel: (accountId: string, name: string): Promise<Label> =>
+    ipcRenderer.invoke('mail:create-label', accountId, name),
+  deleteLabel: (accountId: string, labelId: string) => ipcRenderer.invoke('mail:delete-label', accountId, labelId),
   send: (accountId: string, req: SendRequest) => ipcRenderer.invoke('mail:send', accountId, req),
   cancelSend: (accountId: string, sendId: string) => ipcRenderer.invoke('mail:cancel-send', accountId, sendId),
   modifyLabels: (accountId: string, req: ModifyLabelsRequest) =>
     ipcRenderer.invoke('mail:modify-labels', accountId, req),
   snooze: (accountId: string, req: SnoozeRequest) => ipcRenderer.invoke('mail:snooze', accountId, req),
+  cancelSnooze: (accountId: string, threadId: string) =>
+    ipcRenderer.invoke('mail:cancel-snooze', accountId, threadId),
   searchLocal: (accountId: string, q: string) => ipcRenderer.invoke('mail:search-local', accountId, q),
   listContacts: (accountId: string, prefix: string) => ipcRenderer.invoke('mail:contacts', accountId, prefix),
   getSplits: (accountId: string) => ipcRenderer.invoke('mail:get-splits', accountId),

@@ -8,6 +8,7 @@ import type {
   CreateEventInput,
   FetchThreadsRequest,
   FollowupInfo,
+  Label,
   ModifyLabelsRequest,
   RsvpResponse,
   SendReceipt,
@@ -474,6 +475,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return requireContext(accountId).provider.listLabels();
   });
 
+  ipcMain.handle('mail:create-label', async (_e, accountId: string, name: string): Promise<Label> => {
+    return requireContext(accountId).provider.createLabel(name);
+  });
+
+  ipcMain.handle('mail:delete-label', async (_e, accountId: string, labelId: string): Promise<void> => {
+    await requireContext(accountId).provider.deleteLabel(labelId);
+  });
+
   ipcMain.handle('mail:send', async (_e, accountId: string, req: SendRequest): Promise<SendReceipt> => {
     const ctx = requireContext(accountId);
     const p = ctx.provider;
@@ -603,6 +612,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       // not on permanent failure (rethrow happens before onEnqueue), preserving TC-SP rollback.
       () => ctx.cache.addSnooze(req.threadId, until)
     );
+  });
+
+  // undo-toast D5: 스누즈 취소 — 대기 중인 스누즈 행 제거 + 원래 라벨(INBOX) 복원을 원자적으로 수행.
+  // mail:snooze와 대칭(큐잉 없이 즉시 처리 — undo 창은 5초로 짧아 오프라인 큐잉 이점이 적다).
+  ipcMain.handle('mail:cancel-snooze', async (_e, accountId: string, threadId: string): Promise<void> => {
+    const ctx = requireContext(accountId);
+    ctx.cache.removeSnooze(threadId);
+    const snoozeLabel = await ctx.provider.snoozeLabelId();
+    await ctx.provider.modifyThread({
+      threadId,
+      addLabelIds: ['INBOX'],
+      removeLabelIds: [snoozeLabel],
+    });
   });
 
   ipcMain.handle('mail:search-local', async (_e, accountId: string, q: string) => {

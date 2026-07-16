@@ -22,6 +22,10 @@ export interface GmailProvider {
   listThreads(req: FetchThreadsRequest): Promise<FetchThreadsResponse>;
   getThread(threadId: string): Promise<ThreadDetail>;
   listLabels(): Promise<Label[]>;
+  /** 라벨 생성(label-crud R1) — 이름만 받고 색상은 Gmail 자동 할당. */
+  createLabel(name: string): Promise<Label>;
+  /** 라벨 삭제(label-crud R2) — Real은 서버가 자동으로 모든 메시지에서 제거, Mock은 D4로 흉내. */
+  deleteLabel(labelId: string): Promise<void>;
   send(req: SendRequest): Promise<SendResult>;
   modifyThread(req: ModifyLabelsRequest): Promise<void>;
   /** id of the zenmail/snoozed label, creating it if needed */
@@ -308,6 +312,24 @@ export class RealGmailProvider implements GmailProvider {
       unreadCount: l.threadsUnread ?? 0,
       visible: l.labelListVisibility !== 'labelHide',
     }));
+  }
+
+  async createLabel(name: string): Promise<Label> {
+    const res = await this.gmail.users.labels.create({
+      userId: 'me',
+      requestBody: { name },
+    });
+    return {
+      id: res.data.id!,
+      name: res.data.name ?? name,
+      type: (res.data.type as 'system' | 'user') ?? 'user',
+      unreadCount: 0,
+      visible: true,
+    };
+  }
+
+  async deleteLabel(labelId: string): Promise<void> {
+    await this.gmail.users.labels.delete({ userId: 'me', id: labelId });
   }
 
   async send(req: SendRequest): Promise<SendResult> {
@@ -889,6 +911,24 @@ export class MockGmailProvider implements GmailProvider {
         (t) => t.summary.unread && t.summary.labelIds.includes(l.id)
       ).length,
     }));
+  }
+
+  async createLabel(name: string): Promise<Label> {
+    await this.delay();
+    const label: Label = { id: `label_${Date.now()}`, name, type: 'user', unreadCount: 0, visible: true };
+    this.labels.push(label);
+    return label;
+  }
+
+  /** label-crud D4: 실계정에서 라벨 삭제 시 그 라벨을 가진 모든 메일에서도 제거되는 서버측 동작을
+   *  흉내낸다 — 그렇지 않으면 삭제된 라벨의 칩이 스레드 목록에 유령처럼 남는다. */
+  async deleteLabel(labelId: string): Promise<void> {
+    await this.delay();
+    this.labels = this.labels.filter((l) => l.id !== labelId);
+    for (const t of this.threads) {
+      t.summary.labelIds = t.summary.labelIds.filter((l) => l !== labelId);
+      t.detail.labelIds = t.detail.labelIds.filter((l) => l !== labelId);
+    }
   }
 
   async send(req: SendRequest): Promise<SendResult> {
