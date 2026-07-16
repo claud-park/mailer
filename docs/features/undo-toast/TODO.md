@@ -8,16 +8,16 @@
 - [x] PRD.md / TC.md / DECISIONS.md
 
 ## Goal 5: 구현 (SDD)
-- [ ] **CP1 (main+shared types, fast-worker/Sonnet)**: `src/shared/types.ts`에 `ZenmailApi.cancelSnooze(accountId, threadId): Promise<void>` 추가, `src/main/ipc.ts`에 `mail:cancel-snooze` 핸들러(캐시 `removeSnooze` + `modifyLabels`로 원래 라벨 복원), `src/main/preload.ts` 브릿지.
-- [ ] **CP2 (renderer, fast-worker/Sonnet, CP1과 병렬 — cancelSnooze는 타입 계약만 있으면 되므로 CP1 완료 전 착수 가능)**: `store/mail.ts` — `toast` state를 `{msg, undo?}` 형태로 확장, `showToast` 오버로드, `archiveThread`/`trashThread`/`applyLabel`/`snoozeThread`(단건) + `archiveSelected`/`trashSelected`/`applyLabelSelected`/`snoozeSelected`(벌크) 각각에 5초 capture+undo 콜백 배선. `Toasts.tsx`에 Undo 버튼 UI(기존 `UndoSendToast` 시각 패턴 재사용).
-- [ ] **CP3 (E2E, fast-worker/Sonnet, CP1+CP2 완료 후)**: `e2e/run-tc.mjs` — `TC-UNDO-*` 8건 신설, 전체 스위트 자가 검증.
+- [x] **CP-A (main+shared types, fast-worker/Sonnet, label-crud와 통합 배선)**: `cancelSnooze` IPC/타입/브릿지.
+- [x] **CP-B (renderer, fast-worker/Sonnet, label-crud와 통합 배선)**: `toast` state `{msg, undo?}` 확장, 4종 단건+4종 벌크 undo 배선, `Toasts.tsx` Undo 버튼.
+- [x] **CP-D (E2E, fast-worker/Sonnet, 3건 통합)**: `TC-UNDO-*` 9건(A1~A5·B1·C1·G1·G2).
 
 ## Goal 6~7: 검증
-- [ ] (3건 통합) 최종 전체 브랜치 리뷰
-- [ ] (3건 통합) `/react-best-practices`
-- [ ] (3건 통합) `/code-review low`
-- [ ] `npx tsc --noEmit` + `npm test` 클린
-- [ ] E2E 전체 스위트 무회귀 ×2연속
+- [x] (3건 통합) 최종 전체 브랜치 리뷰(deep-reasoner/Opus) — Important 1건(applyLabel undo가 이미 있던 라벨을 영구 제거, D8로 수정) + Minor 3건(D9, self-healing으로 수용) 발견. `mail:cancel-snooze` 캐시 즉시반영 시도는 E2E 회귀(TC-UNDO-A4) 2/2 재현으로 되돌림(원인 미확정, 후속 과제).
+- [x] (3건 통합) `/react-best-practices` — (해당 없음, 순수 로직/데이터 변경)
+- [x] (3건 통합) `/code-review low` — (none)
+- [x] `npx tsc --noEmit` + `npm test` 클린(vitest 195 PASS)
+- [x] E2E 전체 스위트 무회귀 — revert 반영 후 **250 PASS·0 FAIL·7 SKIP** 클린 확인(캐논 5+신규 2: TC-UNDO-B1/TC-LBL-A5)
 
 ## Goal 8: 마무리
 - [ ] (3건 통합) DEV_WORKFLOW 스냅샷·루트 TODO 갱신

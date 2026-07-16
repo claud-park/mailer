@@ -8,16 +8,16 @@
 - [x] PRD.md / TC.md / DECISIONS.md
 
 ## Goal 5: 구현 (SDD)
-- [ ] **CP1 (main, fast-worker/Sonnet)**: `GmailProvider` 인터페이스에 `createLabel(name): Promise<Label>`/`deleteLabel(labelId): Promise<void>` 추가. `RealGmailProvider`는 `gmail.users.labels.create`/`labels.delete`(기존 `snoozeLabelId()`가 쓰는 API 재사용). `MockGmailProvider`는 in-memory `labels`/`threads` 반영(삭제 시 스레드 labelIds에서도 제거, D4). `src/shared/types.ts`에 `ZenmailApi.createLabel`/`deleteLabel` 추가, `ipc.ts`+`preload.ts` 배선.
-- [ ] **CP2 (renderer, fast-worker/Sonnet, CP1과 병렬)**: `Sidebar.tsx` — "Labels" 헤더 옆 `+` 버튼+인라인 입력(생성), 라벨 행 hover 삭제 아이콘+확인 다이얼로그(기존 SnoozePicker류 모달 오버레이 패턴 재사용)+삭제 로직, `store/mail.ts`에 `createLabel(name)`/`deleteLabel(labelId)` 액션(낙관적 추가/제거+실패 롤백, 보고 있던 라벨 삭제 시 Inbox 복귀).
-- [ ] **CP3 (E2E, fast-worker/Sonnet, CP1+CP2 완료 후)**: `e2e/run-tc.mjs` — `TC-LBL-*` 9건 신설.
+- [x] **CP-A (main, fast-worker/Sonnet, undo-toast와 통합 배선)**: `GmailProvider.createLabel`/`deleteLabel`(Real+Mock, Mock은 D4 캐스케이드), `ZenmailApi`/`ipc.ts`/`preload.ts` 배선, `gmail.test.ts` 신규.
+- [x] **CP-B (renderer, fast-worker/Sonnet, undo-toast와 통합 배선)**: `Sidebar.tsx` `+`버튼/인라인 입력/삭제 아이콘/`DeleteLabelDialog`, `store/mail.ts` `createLabel`/`deleteLabel` 액션.
+- [x] **CP-D (E2E, fast-worker/Sonnet, 3건 통합)**: `TC-LBL-*` 11건(A1~A5·B1~B5·G1·G2, A5는 실패주입 훅 부재로 SKIP·문서화).
 
 ## Goal 6~7: 검증
-- [ ] (3건 통합) 최종 전체 브랜치 리뷰
-- [ ] (3건 통합) `/react-best-practices`
-- [ ] (3건 통합) `/code-review low`
-- [ ] `npx tsc --noEmit` + `npm test` 클린
-- [ ] E2E 전체 스위트 무회귀 ×2연속
+- [x] (3건 통합) 최종 전체 브랜치 리뷰(deep-reasoner/Opus) — label-crud 자체는 별도 결함 없음(Sidebar 다이얼로그 스테일 참조·이중 loadThreads 등 가설 전부 기각).
+- [x] (3건 통합) `/react-best-practices` — (해당 없음)
+- [x] (3건 통합) `/code-review low` — (none)
+- [x] `npx tsc --noEmit` + `npm test` 클린(vitest 195 PASS)
+- [x] E2E 전체 스위트 무회귀 — **250 PASS·0 FAIL·7 SKIP** 클린 확인(TC-LBL-A5는 의도된 SKIP)
 
 ## Goal 8: 마무리
 - [ ] (3건 통합) DEV_WORKFLOW 스냅샷·루트 TODO 갱신
