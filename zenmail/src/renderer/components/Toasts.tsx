@@ -34,8 +34,20 @@ export function Toasts() {
   return (
     <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
       {toast && (
-        <div className="zen-fade-in rounded-lg border border-bg-border bg-bg-subtle px-4 py-2 text-[13px] text-text-primary shadow-xl">
-          {toast}
+        <div className="zen-fade-in flex items-center gap-3 rounded-lg border border-bg-border bg-bg-subtle px-4 py-2 text-[13px] text-text-primary shadow-xl">
+          <span>{toast.msg}</span>
+          {toast.undo && (
+            <button
+              onClick={() => {
+                toast.undo!();
+                // 즉시 비워서 더블클릭으로 undo가 두 번 실행되는 것을 막는다.
+                useMailStore.setState({ toast: null });
+              }}
+              className="rounded bg-bg-border px-2 py-0.5 text-[12px] font-medium text-accent hover:text-accent-hover"
+            >
+              Undo
+            </button>
+          )}
         </div>
       )}
       <UndoSendToast />

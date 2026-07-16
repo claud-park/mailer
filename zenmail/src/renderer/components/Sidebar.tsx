@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useMailStore, activeAccount } from '../store/mail';
 import { useCoachStore } from '../store/coach';
 import { SNOOZE_LABEL_NAME, type Label, type AccountInfo } from '../../shared/types';
@@ -38,6 +39,57 @@ function AccountAvatar({ acct, index, active, onClick }: {
         </span>
       )}
     </button>
+  );
+}
+
+/** label-crud D3/D1: confirmation dialog mirroring SnoozePicker's modal-overlay pattern exactly. */
+function DeleteLabelDialog({
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  label: Label;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50" onClick={onCancel}>
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="zen-fade-in w-88 rounded-lg border border-bg-border bg-bg-subtle p-4 shadow-2xl outline-none"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // keep global single-key shortcuts (kbar) from firing behind the modal
+          if (e.key === 'Escape') onCancel();
+          e.stopPropagation();
+        }}
+      >
+        <div className="px-1 pb-3 text-[13px] text-text-primary">
+          '{label.name}' 라벨을 삭제하면 모든 메일에서 제거됩니다
+        </div>
+        <div className="flex justify-end gap-2 px-1">
+          <button
+            onClick={onCancel}
+            className="rounded px-3 py-1.5 text-[12px] text-text-secondary hover:bg-bg-border hover:text-text-primary"
+          >
+            취소
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded bg-accent px-3 py-1.5 text-[12px] text-white"
+          >
+            삭제
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -83,6 +135,12 @@ export function Sidebar() {
   const switchAccount = useMailStore((s) => s.switchAccount);
   const addAccount = useMailStore((s) => s.addAccount);
   const signOutSession = useMailStore((s) => s.signOutSession);
+  const createLabel = useMailStore((s) => s.createLabel);
+  const deleteLabel = useMailStore((s) => s.deleteLabel);
+
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const [newLabelName, setNewLabelName] = useState('');
+  const [confirmDeleteLabel, setConfirmDeleteLabel] = useState<Label | null>(null);
 
   const byId = new Map(labels.map((l) => [l.id, l]));
   const userLabels = labels.filter(
@@ -90,7 +148,7 @@ export function Sidebar() {
   );
 
   return (
-    <aside className="flex h-full w-52 shrink-0 flex-col border-r border-bg-border bg-bg-subtle/50">
+    <aside className="relative flex h-full w-52 shrink-0 flex-col border-r border-bg-border bg-bg-subtle/50">
       {/* traffic-light spacer / drag region */}
       <div className="app-drag h-12 shrink-0" />
 
@@ -134,24 +192,86 @@ export function Sidebar() {
         ))}
 
         <div className="mx-2.5 my-2 border-t border-bg-border" />
-        <div className="px-2.5 pb-1 text-[10px] font-semibold tracking-wider text-text-muted uppercase">
-          Labels
+        <div className="flex items-center justify-between px-2.5 pb-1">
+          {creatingLabel ? (
+            <input
+              autoFocus
+              value={newLabelName}
+              onChange={(e) => setNewLabelName(e.target.value)}
+              onKeyDown={(e) => {
+                // keep global single-key shortcuts (kbar) from firing behind this input
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const name = newLabelName.trim();
+                  if (name) void createLabel(name);
+                  setCreatingLabel(false);
+                  setNewLabelName('');
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setCreatingLabel(false);
+                  setNewLabelName('');
+                }
+                e.stopPropagation();
+              }}
+              placeholder="Label name"
+              aria-label="New label name"
+              className="w-full rounded border border-bg-border bg-bg px-1.5 py-0.5 text-[11px] text-text-primary outline-none"
+            />
+          ) : (
+            <>
+              <span className="text-[10px] font-semibold tracking-wider text-text-muted uppercase">
+                Labels
+              </span>
+              <button
+                onClick={() => setCreatingLabel(true)}
+                aria-label="Add label"
+                title="Add label"
+                className="rounded px-1 text-[13px] leading-none text-text-muted hover:bg-bg-border hover:text-text-primary"
+              >
+                +
+              </button>
+            </>
+          )}
         </div>
         {userLabels.map((label) => (
-          <SidebarRow
-            key={label.id}
-            active={activeLabelId === label.id}
-            onClick={() => setActiveLabel(label.id)}
-            unread={label.unreadCount || undefined}
-          >
-            <LabelDot label={label} />
-            <span className="truncate">{label.name}</span>
-          </SidebarRow>
+          <div key={label.id} className="group relative">
+            <SidebarRow
+              active={activeLabelId === label.id}
+              onClick={() => setActiveLabel(label.id)}
+              unread={label.unreadCount || undefined}
+            >
+              <LabelDot label={label} />
+              <span className="truncate">{label.name}</span>
+            </SidebarRow>
+            {/* label-crud D3: delete icon hidden by default, hover-reveal only */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmDeleteLabel(label);
+              }}
+              aria-label={`Delete ${label.name}`}
+              title={`Delete ${label.name}`}
+              className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-1 text-[11px] text-text-muted opacity-0 hover:bg-bg-border hover:text-text-primary group-hover:opacity-100"
+            >
+              ✕
+            </button>
+          </div>
         ))}
         {userLabels.length === 0 && (
           <div className="px-2.5 py-1 text-[12px] text-text-muted">No labels</div>
         )}
       </nav>
+
+      {confirmDeleteLabel && (
+        <DeleteLabelDialog
+          label={confirmDeleteLabel}
+          onCancel={() => setConfirmDeleteLabel(null)}
+          onConfirm={() => {
+            void deleteLabel(confirmDeleteLabel.id);
+            setConfirmDeleteLabel(null);
+          }}
+        />
+      )}
 
       <div className="border-t border-bg-border p-2">
         {sync.pending > 0 && (

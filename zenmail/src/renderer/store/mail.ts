@@ -126,7 +126,7 @@ interface MailState {
   followupPickerOpen: boolean;
   followups: Map<string, FollowupInfo>;
   pendingSend: PendingSend | null;
-  toast: string | null;
+  toast: { msg: string; undo?: () => void } | null;
   snippets: SnippetRecord[];
   /** D10: sidebar sync line data — set from useThreads' onSyncState subscription. */
   sync: { online: boolean; pending: number };
@@ -180,6 +180,8 @@ interface MailState {
   markRead(threadId?: string, read?: boolean, opts?: { silent?: boolean }): Promise<void>;
   applyLabel(labelId: string, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
   snoozeThread(until: Date, threadId?: string, opts?: { silent?: boolean }): Promise<void>;
+  createLabel(name: string): Promise<void>;
+  deleteLabel(labelId: string): Promise<void>;
 
   selectAllVisible(): void;
   clearBulkSelection(): void;
@@ -209,7 +211,7 @@ interface MailState {
   scheduleFollowup(days: number, threadId?: string): Promise<void>;
   cancelFollowup(threadId?: string): Promise<void>;
   dismissFollowup(threadId?: string): Promise<void>;
-  showToast(msg: string): void;
+  showToast(msg: string, opts?: { undo?: () => void }): void;
   fetchAttachmentImage(
     messageId: string,
     attachmentId: string,
@@ -345,6 +347,21 @@ export const useMailStore = create<MailState>((set, get) => {
       set((st) => ({ threads: reinsert(st.threads, capture) }));
     }
     recordRollback(action);
+  }
+
+  /**
+   * undo-toast D3: restores a captured thread's original labelIds after a *successful* mutation
+   * the user chose to undo — never touches recordRollback (that metric is for failure-rollback
+   * only, see rollbackRemoval above). Re-derives at call time whether the row needs reinsertion
+   * (removed from the visible list, e.g. archive/trash/snooze) or just a labelIds patch in place
+   * (e.g. archiving from the Starred view, where the row never left `threads`) — one capture
+   * covers both shapes since `capture.thread.labelIds` is always the pre-mutation state.
+   */
+  function restoreCapture(threads: ThreadSummary[], capture: RemovalCapture): ThreadSummary[] {
+    if (threads.some((t) => t.id === capture.thread.id)) {
+      return threads.map((t) => (t.id === capture.thread.id ? { ...t, labelIds: capture.thread.labelIds } : t));
+    }
+    return reinsert(threads, capture);
   }
 
   return {
@@ -734,6 +751,20 @@ export const useMailStore = create<MailState>((set, get) => {
         (s.activeLabelId === 'INBOX' || s.activeLabelId === 'STARRED' || !s.activeLabelId) &&
         !s.searchQuery;
 
+      // undo-toast D3: capture the pre-archive thread (labelIds included) regardless of branch —
+      // restoreCapture re-derives at undo time whether the row needs reinsertion or just a labelIds
+      // patch, so one capture covers both the keepInPlace and full-removal shapes below.
+      const capture = captureRemoval(s.threads, id);
+      const undoArchive = async () => {
+        if (capture) set((st) => ({ threads: restoreCapture(st.threads, capture) }));
+        try {
+          await api().modifyLabels(a, { threadId: id, addLabelIds: ['INBOX'], removeLabelIds: [] });
+        } catch (err) {
+          console.error('archive undo failed', err);
+          get().showToast('Undo failed');
+        }
+      };
+
       if (keepInPlace) {
         set((st) => ({ threads: st.threads.map((t) => (t.id === id ? { ...t, labelIds: nextLabels! } : t)) }));
         done();
@@ -747,13 +778,12 @@ export const useMailStore = create<MailState>((set, get) => {
           void get().refresh();
           return;
         }
-        if (!opts?.silent) get().showToast('Archived');
+        if (!opts?.silent) get().showToast('Archived', { undo: undoArchive });
         useCoachStore.getState().bumpStat('archive');
         return;
       }
 
       const wasActive = s.activeThreadId === id;
-      const capture = captureRemoval(s.threads, id);
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -782,7 +812,7 @@ export const useMailStore = create<MailState>((set, get) => {
         const nextThread = visibleThreads(after)[after.selectedIndex];
         if (nextThread) void after.openThread(nextThread.id);
       }
-      if (!opts?.silent) get().showToast('Archived');
+      if (!opts?.silent) get().showToast('Archived', { undo: undoArchive });
       useCoachStore.getState().bumpStat('archive');
     },
 
@@ -794,6 +824,15 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(s);
       if (!a) return;
       const capture = captureRemoval(s.threads, id);
+      const undoTrash = async () => {
+        if (capture) set((st) => ({ threads: restoreCapture(st.threads, capture) }));
+        try {
+          await api().modifyLabels(a, { threadId: id, addLabelIds: ['INBOX'], removeLabelIds: ['TRASH'] });
+        } catch (err) {
+          console.error('trash undo failed', err);
+          get().showToast('Undo failed');
+        }
+      };
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -813,7 +852,7 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      if (!opts?.silent) get().showToast('Moved to trash');
+      if (!opts?.silent) get().showToast('Moved to trash', { undo: undoTrash });
       useCoachStore.getState().bumpStat('trash');
     },
 
@@ -958,6 +997,15 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(s);
       if (!a) return;
       set({ labelPickerOpen: false });
+      const undoApplyLabel = async () => {
+        set((st) => ({ threads: removeLabelId(st.threads, id, labelId) }));
+        try {
+          await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: [labelId] });
+        } catch (err) {
+          console.error('apply-label undo failed', err);
+          get().showToast('Undo failed');
+        }
+      };
       set((st) => {
         const threads = st.threads.map((t) =>
           t.id === id && !t.labelIds.includes(labelId)
@@ -978,7 +1026,7 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      if (!opts?.silent) get().showToast('Label applied');
+      if (!opts?.silent) get().showToast('Label applied', { undo: undoApplyLabel });
     },
 
     async snoozeThread(until, threadId, opts) {
@@ -989,6 +1037,17 @@ export const useMailStore = create<MailState>((set, get) => {
       const a = aid(s);
       if (!a) return;
       const capture = captureRemoval(s.threads, id);
+      // undo-toast D5: cancelSnooze cancels the pending wake AND restores original labels
+      // server-side in one atomic main-side call — no separate modifyLabels needed here.
+      const undoSnooze = async () => {
+        if (capture) set((st) => ({ threads: restoreCapture(st.threads, capture) }));
+        try {
+          await api().cancelSnooze(a, id);
+        } catch (err) {
+          console.error('snooze undo failed', err);
+          get().showToast('Undo failed');
+        }
+      };
       set((st) => {
         const threads = st.threads.filter((t) => t.id !== id);
         const next = { ...st, threads };
@@ -1009,8 +1068,43 @@ export const useMailStore = create<MailState>((set, get) => {
         void get().refresh();
         return;
       }
-      if (!opts?.silent) get().showToast(`Snoozed until ${until.toLocaleString()}`);
+      if (!opts?.silent) get().showToast(`Snoozed until ${until.toLocaleString()}`, { undo: undoSnooze });
       useCoachStore.getState().bumpStat('snooze');
+    },
+
+    async createLabel(name) {
+      const a = aid(get());
+      if (!a) return;
+      try {
+        const label = await api().createLabel(a, name);
+        set((st) => ({ labels: [...st.labels, label] }));
+      } catch (err) {
+        console.error('createLabel failed', err);
+        get().showToast('라벨 생성 실패');
+      }
+    },
+
+    async deleteLabel(labelId) {
+      const a = aid(get());
+      if (!a) return;
+      const wasActiveLabel = get().activeLabelId === labelId;
+      set((st) => ({
+        labels: st.labels.filter((l) => l.id !== labelId),
+        threads: st.threads.map((t) =>
+          t.labelIds.includes(labelId) ? { ...t, labelIds: t.labelIds.filter((l) => l !== labelId) } : t
+        ),
+        ...(wasActiveLabel ? { activeLabelId: 'INBOX' } : {}), // D — 보고 있던 라벨 삭제 시 Inbox 복귀
+      }));
+      if (wasActiveLabel) void get().loadThreads();
+      try {
+        await api().deleteLabel(a, labelId);
+      } catch (err) {
+        console.error('deleteLabel failed', err);
+        get().showToast('라벨 삭제 실패');
+        // 복잡한 낙관 복원 대신 서버 상태로 재동기화 — 이 파일의 다른 되돌리기 까다로운
+        // 실패 경로(예: cancelFollowup 계열)와 동일한 패턴.
+        void get().refresh();
+      }
     },
 
     openCompose(init) {
@@ -1221,11 +1315,16 @@ export const useMailStore = create<MailState>((set, get) => {
       }
     },
 
-    showToast(msg) {
-      set({ toast: msg });
-      setTimeout(() => {
-        if (get().toast === msg) set({ toast: null });
-      }, 2500);
+    showToast(msg, opts) {
+      const toast = { msg, undo: opts?.undo };
+      set({ toast });
+      // undo-toast D4: undo가 붙은 토스트만 5초, 나머지는 기존 2500ms 유지.
+      setTimeout(
+        () => {
+          if (get().toast === toast) set({ toast: null });
+        },
+        opts?.undo ? 5000 : 2500
+      );
     },
 
     async fetchAttachmentImage(messageId, attachmentId, mimeType) {
@@ -1376,20 +1475,62 @@ export const useMailStore = create<MailState>((set, get) => {
     async archiveSelected() {
       const ids = Array.from(get().bulkSelectedIds);
       if (ids.length === 0) return;
+      // undo-toast D6: capture every row's pre-archive state up front (before the loop mutates
+      // them) — one combined undo restores all of them, mirroring archiveThread's single-item undo.
+      const captures = ids
+        .map((id) => captureRemoval(get().threads, id))
+        .filter((c): c is RemovalCapture => c !== null);
       for (const id of ids) {
         await get().archiveThread(id, { silent: true });
       }
-      get().showToast(`${ids.length}개 아카이브됨`);
+      const undoAll = async () => {
+        set((st) => {
+          let threads = st.threads;
+          for (const c of captures) threads = restoreCapture(threads, c);
+          return { threads };
+        });
+        const a = aid(get());
+        if (!a) return;
+        for (const c of captures) {
+          try {
+            await api().modifyLabels(a, { threadId: c.thread.id, addLabelIds: ['INBOX'], removeLabelIds: [] });
+          } catch (err) {
+            console.error('bulk archive undo failed', err);
+            get().showToast('Undo failed');
+          }
+        }
+      };
+      get().showToast(`${ids.length}개 아카이브됨`, { undo: undoAll });
       get().clearBulkSelection();
     },
 
     async trashSelected() {
       const ids = Array.from(get().bulkSelectedIds);
       if (ids.length === 0) return;
+      const captures = ids
+        .map((id) => captureRemoval(get().threads, id))
+        .filter((c): c is RemovalCapture => c !== null);
       for (const id of ids) {
         await get().trashThread(id, { silent: true });
       }
-      get().showToast(`${ids.length}개 트래시로 이동`);
+      const undoAll = async () => {
+        set((st) => {
+          let threads = st.threads;
+          for (const c of captures) threads = restoreCapture(threads, c);
+          return { threads };
+        });
+        const a = aid(get());
+        if (!a) return;
+        for (const c of captures) {
+          try {
+            await api().modifyLabels(a, { threadId: c.thread.id, addLabelIds: ['INBOX'], removeLabelIds: ['TRASH'] });
+          } catch (err) {
+            console.error('bulk trash undo failed', err);
+            get().showToast('Undo failed');
+          }
+        }
+      };
+      get().showToast(`${ids.length}개 트래시로 이동`, { undo: undoAll });
       get().clearBulkSelection();
     },
 
@@ -1409,17 +1550,54 @@ export const useMailStore = create<MailState>((set, get) => {
       for (const id of ids) {
         await get().applyLabel(labelId, id, { silent: true });
       }
-      get().showToast(`${ids.length}개 라벨 적용됨`);
+      const undoAll = async () => {
+        set((st) => {
+          let threads = st.threads;
+          for (const id of ids) threads = removeLabelId(threads, id, labelId);
+          return { threads };
+        });
+        const a = aid(get());
+        if (!a) return;
+        for (const id of ids) {
+          try {
+            await api().modifyLabels(a, { threadId: id, addLabelIds: [], removeLabelIds: [labelId] });
+          } catch (err) {
+            console.error('bulk apply-label undo failed', err);
+            get().showToast('Undo failed');
+          }
+        }
+      };
+      get().showToast(`${ids.length}개 라벨 적용됨`, { undo: undoAll });
       get().clearBulkSelection();
     },
 
     async snoozeSelected(until) {
       const ids = Array.from(get().bulkSelectedIds);
       if (ids.length === 0) return;
+      const captures = ids
+        .map((id) => captureRemoval(get().threads, id))
+        .filter((c): c is RemovalCapture => c !== null);
       for (const id of ids) {
         await get().snoozeThread(until, id, { silent: true });
       }
-      get().showToast(`${ids.length}개 스누즈됨`);
+      const undoAll = async () => {
+        set((st) => {
+          let threads = st.threads;
+          for (const c of captures) threads = restoreCapture(threads, c);
+          return { threads };
+        });
+        const a = aid(get());
+        if (!a) return;
+        for (const c of captures) {
+          try {
+            await api().cancelSnooze(a, c.thread.id);
+          } catch (err) {
+            console.error('bulk snooze undo failed', err);
+            get().showToast('Undo failed');
+          }
+        }
+      };
+      get().showToast(`${ids.length}개 스누즈됨`, { undo: undoAll });
       get().clearBulkSelection();
     },
 
