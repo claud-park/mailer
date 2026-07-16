@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMailStore, activeAccount, quoteHtml, CALENDAR_REAUTH_MSG } from '../store/mail';
 import type { AttachmentInfo, MessageDetail, InviteInfo, RsvpResponse } from '../../shared/types';
 import { labelChipFallback } from '../lib/theme';
+import { textToFragment } from '../lib/snippets';
+import { SnippetPicker } from './SnippetPicker';
 
 const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
 
@@ -246,9 +248,12 @@ function InlineReply() {
   const activeThread = useMailStore((s) => s.activeThread);
   const accountEmail = useMailStore((s) => activeAccount(s)?.email);
   const send = useMailStore((s) => s.send);
+  const snippets = useMailStore((s) => s.snippets);
   const [body, setBody] = useState('');
   const editorRef = useRef<HTMLDivElement>(null);
   const [sending, setSending] = useState(false);
+  const [snippetOpen, setSnippetOpen] = useState(false);
+  const savedRangeRef = useRef<Range | null>(null);
 
   if (!activeThread || activeThread.messages.length === 0) return null;
   const last = activeThread.messages[activeThread.messages.length - 1];
@@ -275,6 +280,44 @@ function InlineReply() {
     }
   };
 
+  // Compose와 동일 패턴 포팅: 저장된 캐럿 복원 → execCommand 우선(1-스텝 undo) → 실패 시 Range 폴백
+  const insertSnippet = (snippetBody: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel) return;
+    let range = savedRangeRef.current;
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, snippetBody);
+    } catch {
+      inserted = false;
+    }
+    if (!inserted) {
+      range.deleteContents();
+      const frag = textToFragment(snippetBody);
+      const last2 = frag.lastChild;
+      range.insertNode(frag);
+      if (last2) {
+        range.setStartAfter(last2);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+    savedRangeRef.current = null;
+    setSnippetOpen(false);
+  };
+
   return (
     <div className="border-t border-bg-border px-6 py-3">
       <div
@@ -283,6 +326,16 @@ function InlineReply() {
         data-placeholder={`Reply to ${last.from.name || replyTo}…`}
         onInput={(e) => setBody((e.target as HTMLDivElement).innerHTML)}
         onKeyDown={(e) => {
+          if (e.metaKey && e.key === ';') {
+            e.preventDefault();
+            const sel = window.getSelection();
+            savedRangeRef.current =
+              sel && sel.rangeCount && editorRef.current?.contains(sel.anchorNode)
+                ? sel.getRangeAt(0).cloneRange()
+                : null;
+            setSnippetOpen(true);
+            return;
+          }
           if (e.metaKey && e.key === 'Enter') {
             e.preventDefault();
             void doSend(e.shiftKey);
@@ -300,6 +353,16 @@ function InlineReply() {
         </button>
         <span className="text-[11px] text-text-muted">⌘⇧↩ send & archive</span>
       </div>
+      {snippetOpen && (
+        <SnippetPicker
+          snippets={snippets}
+          onInsert={insertSnippet}
+          onClose={() => {
+            savedRangeRef.current = null;
+            setSnippetOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
