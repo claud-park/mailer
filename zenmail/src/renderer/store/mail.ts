@@ -553,11 +553,12 @@ export const useMailStore = create<MailState>((set, get) => {
      * F6 CP5 (D1): merges a mutation-origin diff push straight into store.threads — never refetches.
      * removals drop the ids. Each upsert is resolved against the *current view label* (main doesn't
      * know the view) via the shared inLabelView predicate: present + still in view → replace in place;
-     * present + view membership lost → drop (archive lands here, unless the thread is starred — see
-     * archiveThread's D5 branch); absent + in view → insert at date-sorted position. For the INBOX view,
-     * "in view" is the shared predicate INBOX∪STARRED−TRASH/SPAM−snoozed (DECISIONS D1/D5), not a plain
-     * label include — a starred-but-archived upsert stays. Search results are a static snapshot, so
-     * diffs are ignored while a search is active. selectedIndex is re-clamped after.
+     * present + view membership lost → drop (archive lands here, unless the view is Starred and the
+     * thread is still starred — see archiveThread's D5 branch); absent + in view → insert at
+     * date-sorted position. INBOX and STARRED are each their own pure single-label view since
+     * starred-view D3 (no more union) — inLabelView dispatches to whichever predicate matches
+     * viewLabel. Search results are a static snapshot, so diffs are ignored while a search is
+     * active. selectedIndex is re-clamped after.
      */
     applyThreadsDiff(upserts, removals) {
       set((st) => {

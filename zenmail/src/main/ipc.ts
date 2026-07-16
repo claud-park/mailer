@@ -400,8 +400,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
             });
             ctx.cache.upsertThreads(freshRowsToCache);
             for (const id of removals) {
-              // 행 삭제가 아니라 뷰 라벨 스트립(INBOX 뷰는 INBOX+STARRED 동시) — FTS·타 라벨·undo용
-              // 행 보존, origin:'server'로 이 스트립이 다음 가드를 오염시키지 않게 한다(D4/D3).
+              // 행 삭제가 아니라 뷰 라벨 스트립(INBOX/STARRED 뷰는 서로의 정의 라벨까지 함께
+              // 벗김 — starred-view 최종 리뷰, view.ts의 viewMembershipLabels 주석 참조) —
+              // FTS·타 라벨·undo용 행 보존, origin:'server'로 이 스트립이 다음 가드를 오염시키지
+              // 않게 한다(D4/D3).
               ctx.cache.applyLabelDelta(id, [], viewMembershipLabels(viewLabel), { origin: 'server' });
             }
             if (upserts.length || removals.length) {

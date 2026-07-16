@@ -41,8 +41,21 @@ export function inLabelView(
 
 /**
  * SWR revalidate에서 "뷰를 떠났다"고 판정된 캐시 행에서 벗겨낼 라벨들.
- * INBOX∪STARRED 유니온 제거로 모든 뷰가 단일 라벨이 됐다 — 뷰 라벨 자신만 벗긴다.
+ *
+ * starred-view 최종 리뷰(deep-reasoner) 발견: revalidate의 removal은 "왜 뷰를 떠났는지"를
+ * 모른다 — 정의 라벨을 잃어서(예: unstar)인지, 배제 라벨을 얻어서(예: 외부에서 TRASH로 이동,
+ * STARRED는 유지)인지 구분할 방법이 없다(fresh는 그 뷰에 없다는 사실만 알려줄 뿐, 스레드의
+ * 실제 서버 라벨 전체를 알려주지 않는다). `applyLabelDelta`는 명시된 라벨만 벗기는 델타 병합이라,
+ * INBOX/STARRED 뷰 중 하나에서만 벗기면 반대쪽 뷰의 정의 라벨이 캐시에 stale하게 남는다 — 예:
+ * Starred 뷰를 보던 중 별표+인박스 스레드가 외부에서 휴지통으로 이동하면(서버=[TRASH,STARRED]),
+ * STARRED만 벗기면 캐시가 [INBOX]로 남아 "0이어야 할" Inbox에 휴지통 메일이 새어 들어간다.
+ * INBOX와 STARRED는 배제 3종(TRASH/SPAM/snoozed)이 동일해 서로 원인을 대신할 수 있으므로,
+ * 이 두 뷰는 어느 쪽에서 벗겨지든 **둘 다** 벗긴다(inbox-zero-starred D4의 원래 근거를 유지 —
+ * "무엇이 진짜 이유인지 모르니 둘 다 벗긴다"). 안전한 이유: 잘못 벗겨낸 라벨이 실제로는 아직
+ * 유효하다면, 그 라벨이 정의하는 뷰 자신의 다음 revalidate가 fresh 응답의 전체 라벨로 그 행을
+ * upsert해 스스로 복구한다(delta 병합이 아니라 서버 원본 그대로 덮어씀) — 그 외 라벨 뷰는
+ * INBOX/STARRED와 배제 규칙을 공유하지 않으므로 자기 라벨만 벗긴다.
  */
 export function viewMembershipLabels(viewLabel: string): string[] {
-  return [viewLabel];
+  return viewLabel === 'INBOX' || viewLabel === 'STARRED' ? ['INBOX', 'STARRED'] : [viewLabel];
 }

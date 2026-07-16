@@ -1,6 +1,6 @@
 # starred-view — DECISIONS
 
-> 2026-07-16. 브레인스토밍(대화형, 4문항) 산출물. D1~D4는 사용자 확정, D5~D8은 구현 세부를 다루는 추천안.
+> 2026-07-16. 브레인스토밍(대화형, 4문항) 산출물. D1~D4는 사용자 확정, D5~D9는 구현 세부를 다루는 추천안(D9는 최종 전체 브랜치 리뷰에서 발견·수정).
 
 ## D1. Starred 배치 = 사이드바 시스템 항목 — 사용자 확정
 - **선택지**: (a) 사이드바 고정 항목(Inbox/Sent/Drafts와 동격, Split Inbox on/off 무관하게 항상 접근), (b) 기존 split-inbox-plus 탭바에 고정 탭으로 추가(단, 사용자가 ⌘⇧I로 Split Inbox 자체를 끄면 Starred도 같이 사라짐), (c) 둘 다(중복 노출).
@@ -43,3 +43,10 @@
 - **컨텍스트**: `inbox-zero-starred`가 `__debugExternalArchive`(provider만 라벨 제거, 캐시·modifyLabels 우회)로 "Gmail 웹에서 아카이브" 외부 변경을 재현해 SWR 수렴을 검증했다. Starred 뷰도 동일한 클래스의 시나리오("Gmail 웹에서 별표 해제")를 검증해야 하는데 대칭 훅이 없다.
 - **선택**: `MockGmailProvider.__debugExternalUnstar(threadId)` 신설(STARRED 라벨만 벗기는 것 외 `externalArchive`와 동일 구조), mock 전용(Real provider엔 불필요 — 실계정에서는 실제로 Gmail 웹을 조작해 검증하는 방식, 기존 관례와 동일).
 - **이유**: 대칭적인 디버그 훅 없이는 TC-STAR-C1(외부 unstar 수렴)을 자동화할 방법이 없고, 이는 정확히 inbox-zero-starred가 고쳤던 버그 클래스(SWR revalidate가 removal을 놓치는 것)의 Starred 버전이 나중에 조용히 재발해도 잡을 방법이 없다는 뜻이다.
+
+## D9. `viewMembershipLabels`는 INBOX/STARRED 어느 쪽에서 벗겨지든 둘 다 벗긴다 — 최종 리뷰 발견·수정
+- **컨텍스트**: CP1 구현 당시 `viewMembershipLabels`를 "뷰가 이제 단일 라벨이니 자기 라벨만 벗기면 된다"로 단순화했다(`[viewLabel]`). 최종 전체 브랜치 리뷰(deep-reasoner/Opus)가 이것이 실제 버그임을 발견: revalidate의 removal 판정은 "그 뷰의 fresh 목록에 없다"는 사실만 알 뿐 **왜** 없는지(정의 라벨을 잃었는지, 배제 라벨 TRASH/SPAM을 얻었는지)는 모른다. `applyLabelDelta`는 지정된 라벨만 벗기는 델타 병합이라, STARRED 뷰에서만 벗기면 그 스레드가 사실은 외부에서 TRASH로 이동해 STARRED는 그대로인 경우에도 캐시엔 여전히 stale한 INBOX가 남는다 — 이후 사용자가 Inbox로 전환하면 "0이어야 할" Inbox에 휴지통 메일이 순간적으로 새어 든다(핵심 성공 기준 R1 위반 시나리오).
+- **선택지**: (a) INBOX/STARRED 뷰 모두 벗길 때 `['INBOX','STARRED']` 둘 다 벗긴다(inbox-zero-starred D4가 원래 union 뷰에 적용했던 논리를 두 개별 뷰 모두로 확장), (b) revalidate가 반대쪽 뷰의 fresh 집합도 같이 조회해 정확한 원인을 판별한다(왕복 요청 2배, 상당한 리팩터), (c) 그대로 두고 자기치유 성격만 문서화(수정 안 함).
+- **선택**: (a).
+- **이유**: (b)는 매 revalidate마다 추가 API 왕복이 필요해 비용 대비 효과가 낮고 이번 세션 범위를 크게 벗어난다. (c)는 이 기능 자체의 존재 이유(R1 "Inbox는 항상 0으로 수렴")를 정면으로 위반하는 케이스라 그냥 넘기기엔 무겁다. (a)는 한 줄 변경이며 안전성이 증명 가능하다: 잘못 벗겨낸 라벨이 실제로는 아직 유효하면, 그 라벨이 정의하는 뷰 자신의 다음 revalidate가 fresh 응답의 전체 라벨을 그대로 upsert해(델타 병합이 아니라 서버 원본 덮어쓰기) 스스로 복구한다 — 유일한 부작용은 "정말로 unstar만 됐을 뿐인 INBOX 스레드가 STARRED 뷰 revalidate에 의해 잠깐 Inbox에서도 사라졌다가 Inbox 자신의 다음 revalidate로 복구되는" 훨씬 온건한 반대 방향 깜빡임인데, 이는 "Inbox에 없어야 할 게 보이는" 원래 결함보다 훨씬 안전한 실패 방향이다(과소 표시가 과다 표시보다 이 기능의 취지에 부합). INBOX/STARRED가 아닌 다른 라벨 뷰(Sent/Drafts/커스텀 라벨)는 이 배제 규칙 공유가 없으므로 자기 라벨만 벗기는 기존 동작 그대로 유지.
+- **검증**: `view.test.ts`에 `viewMembershipLabels('INBOX')`/`('STARRED')` 둘 다 `['INBOX','STARRED']`를 반환하는지 확인하는 회귀 테스트 추가(vitest 26 PASS 유지). E2E 레벨(외부에서 별표 유지한 채 trash하는 특정 레이스)까지의 전용 자동화는 이번 범위 밖으로 남김 — 자기치유적이고 재현에 새 디버그 훅(`__debugExternalTrash`)이 필요해 비용 대비 낮은 우선순위로 판단(후속 과제 후보).

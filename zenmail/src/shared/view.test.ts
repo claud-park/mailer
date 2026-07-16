@@ -70,12 +70,15 @@ describe('inLabelView', () => {
 });
 
 describe('viewMembershipLabels', () => {
-  it('INBOX view strips only INBOX (union with STARRED removed — starred-view D3)', () => {
-    expect(viewMembershipLabels('INBOX')).toEqual(['INBOX']);
+  // INBOX와 STARRED는 배제 라벨(TRASH/SPAM/snoozed)이 동일해 서로의 이탈 원인을 대신할 수
+  // 있다 — revalidate removal이 "정의 라벨 상실"과 "배제 라벨 획득"을 구분 못 하므로 어느
+  // 쪽에서 벗겨지든 둘 다 벗긴다(whole-branch review 발견, cross-view stale-label 누수 방지).
+  it('INBOX view strips both INBOX and STARRED', () => {
+    expect(viewMembershipLabels('INBOX')).toEqual(['INBOX', 'STARRED']);
   });
 
-  it('STARRED view strips only STARRED', () => {
-    expect(viewMembershipLabels('STARRED')).toEqual(['STARRED']);
+  it('STARRED view strips both INBOX and STARRED', () => {
+    expect(viewMembershipLabels('STARRED')).toEqual(['INBOX', 'STARRED']);
   });
 
   it('a non-INBOX/non-STARRED label view strips only that label', () => {
