@@ -20,6 +20,6 @@
 - [x] E2E 전체 스위트 무회귀 — **250 PASS·0 FAIL·7 SKIP** 클린 확인(TC-LBL-A5는 의도된 SKIP)
 
 ## Goal 8: 마무리
-- [ ] (3건 통합) DEV_WORKFLOW 스냅샷·루트 TODO 갱신
-- [ ] (3건 통합) 커밋·push
-- [ ] (3건 통합) Obsidian ZenMail.md 체크포인트
+- [x] (3건 통합) DEV_WORKFLOW 스냅샷·루트 TODO 갱신
+- [x] (3건 통합) 커밋·push
+- [x] (3건 통합) Obsidian ZenMail.md 체크포인트
