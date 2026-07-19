@@ -46,12 +46,13 @@
 
 ```
 동기화 tick (snooze.ts, 60s 데몬)
-  └─ 계정별 unread count가 순증해 상세조회가 실제로 일어나는 지점(new-mail-alerts D8과 정확히
-     동일한 훅 — "카운트가 늘 때만 상세 fetch"이므로 그 결과로 이미 손에 들어온 bodyHtml을 그대로
-     재사용, 별도 fetch 없음)
-       └─ bodyHtml을 정규식으로 스캔해 remote <img src="https?:..."> URL 추출(main 프로세스에는
-          DOMParser가 없음 — renderer의 DOM 기반 추출과는 별도 구현, 정규식이 과매칭해도 무해:
-          fetch 실패는 조용히 스킵되므로 오탐의 비용이 낮음)
+  └─ 계정별 unread count가 순증해 `diffNewUnread`가 신규 스레드를 골라내는 지점(new-mail-alerts
+     D8 훅) — ⚠️ 정정: 그 지점의 기존 `listThreads` 호출은 알림용 `ThreadSummary[]`만 반환하고
+     bodyHtml이 없다. 신규 스레드마다 `provider.getThread(threadId)`를 **추가로** 호출해
+     bodyHtml을 확보한다(D6, 신규 API 콜이지만 "카운트가 오를 때만"이라는 기존과 동일한 상한선 안)
+       └─ 각 메시지 bodyHtml을 정규식으로 스캔해 remote <img src="https?:..."> URL 추출(main
+          프로세스에는 DOMParser가 없음 — renderer의 DOM 기반 추출과는 별도 구현, 정규식이
+          과매칭해도 무해: fetch 실패는 조용히 스킵되므로 오탐의 비용이 낮음)
             └─ imageCache.prefetch(accountId, url)  [신규: src/main/image-cache.ts]
                  ├─ SSRF 가드 통과 확인 (아래 "보안" 절)
                  ├─ fetch(url, { signal: timeout(8s) })

@@ -34,8 +34,8 @@
 - **FR6**: 캐시 파일은 `userData/image-cache/<accountSlug>/<sha256(url)>`에 저장하고, sqlite `image_cache` 테이블(`AccountCache`, 계정별 DB)에 `{url_hash, mime_type, byte_size, fetched_at}` 메타데이터를 기록한다.
 
 ### 동기화 연동 (`src/main/snooze.ts`)
-- **FR7**: 60초 데몬 틱에서 계정별 unread count가 순증해 상세조회가 실제로 일어나는 지점(new-mail-alerts D8 훅)에 `prefetch` 호출을 추가한다 — 그 상세조회로 이미 확보된 `bodyHtml`을 재사용하며 별도 fetch를 만들지 않는다.
-- **FR8**: `bodyHtml`에서 원격 `<img src="https?:...">` URL은 정규식으로 추출한다(main 프로세스에는 DOMParser가 없음; renderer의 기존 DOM 기반 추출과는 별도 구현이며, 정규식 과매칭은 무해 — 실패는 조용히 스킵되므로).
+- **FR7**: 60초 데몬 틱에서 계정별 unread count가 순증해 `diffNewUnread`가 신규 스레드를 골라내는 지점(new-mail-alerts D8 훅)에, 그 신규 스레드마다 `provider.getThread(threadId)`를 **추가로** 호출해 `bodyHtml`을 확보한다(D6 — 기존 `listThreads` 알림용 fetch는 `ThreadSummary`만 반환해 `bodyHtml`이 없으므로 재사용 불가, 새 API 호출로 정정).
+- **FR8**: 각 메시지의 `bodyHtml`에서 원격 `<img src="https?:...">` URL을 정규식으로 추출해 `prefetch(accountId, urls)`를 호출한다(main 프로세스에는 DOMParser가 없음; renderer의 기존 DOM 기반 추출과는 별도 구현이며, 정규식 과매칭은 무해 — 실패는 조용히 스킵되므로). `getThread` 자체의 실패는 배지 갱신을 막지 않도록 try/catch로 격리한다.
 - **FR9**: 오프라인 상태인 계정의 틱에서는 프리페치를 건너뛴다(기존 온라인/오프라인 감지 D9 재사용).
 - **FR10**: 프리페치는 계정별 try/catch로 격리한다 — 한 계정의 실패가 다른 계정 처리나 데몬 틱 자체를 막지 않는다(기존 배지 로직과 동일 원칙).
 
