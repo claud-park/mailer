@@ -12,6 +12,7 @@ import { chromium } from 'playwright-core';
 import { spawn, execSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +23,23 @@ const PROJECT_DIR = path.resolve(__dirname, '..');
 // wrapper does not reliably kill them) can never be mistaken for this run's fresh instance.
 const PORT = Number(process.env.ZENMAIL_E2E_PORT || 9200 + Math.floor(Math.random() * 300));
 const USERDATA = mkdtempSync(path.join(tmpdir(), 'zenmail-e2e-'));
+
+// remote-image (TC-IMG): 로컬 1x1 PNG 서버. 앱 오리진과 다른 포트라 CSP 'self'에 안 걸리는
+// "원격" 이미지 역할 — ZENMAIL_DEMO_REMOTE_IMG로 데모 시드(demo_img_1)에 주입되고, imgHits로
+// 게이트 동의 전 네트워크 요청이 아예 없었음을 검증한다(프라이버시 불변식).
+const IMG_PORT = 9600 + Math.floor(Math.random() * 100);
+const IMG_URL = `http://127.0.0.1:${IMG_PORT}/hero.png`;
+const PNG_1PX = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+);
+let imgHits = 0;
+const imgServer = http.createServer((_req, res) => {
+  imgHits++;
+  res.writeHead(200, { 'Content-Type': 'image/png' });
+  res.end(PNG_1PX);
+});
+imgServer.listen(IMG_PORT, '127.0.0.1');
 
 const results = [];
 function record(id, status, note = '') {
@@ -74,7 +92,7 @@ function launchApp(port, userDataDir) {
     ['start', '--', `--user-data-dir=${userDataDir}`],
     {
       cwd: PROJECT_DIR,
-      env: { ...process.env, ZENMAIL_E2E_PORT: String(port) },
+      env: { ...process.env, ZENMAIL_E2E_PORT: String(port), ZENMAIL_DEMO_REMOTE_IMG: IMG_URL },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );
@@ -565,6 +583,71 @@ async function tryAttScenario(page, name, fn) {
   }
 }
 
+// --- remote-image: TC-IMG-A1~A3 — 본문 원격 이미지 게이트·로드 ------------------------------
+// 회귀 배경: srcdoc iframe은 부모(index.html) CSP를 상속하므로 부모 img-src에 https:/http:가
+// 빠지면 iframe 자체 CSP가 허용해도 원격 이미지가 절대 로드되지 않는다(게이트를 눌러도 무반응).
+// A2가 프라이버시 절반(동의 전 요청 0건), A3가 로드 절반(동의 후 실제 로드)을 고정한다.
+async function scenario_img(page) {
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+  await clickRowContaining(page, 'Remote image press kit');
+  await waitFor(async () => (await bodyText(page)).includes('remote hero image'), {
+    desc: 'remote-image thread open',
+  });
+
+  // A1: 원격 이미지 메일에 게이트 버튼 노출
+  await waitFor(
+    () =>
+      page.evaluate(() =>
+        Array.from(document.querySelectorAll('button')).some(
+          (b) => b.textContent.trim() === 'Load remote images'
+        )
+      ),
+    { desc: '"Load remote images" gate visible' }
+  );
+  record('TC-IMG-A1', 'PASS', '"Load remote images" gate shown for a remote-image mail');
+
+  // A2: 동의 전 — 이미지 미로드 + 이미지 서버로 나간 요청 0건
+  const before = await page.evaluate(() => {
+    const f = document.querySelector('iframe[title^="message-"]');
+    const img = f?.contentDocument?.querySelector('img');
+    return img ? { naturalWidth: img.naturalWidth } : null;
+  });
+  if (before && before.naturalWidth === 0 && imgHits === 0) {
+    record('TC-IMG-A2', 'PASS', 'remote img blocked before consent (0 network hits)');
+  } else {
+    record('TC-IMG-A2', 'FAIL', `naturalWidth=${before?.naturalWidth} imgHits=${imgHits}`);
+  }
+
+  // A3: 게이트 클릭 → 실제 로드
+  await page.evaluate(() => {
+    Array.from(document.querySelectorAll('button'))
+      .find((b) => b.textContent.trim() === 'Load remote images')
+      ?.click();
+  });
+  await waitFor(
+    () =>
+      page.evaluate(() => {
+        const f = document.querySelector('iframe[title^="message-"]');
+        const img = f?.contentDocument?.querySelector('img');
+        return !!img && img.complete && img.naturalWidth > 0;
+      }),
+    { timeout: 8000, desc: 'remote img loaded after consent' }
+  );
+  record('TC-IMG-A3', 'PASS', `remote img loads after consent (server hits=${imgHits})`);
+}
+
+async function tryImgScenario(page, name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[harness] TC-IMG ${name} error:`, err);
+    record(`TC-IMG-${name}`, 'FAIL', String(err).slice(0, 200));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // multi-account: TC-MA-A1..D1 (docs/features/multi-account/TC.md)
 // ---------------------------------------------------------------------------
@@ -801,6 +884,9 @@ async function run() {
     // --- attachments: TC-ATT-A~E (docs/features/attachments/TC.md) — CAL 뒤, mutate+restart 앞.
     // 비파괴적(스레드 열람 + 임시 dir 다운로드)이라 세션을 그대로 두고 이어진다.
     await tryAttScenario(page, 'ATT', () => scenario_att(page));
+
+    // --- remote-image: TC-IMG-A1~A3 — ATT 직후(같은 비파괴 열람 계열). 세션 그대로 이어진다.
+    await tryImgScenario(page, 'IMG', () => scenario_img(page));
 
     // --- F2 follow-up-reminders --------------------------------------------
     // E2 runs first: it signs out/back in, which re-constructs a fresh MockGmailProvider
@@ -1162,8 +1248,37 @@ async function run() {
   for (const r of results) {
     console.log(`${r.id.padEnd(10)} ${r.status.padEnd(5)} ${r.note}`);
   }
-  const failed = results.filter((r) => r.status === 'FAIL').length;
-  process.exit(failed > 0 ? 1 : 0);
+
+  // === VERDICT — 무회귀 판정을 한 블록으로 (calendar-integration D10 기준의 기계화) ===
+  // 세션 토큰 규약: 하네스는 항상 로그 파일로 리다이렉트해 실행하고, 판정은 이 블록(tail -8)만
+  // 읽는다. FAIL이 있을 때만 해당 TC id로 로그를 grep해 상세를 본다 — 전체 로그를 컨텍스트로
+  // 읽지 말 것. 캐논 SKIP 집합이 바뀌면(정당한 SKIP 신설/해소) 여기와 DEV_WORKFLOW 스냅샷을
+  // 함께 갱신한다.
+  const CANON_SKIPS = new Set([
+    'TC-A4', 'TC-D5', 'TC-D8', 'TC-SY-C3', 'TC-SA-B4', 'TC-SY-B2',
+    // undo-toast · label-crud (2026-07-17): 재현 불가 사유는 각 feature TC.md에 문서화
+    'TC-UNDO-B1', 'TC-LBL-A5',
+  ]);
+  const passCount = results.filter((r) => r.status === 'PASS').length;
+  const fails = results.filter((r) => r.status === 'FAIL');
+  const skips = results.filter((r) => r.status === 'SKIP');
+  const rogueSkips = skips.filter((r) => !CANON_SKIPS.has(r.id));
+  console.log('\n=== VERDICT ===');
+  console.log(`TOTAL ${results.length} | PASS ${passCount} | FAIL ${fails.length} | SKIP ${skips.length}`);
+  if (fails.length > 0) {
+    console.log(`FAILS: ${fails.map((r) => `${r.id}(${String(r.note).slice(0, 80)})`).join(' | ')}`);
+  }
+  console.log(`SKIPS: ${skips.map((r) => r.id).join(', ') || '(none)'}`);
+  console.log(
+    `SKIP-CANON: ${rogueSkips.length === 0 ? 'OK (⊆ canon)' : `VIOLATION: ${rogueSkips.map((r) => r.id).join(', ')}`}`
+  );
+  console.log(
+    fails.length === 0 && rogueSkips.length === 0
+      ? 'NO-REGRESSION: CLEAN'
+      : 'NO-REGRESSION: NOT CLEAN — 위 FAILS/SKIP-CANON 위반 항목만 로그에서 grep해 조사할 것'
+  );
+
+  process.exit(fails.length > 0 ? 1 : 0);
 }
 
 // --- attachments: TC-ATT-A/B/C/D/E (docs/features/attachments/TC.md) -----------------------
@@ -4155,6 +4270,8 @@ const SY_RESERVED = [
   // would hide them from the pristine-provider inbox the TC-IZ session reads (snoozed → excluded).
   'Starred: keep me visible',
   'Starred archived: still here',
+  // remote-image seed (TC-IMG): scenario_img가 게이트 검증에 사용 — 파괴적 시나리오로부터 보호.
+  'Remote image press kit',
 ];
 
 async function syncProviderCalls(page) {
@@ -4495,6 +4612,10 @@ const SA_RESERVED_SUBJECTS = [
   // session needs both present in a pristine inbox.
   'Starred: keep me visible',
   'Starred archived: still here',
+  // remote-image seed (TC-IMG): scenario_img가 이 스레드를 열어 원격 이미지 게이트를 검증한다.
+  // reserve하지 않으면 press@pixelpost.example이 유일한 reserved-free 벌크 후보가 되어, 문서화된
+  // SKIP(TC-UNDO-B1 "후보 부재")이던 벌크-undo 경로가 실행돼 캐논 판정이 깨진다(2026-07-19 실측).
+  'Remote image press kit',
 ];
 
 /**

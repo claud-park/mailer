@@ -765,6 +765,41 @@ function buildDemoData(email: string): { threads: MockThread[]; labels: Label[];
     detail: { id: attId, subject: 'Attachments: brand kit', labelIds: ['INBOX'], messages: [attMessage] },
   });
 
+  // remote-image (TC-IMG): E2E 전용 시드 — remote-image 게이트("Load remote images")와 로드 경로
+  // 검증용. env 미설정(일반 데모)이면 생성하지 않아 깨진 localhost 이미지가 데모 UX에 노출되지 않는다.
+  // 발신자는 어떤 split 규칙에도 안 걸리고(press@는 no-reply|newsletter|digest|updates 패턴 아님),
+  // date는 기존 최고령(140h)보다 오래돼 기존 split 카운트/순서 불변식을 건드리지 않는다(F5 시드 관례).
+  const remoteImgUrl = process.env.ZENMAIL_DEMO_REMOTE_IMG;
+  if (remoteImgUrl) {
+    const riFrom: Contact = { name: 'Pixel Press', email: 'press@pixelpost.example' };
+    const riId = 'demo_img_1';
+    const riMessage = {
+      id: `${riId}_m0`,
+      threadId: riId,
+      from: riFrom,
+      to: [{ name: 'You', email }],
+      cc: [] as Contact[],
+      date: now - 150 * h,
+      snippet: 'Press kit with a remote hero image.',
+      bodyHtml: `<div><p>Press kit with a remote hero image.</p><p><img src="${remoteImgUrl}" alt="hero"></p></div>`,
+      bodyText: 'Press kit with a remote hero image.',
+      labelIds: ['INBOX'],
+    };
+    threads.push({
+      summary: {
+        id: riId,
+        subject: 'Remote image press kit',
+        from: riFrom,
+        snippet: riMessage.snippet,
+        date: riMessage.date,
+        unread: false,
+        labelIds: ['INBOX'],
+        messageCount: 1,
+      },
+      detail: { id: riId, subject: 'Remote image press kit', labelIds: ['INBOX'], messages: [riMessage] },
+    });
+  }
+
   return { threads, labels, senders };
 }
 
