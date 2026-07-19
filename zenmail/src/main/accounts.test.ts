@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { sqliteNativeOptions } from './sqlite-native';
 import {
   __setUserDataDirForTests, accountDbPath, addStoredAccount, emailSlug,
   getGlobalSetting, migrateLegacyLayout, readAccounts, removeStoredAccount,
@@ -57,7 +58,7 @@ describe('global settings (settings.json)', () => {
 describe('migrateLegacyLayout', () => {
   it('converts account.json + zenmail.db(+wal/shm) and copies the theme setting', () => {
     fs.writeFileSync(path.join(dir, 'account.json'), JSON.stringify({ email: 'me@x.io' }));
-    const legacy = new Database(path.join(dir, 'zenmail.db'));
+    const legacy = new Database(path.join(dir, 'zenmail.db'), sqliteNativeOptions());
     legacy.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     legacy.prepare("INSERT INTO settings VALUES ('theme','dark')").run();
     legacy.close();
@@ -83,7 +84,7 @@ describe('migrateLegacyLayout', () => {
   });
   it('rolls back a partial db rename and leaves migration retryable', () => {
     fs.writeFileSync(path.join(dir, 'account.json'), JSON.stringify({ email: 'me@x.io' }));
-    const legacy = new Database(path.join(dir, 'zenmail.db'));
+    const legacy = new Database(path.join(dir, 'zenmail.db'), sqliteNativeOptions());
     legacy.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     legacy.prepare("INSERT INTO settings VALUES ('theme','dark')").run();
     legacy.close();

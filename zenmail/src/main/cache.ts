@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
+import { sqliteNativeOptions } from './sqlite-native';
 import type {
   Contact,
   FollowupInfo,
@@ -69,7 +70,7 @@ export class AccountCache {
   private localDeltaAt = new Map<string, number>();
 
   constructor(dbFile: string) {
-    this.db = new Database(dbFile);
+    this.db = new Database(dbFile, sqliteNativeOptions());
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS threads (

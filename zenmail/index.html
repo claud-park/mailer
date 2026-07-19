@@ -2,9 +2,12 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <!-- img-src의 https:/http:는 메시지 본문용: srcdoc iframe(ThreadView)은 이 부모 CSP를 상속하므로
+         여기서 원격 이미지를 막으면 iframe 자체 CSP(remote-image 게이트)가 허용해도 절대 로드되지 않는다.
+         게이트 미허용 시 차단은 iframe 메타 CSP(img-src data:)가 담당한다. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' data: about:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; frame-src 'self' data: about:"
     />
     <title>ZenMail</title>
   </head>
