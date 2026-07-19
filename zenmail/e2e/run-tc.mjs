@@ -741,6 +741,349 @@ async function runMaSession(page) {
 }
 
 // ---------------------------------------------------------------------------
+// new-mail-alerts helpers
+// ---------------------------------------------------------------------------
+
+async function debugInjectNewMail(page, accountId, opts) {
+  await page.evaluate(({ id, o }) => window.zenmail.__debugInjectNewMail(id, o), { id: accountId, o: opts });
+}
+
+async function debugSetWindowFocused(page, v) {
+  await page.evaluate((val) => window.zenmail.__debugSetWindowFocused(val), v);
+}
+
+async function debugNotificationLog(page) {
+  return page.evaluate(() => window.zenmail.__debugNotificationLog());
+}
+
+async function debugNotifyActivate(page, payload) {
+  await page.evaluate((p) => window.zenmail.__debugNotifyActivate(p), payload);
+}
+
+async function debugDockBadge(page) {
+  return page.evaluate(() => window.zenmail.__debugDockBadge());
+}
+
+/** sum of every account's unreadCount from the auth:list-accounts snapshot (independent read-out
+ *  of the same ctx.unreadCount the dock badge is derived from — a cross-check, not a tautology). */
+async function accountsUnreadSum(page) {
+  const snap = await page.evaluate(() => window.zenmail.listAccounts());
+  return snap.accounts.reduce((n, a) => n + a.unreadCount, 0);
+}
+
+async function activeAccountEmail(page) {
+  const snap = await page.evaluate(() => window.zenmail.listAccounts());
+  return snap.activeEmail;
+}
+
+async function modifyLabels(page, accountId, threadId, addLabelIds, removeLabelIds) {
+  await page.evaluate(
+    ({ id, tid, add, rem }) =>
+      window.zenmail.modifyLabels(id, { threadId: tid, addLabelIds: add, removeLabelIds: rem }),
+    { id: accountId, tid: threadId, add: addLabelIds, rem: removeLabelIds }
+  );
+}
+
+/** Sidebar's SYSTEM_ITEMS nav rows (Inbox/Starred/Sent/Drafts) live in the `<nav>` element — distinct
+ *  from the account-switcher avatars (outside `<nav>`) and the split tab bar (`[role="tab"]`). */
+async function clickSidebarNav(page, label) {
+  const handle = await page.evaluateHandle(
+    (want) =>
+      Array.from(document.querySelectorAll('nav button')).find((b) => {
+        // same unread-badge-in-textContent issue as sidebarNavActive() above
+        const clone = b.cloneNode(true);
+        clone.querySelector('span.rounded-full')?.remove();
+        return clone.textContent.trim() === want;
+      }) ?? null,
+    label
+  );
+  const el = handle.asElement();
+  if (!el) throw new Error(`sidebar nav not found: ${label}`);
+  await el.click();
+}
+
+/** mirrors Sidebar.tsx's SidebarRow active-state class ('bg-bg-border' vs the inactive variant). */
+async function sidebarNavActive(page, label) {
+  return page.evaluate((want) => {
+    // SidebarRow renders an unread-count badge as a child span (e.g. Inbox with 3 unread →
+    // textContent is "Inbox3", not "Inbox") — strip it before matching, same as tabsInfo() above.
+    const btn = Array.from(document.querySelectorAll('nav button')).find((b) => {
+      const clone = b.cloneNode(true);
+      clone.querySelector('span.rounded-full')?.remove();
+      return clone.textContent.trim() === want;
+    });
+    return btn ? btn.className.includes('bg-bg-border') : null;
+  }, label);
+}
+
+// ---------------------------------------------------------------------------
+// new-mail-alerts: TC-ALT-A1..E3 (docs/features/new-mail-alerts/TC.md)
+// ---------------------------------------------------------------------------
+//
+// Native OS Notification banners have no CDP-visible surface, so this session leans on two
+// debug-only instrumentation points added for this feature (ipc.ts/notify.ts, ZENMAIL_E2E_PORT-gated):
+//  - mail:debug-notification-log: the exact title/body of every notification fireNewMailNotification
+//    actually decided to show (past the D5 focus gate) — queried instead of touching a real banner.
+//  - mail:debug-set-window-focused / mail:debug-notify-activate: a deterministic override for the D5
+//    focus gate, and a direct replay of the exact IPC a real banner click would send, since neither
+//    real OS window focus nor a real banner click can be driven reliably from this harness.
+//
+// Runs as a dedicated final session on its own fresh user-data dir (mirrors runMaSession) so both
+// demo accounts boot pristine — TC-ALT-C1/C2 specifically need each account's notify.ts
+// lastKnownUnreadIds baseline to start undefined (cold start), which a shared/reused session
+// (already ticked many times by earlier F1..F6/etc. scenarios) could not guarantee.
+async function runAltSession(page) {
+  const DEMO_EMAIL = 'demo@zenmail.app';
+  const WORK_EMAIL = 'work@zenmail.app';
+
+  await focusBody(page);
+  await page.keyboard.press('Escape');
+
+  // Force "unfocused" for every scenario except D1/D2 (which flip this explicitly) — real OS window
+  // focus can't be driven deterministically from this CDP harness (see notify.ts debugFocusOverride).
+  await debugSetWindowFocused(page, false);
+
+  // --- TC-ALT-A1: badge = sum of both demo accounts' unread, shown immediately at login (no tick) ---
+  try {
+    const badge = await waitFor(async () => {
+      const b = await debugDockBadge(page);
+      return b > 0 ? b : null;
+    }, { timeout: 5000, desc: 'dock badge seeded after demo login' });
+    const sum = await accountsUnreadSum(page);
+    const logLen = (await debugNotificationLog(page)).length;
+    const ok = badge === 10 && sum === 10 && logLen === 0;
+    record('TC-ALT-A1', ok ? 'PASS' : 'FAIL',
+      `dock badge=${badge}, accountsSum=${sum} (demo 8 + work 2 = 10, no tick waited), notifLog=${logLen}`);
+  } catch (err) {
+    record('TC-ALT-A1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-C1: cold-start safety — an increase discovered on an account's first-ever
+  // NEW_MAIL_QUERY fetch seeds notify.ts's lastKnownUnreadIds baseline silently (0 notifications),
+  // while the badge still reflects the true (now-higher) count. The injection lands *before* the
+  // first debug-tick on purpose, so this tick is genuinely demo's first-ever detailed fetch (D9). ---
+  try {
+    const badgeAtLogin = await debugDockBadge(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'cold-guard@example.com', subject: 'Cold-start guard mail' });
+    const badgeAfterInject = await debugDockBadge(page); // injection alone must not move the badge yet
+    const logBefore = (await debugNotificationLog(page)).length;
+    await debugTick(page); // demo's first-ever tick with a genuine increase — baseline seed only
+    const badgeAfterTick = await debugDockBadge(page);
+    const logAfter = (await debugNotificationLog(page)).length;
+    const ok = badgeAtLogin === 10 && badgeAfterInject === 10 && badgeAfterTick === 11 && logAfter === logBefore;
+    record('TC-ALT-C1', ok ? 'PASS' : 'FAIL',
+      `badge 10(login)→${badgeAfterInject}(post-inject,pre-tick)→${badgeAfterTick}(post first tick); ` +
+      `notifLog ${logBefore}→${logAfter} (cold-start guard: 0 new despite a genuine increase)`);
+  } catch (err) {
+    record('TC-ALT-C1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-C2: baseline now seeded (by C1's tick) — a further increase is detected normally ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = await debugNotificationLog(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'baseline-check@example.com', subject: 'Baseline check mail' });
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = await debugNotificationLog(page);
+    const gained = logAfter.length - logBefore.length;
+    const last = logAfter[logAfter.length - 1];
+    const ok =
+      badgeAfter === badgeBefore + 1 &&
+      gained === 1 &&
+      last?.title === 'baseline-check@example.com' &&
+      last?.body === 'Baseline check mail';
+    record('TC-ALT-C2', ok ? 'PASS' : 'FAIL',
+      `badge ${badgeBefore}→${badgeAfter}; +${gained} notification post-baseline, title="${last?.title}" body="${last?.body}"`);
+  } catch (err) {
+    record('TC-ALT-C2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-A3: mark an unread thread (demo_1) read → next tick decrements the badge, no notification ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = (await debugNotificationLog(page)).length;
+    await modifyLabels(page, DEMO_EMAIL, 'demo_1', [], ['UNREAD']);
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = (await debugNotificationLog(page)).length;
+    const ok = badgeAfter === badgeBefore - 1 && logAfter === logBefore;
+    record('TC-ALT-A3', ok ? 'PASS' : 'FAIL',
+      `mark-read(demo_1) → badge ${badgeBefore}→${badgeAfter} (want -1), notifLog unchanged=${logAfter === logBefore}`);
+  } catch (err) {
+    record('TC-ALT-A3', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-B3: label change on an already-read thread (demo_2) — unread doesn't move, no notification ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = (await debugNotificationLog(page)).length;
+    await modifyLabels(page, DEMO_EMAIL, 'demo_2', ['Label_travel'], []);
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = (await debugNotificationLog(page)).length;
+    const ok = badgeAfter === badgeBefore && logAfter === logBefore;
+    record('TC-ALT-B3', ok ? 'PASS' : 'FAIL',
+      `label-add on already-read thread (demo_2) → badge unchanged=${badgeAfter === badgeBefore}, notifLog unchanged=${logAfter === logBefore}`);
+  } catch (err) {
+    record('TC-ALT-B3', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-B4: archiving an unread thread (demo_3) is a net decrease — no notification ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = (await debugNotificationLog(page)).length;
+    await modifyLabels(page, DEMO_EMAIL, 'demo_3', [], ['INBOX']);
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = (await debugNotificationLog(page)).length;
+    const ok = badgeAfter === badgeBefore - 1 && logAfter === logBefore;
+    record('TC-ALT-B4', ok ? 'PASS' : 'FAIL',
+      `archive unread thread (demo_3) → badge ${badgeBefore}→${badgeAfter} (want -1), notifLog unchanged=${logAfter === logBefore}`);
+  } catch (err) {
+    record('TC-ALT-B4', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-B1: exactly 1 new unread thread → individual notification (sender+subject) ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = await debugNotificationLog(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'solo-sender@example.com', subject: 'Solo new arrival' });
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = await debugNotificationLog(page);
+    const gained = logAfter.length - logBefore.length;
+    const last = logAfter[logAfter.length - 1];
+    const ok =
+      badgeAfter === badgeBefore + 1 &&
+      gained === 1 &&
+      last?.title === 'solo-sender@example.com' &&
+      last?.body === 'Solo new arrival';
+    record('TC-ALT-B1', ok ? 'PASS' : 'FAIL',
+      `single new thread → +1 individual notification, title="${last?.title}" body="${last?.body}"`);
+  } catch (err) {
+    record('TC-ALT-B1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-A2: new mail on the INACTIVE account still bumps the badge immediately (focus-independent) ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const active = await activeAccountEmail(page);
+    if (active !== DEMO_EMAIL) throw new Error(`expected active=${DEMO_EMAIL}, got ${active}`);
+    await debugInjectNewMail(page, WORK_EMAIL, { from: 'work-inactive@example.com', subject: 'Work inactive arrival' });
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const ok = badgeAfter === badgeBefore + 1;
+    record('TC-ALT-A2', ok ? 'PASS' : 'FAIL',
+      `inactive account (work) new mail → badge ${badgeBefore}→${badgeAfter} (want +1) while active=${active}`);
+  } catch (err) {
+    record('TC-ALT-A2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-B2: 1 new thread each on demo+work in the SAME tick → a single GROUP notification ---
+  try {
+    const badgeBefore = await debugDockBadge(page);
+    const logBefore = await debugNotificationLog(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'group-demo@example.com', subject: 'Group demo mail' });
+    await debugInjectNewMail(page, WORK_EMAIL, { from: 'group-work@example.com', subject: 'Group work mail' });
+    await debugTick(page);
+    const badgeAfter = await debugDockBadge(page);
+    const logAfter = await debugNotificationLog(page);
+    const gained = logAfter.length - logBefore.length;
+    const last = logAfter[logAfter.length - 1];
+    const ok =
+      badgeAfter === badgeBefore + 2 &&
+      gained === 1 &&
+      /외 1건/.test(last?.title ?? '') &&
+      last?.body === '새 메일 2건';
+    record('TC-ALT-B2', ok ? 'PASS' : 'FAIL',
+      `2 accounts × 1 new each, same tick → +1 GROUP notification (not 2), title="${last?.title}" body="${last?.body}"; badge ${badgeBefore}→${badgeAfter}`);
+  } catch (err) {
+    record('TC-ALT-B2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-D1: window focused → notification suppressed, badge still updates ---
+  try {
+    await debugSetWindowFocused(page, true);
+    const logBefore = await debugNotificationLog(page);
+    const badgeBefore = await debugDockBadge(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'focused-demo@example.com', subject: 'Focused demo mail' });
+    await debugTick(page);
+    const logAfter = await debugNotificationLog(page);
+    const badgeAfter = await debugDockBadge(page);
+    const ok = logAfter.length === logBefore.length && badgeAfter === badgeBefore + 1;
+    record('TC-ALT-D1', ok ? 'PASS' : 'FAIL',
+      `window focused → notification suppressed (log ${logBefore.length}→${logAfter.length}), badge still updates ${badgeBefore}→${badgeAfter}`);
+  } catch (err) {
+    record('TC-ALT-D1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-D2: window unfocused (same setup otherwise) → notification fires normally ---
+  try {
+    await debugSetWindowFocused(page, false);
+    const logBefore = await debugNotificationLog(page);
+    await debugInjectNewMail(page, DEMO_EMAIL, { from: 'unfocused-demo@example.com', subject: 'Unfocused demo mail' });
+    await debugTick(page);
+    const logAfter = await debugNotificationLog(page);
+    const gained = logAfter.length - logBefore.length;
+    const last = logAfter[logAfter.length - 1];
+    const ok = gained === 1 && last?.title === 'unfocused-demo@example.com' && last?.body === 'Unfocused demo mail';
+    record('TC-ALT-D2', ok ? 'PASS' : 'FAIL',
+      `window unfocused → notification fires normally, title="${last?.title}" body="${last?.body}"`);
+  } catch (err) {
+    record('TC-ALT-D2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-E1: individual click, thread's account already active → just opens the thread ---
+  try {
+    const activeBefore = await activeAccountEmail(page);
+    if (activeBefore !== DEMO_EMAIL) throw new Error(`expected active=${DEMO_EMAIL}, got ${activeBefore}`);
+    await page.keyboard.press('Escape'); // ensure no thread already open
+    await debugNotifyActivate(page, { accountId: DEMO_EMAIL, threadId: 'demo_1' });
+    const opened = await waitFor(async () => ((await bodyText(page)).includes('Q3 roadmap review') ? true : null),
+      { timeout: 5000, desc: 'demo_1 thread opened' });
+    const activeAfter = await activeAccountEmail(page);
+    const ok = opened && activeAfter === DEMO_EMAIL;
+    record('TC-ALT-E1', ok ? 'PASS' : 'FAIL',
+      `individual click, same (already-active) account → thread opened=${opened}, active unchanged=${activeAfter === DEMO_EMAIL}`);
+  } catch (err) {
+    record('TC-ALT-E1', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-E2: individual click, thread's account inactive → auto-switches, then opens ---
+  try {
+    await debugNotifyActivate(page, { accountId: WORK_EMAIL, threadId: 'work_1' });
+    const switched = await waitFor(async () => ((await activeAccountEmail(page)) === WORK_EMAIL ? true : null),
+      { timeout: 8000, desc: 'switched to work account' });
+    const opened = await waitFor(async () => ((await bodyText(page)).includes('W: Acme renewal contract') ? true : null),
+      { timeout: 5000, desc: 'work_1 thread opened' });
+    record('TC-ALT-E2', (switched && opened) ? 'PASS' : 'FAIL',
+      `individual click on inactive-account thread → switched=${!!switched}, opened=${opened}`);
+  } catch (err) {
+    record('TC-ALT-E2', 'FAIL', String(err).slice(0, 200));
+  }
+
+  // --- TC-ALT-E3: group click → active account's Inbox only, no account auto-switch ---
+  try {
+    // active is 'work' (from E2) — navigate away from Inbox first so routing back is an observable
+    // transition, not a no-op.
+    await clickSidebarNav(page, 'Starred');
+    await waitFor(async () => (await sidebarNavActive(page, 'Starred')) === true, { timeout: 5000, desc: 'Starred nav active' });
+    await debugNotifyActivate(page, { accountId: null, threadId: null });
+    const backToInbox = await waitFor(
+      async () => ((await sidebarNavActive(page, 'Inbox')) === true ? true : null),
+      { timeout: 5000, desc: 'group click routes to Inbox' }
+    );
+    const activeAfter = await activeAccountEmail(page);
+    const ok = backToInbox && activeAfter === WORK_EMAIL; // no account auto-switch on group click
+    record('TC-ALT-E3', ok ? 'PASS' : 'FAIL',
+      `group click → Inbox nav active=${!!backToInbox}, active account unchanged (${activeAfter}===${WORK_EMAIL})`);
+  } catch (err) {
+    record('TC-ALT-E3', 'FAIL', String(err).slice(0, 200));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test scenarios
 // ---------------------------------------------------------------------------
 
@@ -987,6 +1330,25 @@ async function run() {
   try { execSync(`pkill -f -- "--user-data-dir=${MA_USERDATA}"`); } catch { /* none left — fine */ }
   rmDirBestEffort(MA_USERDATA);
 
+  // --- new-mail-alerts: TC-ALT-* — dedicated final session on its OWN fresh user-data dir (mirrors
+  // TC-MA above), so notify.ts's per-account lastKnownUnreadIds cold-start guard genuinely starts
+  // undefined for both demo accounts (TC-ALT-C1/C2 depend on this — a reused/shared session would
+  // already have ticked many times over, silently seeding the baseline long before this point).
+  const ALT_USERDATA = mkdtempSync(path.join(tmpdir(), 'zenmail-e2e-alt-'));
+  launchApp(PORT, ALT_USERDATA);
+  try {
+    ({ browser, page } = await connectPage(PORT));
+    await demoLogin(page);
+    await runAltSession(page);
+  } catch (err) {
+    console.error('[harness] scenario error (new-mail-alerts):', err);
+    if (!results.some((r) => r.id.startsWith('TC-ALT'))) record('TC-ALT-A1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+  }
+  await browser?.close().catch(() => {});
+  await killApp();
+  try { execSync(`pkill -f -- "--user-data-dir=${ALT_USERDATA}"`); } catch { /* none left — fine */ }
+  rmDirBestEffort(ALT_USERDATA);
+
   // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
   const nonKmFails = results.filter((r) => !r.id.startsWith('TC-KM') && !r.id.startsWith('TC-SP') && r.status === 'FAIL');
   if (nonKmFails.length === 0) {
@@ -1156,6 +1518,30 @@ async function run() {
     record('TC-SNIP-G2', 'PASS', 'npm test + npx tsc --noEmit both exit 0 (reusing TC-KM-G2/G3)');
   } else {
     record('TC-SNIP-G2', 'FAIL', `TC-KM-G2=${kmG2?.status} TC-KM-G3=${kmG3?.status}`);
+  }
+
+  // --- TC-ALT-G1/G2/G3: new-mail-alerts regression gates --------------------
+  // G1/G2 map directly onto TC.md's own wording (tsc / vitest exit 0), reusing the single
+  // TC-KM-G2 (vitest)/TC-KM-G3 (tsc) runs already executed above rather than re-running them.
+  if (kmG3?.status === 'PASS') {
+    record('TC-ALT-G1', 'PASS', 'npx tsc --noEmit exits 0 (reusing TC-KM-G3)');
+  } else {
+    record('TC-ALT-G1', 'FAIL', `TC-KM-G3=${kmG3?.status}`);
+  }
+  if (kmG2?.status === 'PASS') {
+    record('TC-ALT-G2', 'PASS', 'npm test (vitest) exits 0 (reusing TC-KM-G2)');
+  } else {
+    record('TC-ALT-G2', 'FAIL', `TC-KM-G2=${kmG2?.status}`);
+  }
+  // TC.md's G3 ("0 FAIL + SKIP subset of canon + ×2 consecutive deterministic") is a whole-harness
+  // property that can't be fully verified from inside a single run() — the ×2-consecutive check is
+  // done by invoking this script twice from outside. What this single run *can* verify is captured
+  // here: 0 FAIL across every assertion recorded so far (including every TC-ALT-* scenario above).
+  const anyFailSoFar = results.filter((r) => r.status === 'FAIL');
+  if (anyFailSoFar.length === 0) {
+    record('TC-ALT-G3', 'PASS', `0 FAIL across all ${results.length} assertions this run (see harness invocation log for the required ×2-consecutive check)`);
+  } else {
+    record('TC-ALT-G3', 'FAIL', `${anyFailSoFar.length} assertions failed: ${anyFailSoFar.map((r) => r.id).join(', ')}`);
   }
 
   console.log('\n=== TC Results ===');

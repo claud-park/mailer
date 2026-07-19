@@ -93,6 +93,11 @@ const api: ZenmailApi = {
     ipcRenderer.on('mail:followup-fired', listener);
     return () => ipcRenderer.removeListener('mail:followup-fired', listener);
   },
+  onNotificationActivate: (cb: (p: { accountId: string | null; threadId: string | null }) => void) => {
+    const listener = (_e: unknown, p: { accountId: string | null; threadId: string | null }) => cb(p);
+    ipcRenderer.on('notify:activate', listener);
+    return () => ipcRenderer.removeListener('notify:activate', listener);
+  },
   onSyncState: (cb: (s: { online: boolean; pending: number }) => void) => {
     const listener = (_e: unknown, s: { online: boolean; pending: number }) => cb(s);
     ipcRenderer.on('mail:sync-state', listener);
@@ -132,6 +137,13 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugSetCalendarReady = (v: boolean) => ipcRenderer.invoke('calendar:debug-set-ready', v);
   api.__debugFailNextAttachment = () => ipcRenderer.invoke('mail:debug-fail-next-attachment');
   api.__debugSetDownloadDir = (dir: string) => ipcRenderer.invoke('mail:debug-set-download-dir', dir);
+  api.__debugInjectNewMail = (accountId: string, opts?: { from?: string; subject?: string }) =>
+    ipcRenderer.invoke('mail:debug-inject-new-mail', accountId, opts);
+  api.__debugSetWindowFocused = (v: boolean) => ipcRenderer.invoke('mail:debug-set-window-focused', v);
+  api.__debugNotificationLog = () => ipcRenderer.invoke('mail:debug-notification-log');
+  api.__debugNotifyActivate = (payload: { accountId: string | null; threadId: string | null }) =>
+    ipcRenderer.invoke('mail:debug-notify-activate', payload);
+  api.__debugDockBadge = () => ipcRenderer.invoke('mail:debug-dock-badge');
 }
 
 contextBridge.exposeInMainWorld('zenmail', api);

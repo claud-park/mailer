@@ -30,6 +30,7 @@ import {
   RealGmailProvider,
   type GmailProvider,
 } from './gmail';
+import { debugNotificationLog, setDebugFocusOverride, updateDockBadge } from './notify';
 import { computeRevalidateDiff } from './revalidate';
 import { runDaemonTickNow } from './snooze';
 import {
@@ -57,6 +58,11 @@ export interface AccountContext {
   cache: AccountCache;
   needsReauth: boolean;
   unreadCount: number;
+  /** new-mail-alerts D9/D10: 마지막으로 관측한 "Inbox∪Starred, unread" 스레드 ID 집합. 아직 한
+   *  번도 못 가져왔으면 undefined(= 이 계정에 대한 첫 상세 조회 — baseline만 시딩하고 알림은 쏘지
+   *  않는다, notify.ts의 diffNewUnread). sign-out 시 contexts.delete와 함께 자동 GC(D10) — 별도
+   *  초기화·정리 코드 불필요. */
+  lastKnownUnreadIds?: Set<string>;
 }
 
 const contexts = new Map<string, AccountContext>();
@@ -279,6 +285,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         console.error('[badges] refresh failed', ctx.email, err); // transient — 다음 틱에 재시도
       }
     }
+    // new-mail-alerts R1: dock 배지는 로그인/데모 진입 직후에도 바로 정확한 값을 보여야 한다 —
+    // 알림 발화 로직과는 무관한 순수 카운트 합산이라 여기서 호출해도 콜드스타트 안전(D9)을 해치지
+    // 않는다(알림은 데몬의 lastKnownUnreadIds 최초-관측 가드에서만 처리, 이 함수는 그대로 무변경).
+    updateDockBadge(getContexts());
     if (badgeChanged) pushAccountsChanged(getWindow);
   }
 
@@ -847,6 +857,48 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     ipcMain.handle('mail:debug-external-unstar', async (_e, threadId: string) => {
       const ctx = activeCtx();
       if (ctx?.provider instanceof MockGmailProvider) ctx.provider.externalUnstar(threadId);
+    });
+
+    // new-mail-alerts (TC-ALT-*): 지정 계정의 데모 데이터셋에 새 unread 스레드 1건을 주입해 실제
+    // 도착을 시뮬레이션한다(mock 전용). 이 훅만으로는 배지/알림 파이프라인이 반응하지 않는다 —
+    // 기존 mail:debug-tick(runDaemonTickNow)을 뒤이어 호출해야 daemon이 증가를 관측한다.
+    ipcMain.handle(
+      'mail:debug-inject-new-mail',
+      async (_e, accountId: string, opts?: { from?: string; subject?: string }) => {
+        const ctx = contexts.get(accountId);
+        if (ctx?.provider instanceof MockGmailProvider) ctx.provider.injectNewMail(opts);
+      }
+    );
+
+    // new-mail-alerts (TC-ALT-D1/D2): real OS window focus can't be controlled deterministically
+    // from an automated CDP harness — override the D5 focus gate directly (see notify.ts).
+    ipcMain.handle('mail:debug-set-window-focused', async (_e, v: boolean) => {
+      setDebugFocusOverride(v);
+    });
+
+    // new-mail-alerts (TC-ALT-B1/B2/D1/D2): native OS Notification objects have no CDP-visible
+    // surface — expose the in-memory log notify.ts keeps of every notification it actually decided
+    // to show (title/body), so E2E can assert count/content without touching a real OS banner.
+    ipcMain.handle('mail:debug-notification-log', async (): Promise<Array<{ title: string; body: string }>> => {
+      return [...debugNotificationLog];
+    });
+
+    // new-mail-alerts (TC-ALT-E1/E2/E3): a real OS notification banner click is Electron/OS's own
+    // responsibility (not CDP-observable) — this reproduces only the *consequence* main's own click
+    // handler would produce (fireNewMailNotification's `notification.on('click', ...)`), so E2E can
+    // verify the renderer's routing (useThreads.ts onNotificationActivate) in isolation.
+    ipcMain.handle(
+      'mail:debug-notify-activate',
+      async (_e, payload: { accountId: string | null; threadId: string | null }) => {
+        getWindow()?.webContents.send('notify:activate', payload);
+      }
+    );
+
+    // new-mail-alerts (TC-ALT-A1~A3, C1~C2, D1~D2): direct read of the actual OS dock badge value that
+    // updateDockBadge sets (app.setBadgeCount) — independent of accountsSnapshot's own unreadCount
+    // sum, so E2E can verify the real side effect rather than just the internal state it's derived from.
+    ipcMain.handle('mail:debug-dock-badge', async (): Promise<number> => {
+      return app.getBadgeCount();
     });
 
     ipcMain.handle('calendar:debug-state', async (): Promise<{ events: CalendarEvent[]; responses: Record<string, string> }> => {

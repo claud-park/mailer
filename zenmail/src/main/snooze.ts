@@ -1,6 +1,8 @@
 import type { BrowserWindow } from 'electron';
-import type { GmailProvider } from './gmail';
+import { NEW_MAIL_QUERY, type GmailProvider } from './gmail';
 import type { AccountContext } from './ipc';
+import { diffNewUnread, fireNewMailNotification, updateDockBadge } from './notify';
+import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
 import { emitSyncState, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
 
@@ -43,12 +45,34 @@ export function startSnoozeDaemon(
 
       // 배지: 전 계정 INBOX 안읽음 수 갱신(1콜/계정/분, D7) — 값이 하나라도 바뀌면 스냅샷 push.
       // ipc.ts를 런타임 import하면 순환이 생기므로 pushAccounts 콜백으로 주입받는다(index.ts가 정본).
+      //
+      // new-mail-alerts D7/D8: 카운트가 순증(n > ctx.unreadCount)했을 때만 추가로 Inbox∪Starred
+      // unread 상세(발신자/제목)를 1콜 더 가져와 diffNewUnread로 진짜 신규분만 골라낸다 — 감소/동일은
+      // 기존과 동일하게 카운트만 갱신(추가 콜 없음, D7 비용 원칙 유지). 계정별 결과를 모아 틱 끝에서
+      // 전역 합산 1회로 dock 배지 갱신 + 알림 발화한다(D1).
       let badgeChanged = false;
+      const perAccountNew: Array<{ accountId: string; threads: ThreadSummary[] }> = [];
       for (const ctx of getContexts()) {
         if (!ctx.provider) continue; // needsReauth 계정은 스킵
         try {
           const n = await ctx.provider.inboxUnreadCount();
           if (n !== ctx.unreadCount) {
+            if (n > ctx.unreadCount) {
+              try {
+                const { threads: current } = await ctx.provider.listThreads({ q: NEW_MAIL_QUERY });
+                const { newThreads, nextIds } = diffNewUnread(current, ctx.lastKnownUnreadIds);
+                ctx.lastKnownUnreadIds = nextIds;
+                if (newThreads.length) perAccountNew.push({ accountId: ctx.email, threads: newThreads });
+              } catch (err) {
+                // ctx.lastKnownUnreadIds is NOT updated on failure (still whatever it was), so this
+                // batch isn't silently lost forever — a later tick where the count rises past this
+                // level again will diff against the same stale baseline and catch the missed threads
+                // too. It's not a guaranteed "retry next tick": if those threads get read before the
+                // count rises further, this specific notification never fires (badge stays correct
+                // either way). Accepted tradeoff — see new-mail-alerts DECISIONS.md D12.
+                console.error('[daemon] new-mail detail fetch failed', ctx.email, err);
+              }
+            }
             ctx.unreadCount = n;
             badgeChanged = true;
           }
@@ -56,6 +80,8 @@ export function startSnoozeDaemon(
           console.error('[daemon] badge refresh failed', ctx.email, err); // transient — 다음 틱에 재시도
         }
       }
+      updateDockBadge(getContexts());
+      if (perAccountNew.length) fireNewMailNotification(perAccountNew, getWindow);
       if (badgeChanged) pushAccounts();
     } finally {
       tickInFlight = false;

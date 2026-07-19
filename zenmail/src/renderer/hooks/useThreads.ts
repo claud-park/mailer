@@ -37,6 +37,17 @@ export function useThreads(): void {
       if (isActive(p.accountId)) showToast('A snoozed thread is back');
     });
 
+    // R4: new-mail notification click. 단건이면 필요 시 계정 전환(switchAccount가 이미 같은
+    // 계정이면 no-op) 후 스레드를 연다. 그룹(둘 다 null)이면 계정 전환 없이 활성 계정 Inbox로만 이동.
+    const offNotificationActivate = window.zenmail.onNotificationActivate((p) => {
+      if (p.accountId !== null && p.threadId !== null) {
+        void useMailStore.getState().switchAccount(p.accountId);
+        void useMailStore.getState().openThread(p.threadId);
+      } else {
+        useMailStore.getState().setActiveLabel('INBOX');
+      }
+    });
+
     // 계정 목록/배지/needsReauth 변화 — 스냅샷을 스토어에 미러.
     const offAccounts = window.zenmail.onAccountsChanged((snap) => {
       useMailStore.getState().applyAccountsSnapshot(snap);
@@ -72,6 +83,7 @@ export function useThreads(): void {
     return () => {
       offChanged();
       offSnooze();
+      offNotificationActivate();
       offAccounts();
       offThreadChanged();
       offSyncState();

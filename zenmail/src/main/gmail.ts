@@ -142,6 +142,15 @@ function matchesSingleLabelView(req: FetchThreadsRequest, label: string): boolea
   return req.labelIds?.length === 1 && req.labelIds[0] === label && !req.q;
 }
 
+/**
+ * new-mail-alerts D2/D11: "새 메일" 판정 전용 독립 union 쿼리(Inbox∪Starred, unread) — `view.ts`의
+ * UI 뷰 술어(starred-view가 의도적으로 분리한 INBOX/STARRED)와는 별개 개념이라 여기 gmail.ts에만
+ * 둔다. Real은 이 문자열을 그대로 Gmail `q`로 전달(listThreads가 raw q를 이미 통과시킨다), Mock은
+ * listThreads 내부에서 이 정확한 문자열을 특별 취급해 isInInboxView∨isInStarredView && unread로
+ * 계산한다(아래, starred-view가 STARRED를 특별 취급한 것과 동일 패턴).
+ */
+export const NEW_MAIL_QUERY = `is:unread (in:inbox OR is:starred) -in:trash -in:spam -label:${SNOOZE_LABEL_NAME}`;
+
 export function buildMime(req: SendRequest, from: string): string {
   const boundary = `zenmail_${Math.random().toString(36).slice(2)}`;
   const headers = [
@@ -870,6 +879,9 @@ export class MockGmailProvider implements GmailProvider {
     // fall through to the plain AND-match + substring-filter path on both providers, not diverge.
     const isInboxView = matchesSingleLabelView(req, 'INBOX');
     const isStarredView = matchesSingleLabelView(req, 'STARRED');
+    // new-mail-alerts D11: 일반 substring 검색 q와 달리, 이 정확한 문자열은 "Inbox∪Starred unread"
+    // union 판정용 구조화 쿼리라 substring 매칭으로는 표현할 수 없다 — 전용 필터로 특별 취급.
+    const isNewMailQuery = req.q === NEW_MAIL_QUERY;
     let rows = this.threads.filter((t) => !t.summary.labelIds.includes('TRASH') || req.labelIds?.includes('TRASH'));
     if (isInboxView) {
       // starred-view D3: 인박스 뷰 술어 — INBOX − TRASH − SPAM − snoozed(STARRED 유니온 제거).
@@ -877,10 +889,17 @@ export class MockGmailProvider implements GmailProvider {
     } else if (isStarredView) {
       // starred-view D1/D2: Starred 전용 뷰 술어 — STARRED − TRASH − SPAM − snoozed(archive 여부 무관).
       rows = rows.filter((t) => isInStarredView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID));
+    } else if (isNewMailQuery) {
+      rows = rows.filter(
+        (t) =>
+          t.summary.unread &&
+          (isInInboxView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID) ||
+            isInStarredView(t.summary.labelIds, DEMO_SNOOZE_LABEL_ID))
+      );
     } else if (req.labelIds?.length) {
       rows = rows.filter((t) => req.labelIds!.every((l) => t.summary.labelIds.includes(l)));
     }
-    if (req.q) {
+    if (req.q && !isNewMailQuery) {
       const q = req.q.toLowerCase();
       rows = rows.filter(
         (t) =>
@@ -1028,6 +1047,38 @@ export class MockGmailProvider implements GmailProvider {
     if (!t) return;
     t.summary.labelIds = t.summary.labelIds.filter((l) => l !== 'STARRED');
     t.detail.labelIds = t.detail.labelIds.filter((l) => l !== 'STARRED');
+  }
+
+  /**
+   * new-mail-alerts (TC-ALT-*): E2E 전용 — 지정 계정의 데모 데이터셋에 새 unread INBOX 스레드 1건을
+   * 주입한다(실제 도착 시뮬레이션). from/subject 미지정 시 데모 기본값 사용. 이 주입만으로는 배지·
+   * 알림 파이프라인이 반응하지 않는다 — 다음 daemon tick(mail:debug-tick → runDaemonTickNow)이 있어야
+   * 새 unread 증가를 관측한다(mock 전용, real provider엔 없음).
+   */
+  injectNewMail(opts?: { from?: string; subject?: string }): void {
+    const now = Date.now();
+    const id = `demo_new_${now}_${Math.random().toString(36).slice(2, 8)}`;
+    const fromAddress = opts?.from ?? 'new-mail@example.com';
+    const from: Contact = { name: fromAddress, email: fromAddress };
+    const subject = opts?.subject ?? 'New mail';
+    const snippet = subject;
+    const labelIds = ['INBOX', 'UNREAD'];
+    const message = {
+      id: `${id}_m0`,
+      threadId: id,
+      from,
+      to: [{ name: 'You', email: this.email }],
+      cc: [] as Contact[],
+      date: now,
+      snippet,
+      bodyHtml: demoBody([snippet]),
+      bodyText: snippet,
+      labelIds,
+    };
+    this.threads.push({
+      summary: { id, subject, from, snippet, date: now, unread: true, labelIds, messageCount: 1 },
+      detail: { id, subject, labelIds, messages: [message] },
+    });
   }
 
   async modifyThread(req: ModifyLabelsRequest): Promise<void> {

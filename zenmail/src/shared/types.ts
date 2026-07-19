@@ -270,6 +270,9 @@ export interface ZenmailApi {
   onThreadChanged(cb: (p: { accountId: string; threadId: string; detail: ThreadDetail }) => void): () => void;
   onSnoozeFired(cb: (p: { accountId: string; threadId: string }) => void): () => void;
   onFollowupFired(cb: (p: { accountId: string; threadId: string }) => void): () => void;
+  /** R4: new-mail notification click — single-thread case carries {accountId, threadId}; the
+   *  grouped (2+) case carries {accountId: null, threadId: null}. */
+  onNotificationActivate(cb: (p: { accountId: string | null; threadId: string | null }) => void): () => void;
   /** D10: sidebar sync line data push — {online, pending queue depth}. 전역 합산. */
   onSyncState(cb: (s: { online: boolean; pending: number }) => void): () => void;
   /** D10: a queued mutation or send exhausted retries (or hit a permanent error) — renderer
@@ -312,6 +315,20 @@ export interface ZenmailApi {
   __debugFailNextAttachment?(): Promise<void>;
   /** E2E-only: 다운로드 저장 디렉터리 오버라이드(실제 Downloads 오염 방지 + 저장 경로/리네임 검증). */
   __debugSetDownloadDir?(dir: string): Promise<void>;
+  /** E2E-only (new-mail-alerts TC-ALT-*): 지정 계정의 데모 데이터셋에 새 unread INBOX 스레드 1건을
+   *  주입한다(mock 전용). 이 훅만으로는 배지/알림이 반응하지 않는다 — 뒤이어 __debugTick이 필요하다. */
+  __debugInjectNewMail?(accountId: string, opts?: { from?: string; subject?: string }): Promise<void>;
+  /** E2E-only (TC-ALT-D1/D2): real OS window focus를 대신하는 결정론적 오버라이드 — D5 포커스 억제
+   *  게이트가 실제 isFocused() 대신 이 값을 읽는다. */
+  __debugSetWindowFocused?(v: boolean): Promise<void>;
+  /** E2E-only (TC-ALT-B1/B2/D1/D2): fireNewMailNotification이 실제로 발화를 결정한 알림들의
+   *  in-memory 로그(누적) — 네이티브 OS Notification은 CDP로 관측 불가. */
+  __debugNotificationLog?(): Promise<Array<{ title: string; body: string }>>;
+  /** E2E-only (TC-ALT-E1/E2/E3): 실제 알림 배너 클릭 대신 main이 동일한 notify:activate IPC를 직접
+   *  렌더러로 보낸다 — 클릭의 라우팅 결과만 검증(배너 클릭 자체는 Electron/OS 책임). */
+  __debugNotifyActivate?(payload: { accountId: string | null; threadId: string | null }): Promise<void>;
+  /** E2E-only (TC-ALT-A1~A3, C1~C2, D1~D2): app.setBadgeCount()이 실제로 반영한 현재 dock 배지 값. */
+  __debugDockBadge?(): Promise<number>;
 }
 
 export const SNOOZE_LABEL_NAME = 'zenmail/snoozed';
