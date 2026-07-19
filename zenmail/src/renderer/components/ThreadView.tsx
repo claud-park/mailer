@@ -70,7 +70,13 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function AttachmentItem({ messageId, att }: { messageId: string; att: AttachmentInfo }) {
+function AttachmentItem({
+  messageId,
+  att,
+}: {
+  messageId: string;
+  att: AttachmentInfo & { attachmentId: string };
+}) {
   const fetchAttachmentImage = useMailStore((s) => s.fetchAttachmentImage);
   const download = useMailStore((s) => s.downloadAttachment);
   const openLightbox = useMailStore((s) => s.openLightbox);
@@ -138,7 +144,11 @@ function AttachmentItem({ messageId, att }: { messageId: string; att: Attachment
 
 function AttachmentStrip({ message }: { message: MessageDetail }) {
   // D4: 비인라인 첨부만 나열(인라인 cid 이미지는 본문에서 이미 렌더 → 스트립 제외).
-  const items = (message.attachments ?? []).filter((a) => !a.inline);
+  // attachmentId 없는 항목(작은 인라인 파트를 Gmail이 body.data로 바로 실어 보낸 경우)은
+  // 항상 inline:true로만 만들어지므로 여기엔 나타나지 않는다 — 타입만 좁혀준다.
+  const items = (message.attachments ?? []).filter(
+    (a): a is AttachmentInfo & { attachmentId: string } => !a.inline && !!a.attachmentId
+  );
   if (items.length === 0) return null;
   return (
     <div data-testid="attachment-strip" className="mt-2 flex flex-col gap-1">
@@ -166,10 +176,25 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
       (a) => a.inline && a.contentId && a.mimeType.startsWith('image/')
     );
     if (inline.length === 0) return;
+
+    // Gmail이 attachmentId 없이 body.data를 직접 실어 보낸 작은 인라인 파트(예: GitHub
+    // Actions 알림 메일의 octicon)는 파싱 시점에 이미 data URI가 채워져 있다 — IPC 라운드
+    // 트립 없이 바로 반영한다.
+    const embedded = inline.filter((a) => a.inlineData);
+    if (embedded.length > 0) {
+      setInlineImages((prev) => {
+        const next = new Map(prev);
+        embedded.forEach((a) => next.set(a.contentId!, a.inlineData!));
+        return next;
+      });
+    }
+
+    const fetchable = inline.filter((a) => !a.inlineData && a.attachmentId);
+    if (fetchable.length === 0) return;
     let cancelled = false;
     void Promise.all(
-      inline.map(async (a) => {
-        const res = await fetchAttachmentImage(message.id, a.attachmentId, a.mimeType);
+      fetchable.map(async (a) => {
+        const res = await fetchAttachmentImage(message.id, a.attachmentId!, a.mimeType);
         if (!cancelled && 'dataUri' in res && a.contentId) {
           setInlineImages((prev) => new Map(prev).set(a.contentId!, res.dataUri));
         }

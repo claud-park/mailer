@@ -40,8 +40,12 @@ export interface InviteInfo {
 }
 
 export interface AttachmentInfo {
-  /** Gmail attachment id — getAttachment가 바이트를 가져오는 키 */
-  attachmentId: string;
+  /**
+   * Gmail attachment id — getAttachment가 바이트를 가져오는 키. Gmail이 작은 인라인
+   * 파트는 body.data에 바이트를 직접 실어 보내 attachmentId를 생략하기도 한다 — 그 경우
+   * inlineData가 대신 채워진다.
+   */
+  attachmentId?: string;
   filename: string;
   mimeType: string;
   /** 바이트 크기 (body.size) */
@@ -50,6 +54,8 @@ export interface AttachmentInfo {
   contentId?: string;
   /** Content-Disposition:inline && contentId 존재 → 본문 cid 참조(스트립에서 제외) */
   inline: boolean;
+  /** attachmentId가 없는 인라인 파트의 바이트를 파싱 시점에 그대로 담은 data URI */
+  inlineData?: string;
 }
 
 export type RsvpResponse = 'accepted' | 'tentative' | 'declined';

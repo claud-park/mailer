@@ -80,4 +80,31 @@ describe('extractAttachments', () => {
     const out = extractAttachments(payload, '<p>no image reference here</p>');
     expect(out[0].inline).toBe(false);
   });
+
+  // Gmail은 작은 파트(GitHub Actions 알림 메일의 octicon 등)는 attachmentId 없이
+  // body.data에 바이트를 직접 실어 보낸다 — 이 경우도 인라인 이미지로 수집해야 한다.
+  it('embeds data directly when Gmail omits attachmentId for a small inline part', () => {
+    const payload = part({
+      mimeType: 'multipart/related',
+      parts: [
+        part({
+          mimeType: 'image/png',
+          filename: 'octocat-logo-805b5c3e249f.png',
+          headers: [{ name: 'Content-ID', value: '<octocat-logo@github.com>' }],
+          body: { data: 'aGVsbG8', size: 5 },
+        }),
+      ],
+    });
+    const out = extractAttachments(payload, '<img src="cid:octocat-logo@github.com">');
+    expect(out).toEqual([
+      {
+        filename: 'octocat-logo-805b5c3e249f.png',
+        mimeType: 'image/png',
+        size: 5,
+        contentId: 'octocat-logo@github.com',
+        inline: true,
+        inlineData: `data:image/png;base64,${Buffer.from('aGVsbG8', 'base64url').toString('base64')}`,
+      },
+    ]);
+  });
 });

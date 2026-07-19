@@ -99,6 +99,9 @@ function partHeader(p: gmail_v1.Schema$MessagePart, name: string): string | unde
  * Content-Disposition만으로는 부족하다 — Outlook 등 다수의 실 발신자가 인라인 이미지에도
  * Content-Disposition을 생략하거나 attachment로 보내면서 cid: 참조만으로 인라인을 표현한다
  * (RFC 2392 방식). contentId는 양끝 <>를 벗겨 cid: 참조와 매칭 가능하게 한다.
+ * body.attachmentId가 없는 파트(Gmail이 작은 인라인 이미지 — GitHub Actions 알림 메일의
+ * octicon 등 — 는 별도 attachmentId 없이 body.data에 바이트를 직접 실어 보낸다)도 Content-ID +
+ * 인라인 조건을 만족하면 그 자리에서 data URI로 임베드해 수집한다(inlineData).
  */
 export function extractAttachments(
   part: gmail_v1.Schema$MessagePart | undefined,
@@ -108,8 +111,12 @@ export function extractAttachments(
   const walk = (p: gmail_v1.Schema$MessagePart | undefined) => {
     if (!p) return;
     const attachmentId = p.body?.attachmentId ?? undefined;
+    const bodyData = p.body?.data ?? undefined;
     const contentIdRaw = partHeader(p, 'Content-ID');
     const filename = p.filename ?? '';
+    // Gmail은 작은 파트(예: GitHub Actions 알림 메일의 octicon)는 attachmentId 없이
+    // body.data에 바이트를 직접 실어 보낸다 — contentId가 있으면 인라인 이미지로 간주하고
+    // 그 자리에서 data URI로 임베드한다(별도 attachments.get 라운드트립 불필요).
     if (attachmentId && (filename || contentIdRaw)) {
       const contentId = contentIdRaw ? contentIdRaw.trim().replace(/^<|>$/g, '') : undefined;
       const disposition = (partHeader(p, 'Content-Disposition') ?? '').toLowerCase();
@@ -123,6 +130,22 @@ export function extractAttachments(
         ...(contentId ? { contentId } : {}),
         inline,
       });
+    } else if (!attachmentId && bodyData && contentIdRaw) {
+      const contentId = contentIdRaw.trim().replace(/^<|>$/g, '');
+      const disposition = (partHeader(p, 'Content-Disposition') ?? '').toLowerCase();
+      const referencedByBody = html.includes(`cid:${contentId}`);
+      const inline = disposition.startsWith('inline') || referencedByBody;
+      if (inline) {
+        const mimeType = p.mimeType ?? 'application/octet-stream';
+        out.push({
+          filename: filename || contentId || 'attachment',
+          mimeType,
+          size: p.body?.size ?? 0,
+          contentId,
+          inline,
+          inlineData: `data:${mimeType};base64,${Buffer.from(bodyData, 'base64url').toString('base64')}`,
+        });
+      }
     }
     p.parts?.forEach(walk);
   };
