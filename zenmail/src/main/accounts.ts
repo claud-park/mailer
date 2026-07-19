@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { sqliteNativeOptions } from './sqlite-native';
 
 // electron은 main 프로세스 밖(vitest)에서 바이너리 경로 문자열로 해석된다 — 지연 로드 + 테스트 오버라이드.
 let userDataDirOverride: string | null = null;
@@ -147,7 +148,7 @@ export function migrateLegacyLayout(): void {
   try {
     // 테마는 앱 전역 설정으로 승계 — index.ts의 BrowserWindow backgroundColor가 계정 DB 없이 읽어야 한다.
     if (fs.existsSync(target)) {
-      const db = new Database(target, { readonly: true });
+      const db = new Database(target, { readonly: true, ...sqliteNativeOptions() });
       try {
         const row = db.prepare("SELECT value FROM settings WHERE key = 'theme'").get() as { value: string } | undefined;
         if (row) setGlobalSetting('theme', row.value);

@@ -11,7 +11,7 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "pretest": "npm rebuild better-sqlite3",
+    "pretest": "node scripts/ensure-test-native.mjs",
     "test": "vitest run"
   },
   "keywords": [],
