@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDMG } from '@electron-forge/maker-dmg';
@@ -7,6 +8,7 @@ import { VitePlugin } from '@electron-forge/plugin-vite';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
+import { rebuild } from '@electron/rebuild';
 
 // vite.main.config.mts marks these external, but the Forge Vite template ships an asar that
 // contains ONLY .vite/ + package.json — externals silently resolve up and out of the asar into
@@ -60,6 +62,23 @@ function copyExternalModules(buildPath: string): void {
   for (const m of RUNTIME_EXTERNALS) copy(m, projectRoot);
 }
 
+// copyExternalModules copies better-sqlite3's native binding straight from the project's own
+// node_modules, which npm/node-gyp builds against the LOCAL Node.js ABI — not Electron's. (The
+// project's `pretest` script even re-triggers this via `npm rebuild better-sqlite3` for plain-Node
+// test runs.) A packaged app shipping that binary throws ERR_DLOPEN_FAILED (NODE_MODULE_VERSION
+// mismatch) the moment cache.ts opens the database, before the main window is ever created — the
+// dock icon appears but no window shows, with no crash dialog. Rebuild it here, against the
+// Electron version/arch actually being packaged, every time.
+async function rebuildNativeModules(buildPath: string, electronVersion: string, arch: string): Promise<void> {
+  await rebuild({
+    buildPath,
+    electronVersion,
+    arch,
+    onlyModules: ['better-sqlite3'],
+    force: true,
+  });
+}
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
@@ -70,6 +89,36 @@ const config: ForgeConfig = {
   hooks: {
     packageAfterCopy: async (_config, buildPath) => {
       copyExternalModules(buildPath);
+    },
+    // A separate, later hook stage (not packageAfterCopy) on purpose: FusesPlugin's flipFuses
+    // also runs on packageAfterCopy, and Forge runs all packageAfterCopy hooks concurrently — the
+    // rebuild below is slow (network header fetch + node-gyp compile) and raced/corrupted the
+    // packager's own temp Electron.app extraction when it lived there. packageAfterPrune fires
+    // strictly after every packageAfterCopy hook is done, so buildPath is stable by the time we
+    // get here.
+    packageAfterPrune: async (_config, buildPath, electronVersion, _platform, arch) => {
+      await rebuildNativeModules(buildPath, electronVersion, arch);
+    },
+    // FusesPlugin's resetAdHocDarwinSignature (below) re-signs during packageAfterCopy — the
+    // SAME lifecycle stage as this hook — which runs before @electron/packager's own
+    // updatePlistFiles() finalizes Info.plist (bundle id/name, ElectronAsarIntegrity hash).
+    // That seals a stale Info.plist: `codesign -d` then shows "Info.plist=not bound" and macOS
+    // silently kills the app on launch on Apple Silicon (no dialog, no crash log). Disabled
+    // there; re-signed here instead, once packaging (and Info.plist) is truly finalized.
+    postPackage: async (_config, { platform, outputPaths }) => {
+      if (platform !== 'darwin') return;
+      for (const outputPath of outputPaths) {
+        const appName = fs.readdirSync(outputPath).find((f) => f.endsWith('.app'));
+        if (!appName) continue;
+        execFileSync('codesign', [
+          '--sign',
+          '-',
+          '--force',
+          '--preserve-metadata=entitlements,requirements,flags,runtime',
+          '--deep',
+          path.join(outputPath, appName),
+        ]);
+      }
     },
   },
   rebuildConfig: {},
@@ -98,11 +147,12 @@ const config: ForgeConfig = {
     }),
     new FusesPlugin({
       version: FuseVersion.V1,
-      // flipping fuses rewrites the binary AFTER packager's ad-hoc signing, which breaks the
-      // signature — on arm64 macOS that silently kills every helper process (app hangs with
-      // zero windows). This re-signs ad-hoc after the flip. Replace with real osxSign for
+      // Do NOT let this auto-resign (its default is true here on arm64 without osxSign) — it
+      // runs during packageAfterCopy, before packager writes the final Info.plist, so the
+      // resulting signature seals a stale plist. See the postPackage hook above, which
+      // re-signs ad-hoc at the correct point instead. Replace both with real osxSign for
       // notarized distribution.
-      resetAdHocDarwinSignature: true,
+      resetAdHocDarwinSignature: false,
       [FuseV1Options.RunAsNode]: false,
       [FuseV1Options.EnableCookieEncryption]: true,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
