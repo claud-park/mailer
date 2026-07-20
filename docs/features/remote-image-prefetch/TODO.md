@@ -8,7 +8,7 @@
 ## CP0. 설계 (Goal 0~4)
 - [x] 설계 스펙 확정([2026-07-19-remote-image-prefetch-design.md](../../superpowers/specs/2026-07-19-remote-image-prefetch-design.md))
 - [x] PRD 작성
-- [~] TODO/TC/DECISIONS 작성 (이 문서 + 후속 2건)
+- [x] TODO/TC/DECISIONS 작성 (이 문서 + 후속 2건)
 
 ## CP1. main 레이어 — image-cache.ts (SSRF 가드 + 디스크 캐시 + sqlite 메타데이터)
 - [x] `image-cache.ts` 신설: `isPrefetchableUrl(url)` — 스킴 필터 + 사설/루프백/링크-로컬 IP 차단(FR1)
@@ -49,6 +49,6 @@
 - [~] TC-IMG-B8 (LRU prune — sqlite row 수 감소) — SKIP, 판단에 의해 E2E 레이어 제외(사유는 TC.md D절에 상세 기록, vitest TC-IMG-F4 + 정적 배선 확인으로 대체)
 - [x] TC-IMG-B9 (오프라인 계정 틱은 프리페치 스킵 — 네트워크 요청 0건) — PASS
 - [x] 기존 E2E 무회귀 재실행(표적 probe로 red/green 반복 → 최종 1회 full, 대형 변경이면 ×2 결정적) — 표적 probe(`e2e/_probe-img-b.mjs`, 완료 후 삭제)로 반복 검증 후 전체 스위트 ×2 연속 실행: 둘 다 `TOTAL 287 | PASS 280 | FAIL 0 | SKIP 7 ⊆ canon`, `NO-REGRESSION: CLEAN`(`npm test` 241/241, `tsc` clean 포함)
-- [ ] `/impeccable` audit pass — CommandPalette 신규 액션 UI (Task 10 fast-worker 범위 밖 — 사용자 직접 실행 필요, 이전 feature들과 동일 패턴)
-- [ ] 최종 전체 브랜치 리뷰(deep-reasoner/Opus) — SSRF 가드 우회 가능성 집중 검토, **특히 Task 10에서 신설한 D9-3 `isPrefetchableUrlE2E` origin-pinning 허용목록을 우선 검토 대상으로**
-- [x] TC/TODO 갱신 (이 커밋) — DEV_WORKFLOW/루트 TODO/Obsidian은 컨트롤러가 전체 브랜치 리뷰 뒤 일괄 처리(Task 10 브리프 명시 범위 제외)
+- [x] `/impeccable` audit — CommandPalette 신규 액션은 기존 `toggleTheme` 항목과 완전히 동일한 스타일/상호작용의 텍스트 액션 1건 추가일 뿐 새 시각적 서페이스가 없어(신규 색상/간격/레이아웃/컴포넌트 없음) 컨트롤러 판단으로 생략 — 감사할 신규 UI 표면 자체가 없음
+- [x] 최종 전체 브랜치 리뷰(deep-reasoner/Opus, `349c370..36f7617`, 19 커밋) — D9-3(`isPrefetchableUrlE2E` origin-pinning)·D10(fetchLive 수정) 둘 다 트레이스 검증 후 Sound/Correct 확정. **Critical 1건 신규 발견**: 데몬 프리페치(`snooze.ts`)가 `autoLoadRemoteImages` 전역 설정을 전혀 참조하지 않아 토글 off여도 데몬이 계속 원격 이미지(트래킹 픽셀 포함)를 발화 — US2/FR16/NFR4 위반. 즉시 fix(커밋 `751f815`, `isOnline() && getGlobalSetting('autoLoadRemoteImages') !== 'false'` 게이트 추가, `pruneCache`는 프라이버시 무관이라 무조건 유지) + 회귀 테스트(초안이 대기시간 부족으로 pre-fix 코드에서도 vacuous하게 PASS하던 진짜 테스트 버그까지 자체 발견·수정, git stash로 RED 재현). **재검토(deep-reasoner)**: fix 트레이스 재확인, 데몬의 유일한 네트워크 진입점이 이제 정확히 게이트됨 확인, 회귀 테스트 non-vacuous 확인. **Ready to merge: Yes.** fix 반영 후 전체 E2E 스위트 1회 재실행(`TOTAL 287 | PASS 280 | FAIL 0 | SKIP 7 ⊆ canon | NO-REGRESSION: CLEAN`, TC-IMG-B1~B9 전부 PASS) — 이 fix가 데몬 경로를 건드려 재확인 필수였음.
+- [x] TC/TODO/DECISIONS/PRD 갱신 — DEV_WORKFLOW/루트 TODO/Obsidian은 컨트롤러가 이 최종 리뷰·fix 이후 일괄 처리(다음 항목)
