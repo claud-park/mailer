@@ -130,3 +130,53 @@ describe('AccountCache — per-account isolation', () => {
     expect(a.getSetting('k')).toBe('v');
   });
 });
+
+describe('AccountCache — image_cache metadata', () => {
+  let dir: string;
+  let a: AccountCache;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zm-imgcache-'));
+    a = new AccountCache(path.join(dir, 'a.db'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns null for a url hash that was never cached', () => {
+    expect(a.getImageCache('deadbeef')).toBeNull();
+  });
+
+  it('round-trips a cached row', () => {
+    a.setImageCache({ urlHash: 'h1', mimeType: 'image/png', byteSize: 1234, fetchedAt: 100 });
+    expect(a.getImageCache('h1')).toEqual({ urlHash: 'h1', mimeType: 'image/png', byteSize: 1234, fetchedAt: 100 });
+  });
+
+  it('setImageCache upserts (re-fetching the same url updates fetchedAt)', () => {
+    a.setImageCache({ urlHash: 'h1', mimeType: 'image/png', byteSize: 1234, fetchedAt: 100 });
+    a.setImageCache({ urlHash: 'h1', mimeType: 'image/png', byteSize: 1234, fetchedAt: 200 });
+    expect(a.getImageCache('h1')?.fetchedAt).toBe(200);
+  });
+
+  it('listImageCacheByAge returns oldest first', () => {
+    a.setImageCache({ urlHash: 'newer', mimeType: 'image/png', byteSize: 10, fetchedAt: 300 });
+    a.setImageCache({ urlHash: 'older', mimeType: 'image/png', byteSize: 10, fetchedAt: 100 });
+    a.setImageCache({ urlHash: 'mid', mimeType: 'image/png', byteSize: 10, fetchedAt: 200 });
+    expect(a.listImageCacheByAge().map((r) => r.urlHash)).toEqual(['older', 'mid', 'newer']);
+  });
+
+  it('deleteImageCache removes the row', () => {
+    a.setImageCache({ urlHash: 'h1', mimeType: 'image/png', byteSize: 10, fetchedAt: 100 });
+    a.deleteImageCache('h1');
+    expect(a.getImageCache('h1')).toBeNull();
+  });
+
+  it('imageCacheTotalBytes sums byteSize across all rows', () => {
+    a.setImageCache({ urlHash: 'h1', mimeType: 'image/png', byteSize: 1000, fetchedAt: 100 });
+    a.setImageCache({ urlHash: 'h2', mimeType: 'image/jpeg', byteSize: 2000, fetchedAt: 200 });
+    expect(a.imageCacheTotalBytes()).toBe(3000);
+  });
+
+  it('imageCacheTotalBytes is 0 for an empty cache', () => {
+    expect(a.imageCacheTotalBytes()).toBe(0);
+  });
+});

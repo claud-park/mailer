@@ -127,6 +127,13 @@ export class AccountCache {
         last_error TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_mutations_thread ON mutations(thread_id);
+      CREATE TABLE IF NOT EXISTS image_cache (
+        url_hash TEXT PRIMARY KEY,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        fetched_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_cache_fetched_at ON image_cache(fetched_at);
     `);
     // F6 CP7 (D7): scheduled_sends predates attempts/next_attempt_at — CREATE TABLE IF NOT EXISTS
     // never adds columns to an already-existing table, so migrate via ALTER TABLE, swallowing the
@@ -531,6 +538,41 @@ export class AccountCache {
         'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
       )
       .run(key, value);
+  }
+
+  // --- image_cache ---
+
+  getImageCache(urlHash: string): { urlHash: string; mimeType: string; byteSize: number; fetchedAt: number } | null {
+    const row = this.db
+      .prepare('SELECT url_hash, mime_type, byte_size, fetched_at FROM image_cache WHERE url_hash = ?')
+      .get(urlHash) as { url_hash: string; mime_type: string; byte_size: number; fetched_at: number } | undefined;
+    if (!row) return null;
+    return { urlHash: row.url_hash, mimeType: row.mime_type, byteSize: row.byte_size, fetchedAt: row.fetched_at };
+  }
+
+  setImageCache(row: { urlHash: string; mimeType: string; byteSize: number; fetchedAt: number }): void {
+    this.db
+      .prepare(
+        `INSERT INTO image_cache (url_hash, mime_type, byte_size, fetched_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(url_hash) DO UPDATE SET mime_type = excluded.mime_type, byte_size = excluded.byte_size, fetched_at = excluded.fetched_at`
+      )
+      .run(row.urlHash, row.mimeType, row.byteSize, row.fetchedAt);
+  }
+
+  listImageCacheByAge(): Array<{ urlHash: string; mimeType: string; byteSize: number; fetchedAt: number }> {
+    const rows = this.db
+      .prepare('SELECT url_hash, mime_type, byte_size, fetched_at FROM image_cache ORDER BY fetched_at ASC')
+      .all() as Array<{ url_hash: string; mime_type: string; byte_size: number; fetched_at: number }>;
+    return rows.map((r) => ({ urlHash: r.url_hash, mimeType: r.mime_type, byteSize: r.byte_size, fetchedAt: r.fetched_at }));
+  }
+
+  deleteImageCache(urlHash: string): void {
+    this.db.prepare('DELETE FROM image_cache WHERE url_hash = ?').run(urlHash);
+  }
+
+  imageCacheTotalBytes(): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(byte_size), 0) AS total FROM image_cache').get() as { total: number };
+    return row.total;
   }
 
   // --- followups ---
