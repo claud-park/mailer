@@ -9,7 +9,7 @@ import { SnippetPicker } from './SnippetPicker';
  * renderer는 이미 DOMParser로 doc을 갖고 있으므로 DOM 기반이 더 정확하다. */
 function extractRemoteImageUrls(doc: Document): string[] {
   const seen = new Set<string>();
-  doc.querySelectorAll('img[src^="http:"], img[src^="https:"]').forEach((img) => {
+  doc.querySelectorAll('img[src^="http:" i], img[src^="https:" i]').forEach((img) => {
     const src = img.getAttribute('src');
     if (src) seen.add(src);
   });
@@ -44,7 +44,7 @@ function prepareHtml(
 
   // remote-image-prefetch: https(s): 이미지는 캐시에 있으면 data URI로 치환. 캐시에 없으면 원본
   // src를 그대로 두되, CSP img-src가 data:만 허용하므로 실제로는 그냥 안 보인다(네트워크 시도 없음).
-  doc.querySelectorAll('img[src^="http:"], img[src^="https:"]').forEach((img) => {
+  doc.querySelectorAll('img[src^="http:" i], img[src^="https:" i]').forEach((img) => {
     const src = img.getAttribute('src') ?? '';
     const dataUri = remoteImages.get(src);
     if (dataUri) img.setAttribute('src', dataUri);
