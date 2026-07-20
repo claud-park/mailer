@@ -5,11 +5,12 @@ import { diffNewUnread, fireNewMailNotification, updateDockBadge } from './notif
 import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
 import { emitSyncState, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
-import { extractRemoteImageUrls, prefetch } from './image-cache';
+import { extractRemoteImageUrls, prefetch, pruneCache } from './image-cache';
 import { imageCacheDir } from './accounts';
 
 const TICK_MS = 60_000;
 const DAY_MS = 86_400_000;
+const IMAGE_CACHE_MAX_BYTES = 200 * 1024 * 1024;
 
 let timer: NodeJS.Timeout | null = null;
 let tickFn: (() => Promise<void>) | null = null;
@@ -264,7 +265,11 @@ async function prefetchNewThreadImages(
       console.error('[daemon] getThread for image prefetch failed', t.id, err);
     }
   }
-  if (urls.length) await prefetch(ctx.cache, imageCacheDir(ctx.email), urls);
+  if (urls.length) {
+    const cacheDir = imageCacheDir(ctx.email);
+    await prefetch(ctx.cache, cacheDir, urls);
+    pruneCache(ctx.cache, cacheDir, IMAGE_CACHE_MAX_BYTES);
+  }
 }
 
 export function stopSnoozeDaemon(): void {
