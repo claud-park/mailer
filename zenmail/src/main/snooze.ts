@@ -6,7 +6,7 @@ import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
 import { emitSyncState, isOnline, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
 import { extractRemoteImageUrls, isPrefetchableUrlE2E, prefetch, pruneCache } from './image-cache';
-import { imageCacheDir } from './accounts';
+import { getGlobalSetting, imageCacheDir } from './accounts';
 
 const TICK_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -67,9 +67,10 @@ export function startSnoozeDaemon(
                 ctx.lastKnownUnreadIds = nextIds;
                 if (newThreads.length) {
                   perAccountNew.push({ accountId: ctx.email, threads: newThreads });
-                  // remote-image-prefetch FR9: 오프라인 계정은 프리페치(네트워크 fetch)를 건너뛴다 —
-                  // pruneCache는 디스크 정리일 뿐 네트워크가 필요 없어 오프라인이어도 계속 돈다(아래).
-                  if (isOnline()) {
+                  // remote-image-prefetch FR9/NFR4: 오프라인이거나(네트워크 fetch 불가) 사용자가
+                  // 토글을 꺼둔 계정(US2 — 트래킹 픽셀 자동 발화를 원치 않음)은 프리페치를 건너뛴다.
+                  // pruneCache는 디스크 정리일 뿐 네트워크가 필요 없어 두 경우 모두 계속 돈다(아래).
+                  if (isOnline() && getGlobalSetting('autoLoadRemoteImages') !== 'false') {
                     void prefetchNewThreadImages(ctx as AccountContext & { provider: GmailProvider }, newThreads).catch(
                       (err) => console.error('[daemon] image prefetch failed', ctx.email, err)
                     );

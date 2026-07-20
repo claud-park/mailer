@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { MockGmailProvider, NEW_MAIL_QUERY, type GmailProvider } from './gmail';
 import { AccountCache } from './cache';
-import { __setUserDataDirForTests, imageCacheDir } from './accounts';
+import { __setUserDataDirForTests, imageCacheDir, setGlobalSetting } from './accounts';
 import type { AccountContext } from './ipc';
 
 // snooze.ts only pulls in electron at runtime via notify.ts (app.setBadgeCount) and
@@ -171,6 +171,56 @@ describe('snooze daemon — remote image prefetch on new-unread detection', () =
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(prefetch).not.toHaveBeenCalled();
     // pruning is local disk cleanup, not network — it must still run even while offline.
+    expect(pruneCache).toHaveBeenCalledWith(cache, imageCacheDir(email), 200 * 1024 * 1024);
+  });
+
+  it('skips prefetch (but still prunes) when autoLoadRemoteImages is off, even while online with new mail', async () => {
+    const email = 'demo5@zenmail.app';
+    const provider = new MockGmailProvider(email);
+    const baselineCount = await provider.inboxUnreadCount();
+    const { threads: baselineThreads } = await provider.listThreads({ q: NEW_MAIL_QUERY });
+    const baselineIds = new Set(baselineThreads.map((t) => t.id));
+    provider.injectNewMail({ from: 'sender@example.com', subject: 'Toggle-off test' });
+    // injectNewMail's bodyHtml is demoBody() (no remote <img>) — override getThread to inject one,
+    // so there IS a URL that would be prefetched if not for the toggle gate under test.
+    const originalGetThread = provider.getThread.bind(provider);
+    provider.getThread = async (threadId: string) => {
+      const detail = await originalGetThread(threadId);
+      const last = detail.messages[detail.messages.length - 1];
+      last.bodyHtml = '<div><img src="https://example.com/tracking-pixel.png"></div>';
+      return detail;
+    };
+
+    const cache = new AccountCache(path.join(dir, 'a.db'));
+    const ctx: AccountContext & { provider: GmailProvider } = {
+      email,
+      demo: true,
+      provider,
+      calendarProvider: null,
+      calendarReady: false,
+      cache,
+      needsReauth: false,
+      unreadCount: baselineCount,
+      lastKnownUnreadIds: baselineIds,
+    };
+
+    setGlobalSetting('autoLoadRemoteImages', 'false');
+
+    let contexts: AccountContext[] = [];
+    startSnoozeDaemon(() => contexts, () => null, () => {});
+    contexts = [ctx];
+
+    await runDaemonTickNow();
+
+    // Unlike the offline-skip test, a broken (un-gated) version of this code path still has to
+    // await a getThread() round-trip before it would call prefetch() — give that async chain
+    // generous time to settle (matching the ~300-420ms other tests in this file observe for the
+    // same MockGmailProvider round-trip) before asserting it never happened. A too-short wait
+    // here would make this test pass vacuously against broken code (confirmed: an earlier draft
+    // using a flat 50ms wait did exactly that).
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(prefetch).not.toHaveBeenCalled();
+    // pruning is local disk cleanup, not a privacy-relevant network fetch — it must still run.
     expect(pruneCache).toHaveBeenCalledWith(cache, imageCacheDir(email), 200 * 1024 * 1024);
   });
 
