@@ -25,7 +25,7 @@ export function isOnline(): boolean {
  * Registers the offline→online drain trigger. CP3's daemon registers here; until then it stays
  * unset and the flip/accelerator paths are no-ops beyond state updates + sync-state emission.
  */
-export function onReconnect(hook: () => void): void {
+export function onReconnect(hook: (() => void) | null): void {
   reconnectHook = hook;
 }
 

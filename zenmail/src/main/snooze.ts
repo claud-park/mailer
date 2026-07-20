@@ -4,7 +4,7 @@ import type { AccountContext } from './ipc';
 import { diffNewUnread, fireNewMailNotification, updateDockBadge } from './notify';
 import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
-import { emitSyncState, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
+import { emitSyncState, isOnline, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
 import { extractRemoteImageUrls, prefetch, pruneCache } from './image-cache';
 import { imageCacheDir } from './accounts';
 
@@ -67,9 +67,13 @@ export function startSnoozeDaemon(
                 ctx.lastKnownUnreadIds = nextIds;
                 if (newThreads.length) {
                   perAccountNew.push({ accountId: ctx.email, threads: newThreads });
-                  void prefetchNewThreadImages(ctx as AccountContext & { provider: GmailProvider }, newThreads).catch(
-                    (err) => console.error('[daemon] image prefetch failed', ctx.email, err)
-                  );
+                  // remote-image-prefetch FR9: 오프라인 계정은 프리페치(네트워크 fetch)를 건너뛴다 —
+                  // pruneCache는 디스크 정리일 뿐 네트워크가 필요 없어 오프라인이어도 계속 돈다(아래).
+                  if (isOnline()) {
+                    void prefetchNewThreadImages(ctx as AccountContext & { provider: GmailProvider }, newThreads).catch(
+                      (err) => console.error('[daemon] image prefetch failed', ctx.email, err)
+                    );
+                  }
                 }
               } catch (err) {
                 // ctx.lastKnownUnreadIds is NOT updated on failure (still whatever it was), so this
@@ -87,6 +91,10 @@ export function startSnoozeDaemon(
         } catch (err) {
           console.error('[daemon] badge refresh failed', ctx.email, err); // transient — 다음 틱에 재시도
         }
+        // remote-image-prefetch NFR5: 이 틱에 새 프리페치가 없어도(또는 오프라인이어도) image_cache는
+        // mail:get-remote-image on-demand 경로로도 계속 자라므로, 계정마다 매 틱 무조건 prune한다
+        // (디스크 읽기뿐이라 저렴 — pruneCache는 상한 미만이면 즉시 no-op).
+        pruneCache(ctx.cache, imageCacheDir(ctx.email), IMAGE_CACHE_MAX_BYTES);
       }
       updateDockBadge(getContexts());
       if (perAccountNew.length) fireNewMailNotification(perAccountNew, getWindow);
@@ -265,17 +273,15 @@ async function prefetchNewThreadImages(
       console.error('[daemon] getThread for image prefetch failed', t.id, err);
     }
   }
-  if (urls.length) {
-    const cacheDir = imageCacheDir(ctx.email);
-    await prefetch(ctx.cache, cacheDir, urls);
-    pruneCache(ctx.cache, cacheDir, IMAGE_CACHE_MAX_BYTES);
-  }
+  // pruneCache는 호출부(tick 루프)가 계정당 매 틱 무조건 돌린다 — 여기서 다시 부르지 않는다.
+  if (urls.length) await prefetch(ctx.cache, imageCacheDir(ctx.email), urls);
 }
 
 export function stopSnoozeDaemon(): void {
   if (timer) clearInterval(timer);
   timer = null;
   tickFn = null;
+  onReconnect(null); // stale hook would otherwise fire a background tick after teardown (e.g. tests)
 }
 
 /** E2E-only: force a daemon tick to run to completion (see ZENMAIL_E2E_PORT gate in ipc.ts). */

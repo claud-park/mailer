@@ -28,10 +28,11 @@ vi.mock('electron', () => {
 // observe the daemon → image-cache call without that guard getting in the way.
 vi.mock('./image-cache', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./image-cache')>();
-  return { ...actual, prefetch: vi.fn().mockResolvedValue(undefined) };
+  return { ...actual, prefetch: vi.fn().mockResolvedValue(undefined), pruneCache: vi.fn() };
 });
 
-import { prefetch } from './image-cache';
+import { prefetch, pruneCache } from './image-cache';
+import { setOnline } from './sync-state';
 import { runDaemonTickNow, startSnoozeDaemon, stopSnoozeDaemon } from './snooze';
 
 describe('snooze daemon — remote image prefetch on new-unread detection', () => {
@@ -41,10 +42,12 @@ describe('snooze daemon — remote image prefetch on new-unread detection', () =
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zm-snooze-'));
     __setUserDataDirForTests(dir);
     vi.mocked(prefetch).mockClear();
+    vi.mocked(pruneCache).mockClear();
   });
 
   afterEach(() => {
     stopSnoozeDaemon();
+    setOnline(true); // restore default — sync-state's `online` module var persists across tests in this file
     __setUserDataDirForTests(null);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -130,5 +133,67 @@ describe('snooze daemon — remote image prefetch on new-unread detection', () =
     await runDaemonTickNow();
 
     expect(prefetch).not.toHaveBeenCalled();
+  });
+
+  it('skips prefetch (but still prunes) for an offline account, even with new unread mail', async () => {
+    const email = 'demo3@zenmail.app';
+    const provider = new MockGmailProvider(email);
+    const baselineCount = await provider.inboxUnreadCount();
+    const { threads: baselineThreads } = await provider.listThreads({ q: NEW_MAIL_QUERY });
+    const baselineIds = new Set(baselineThreads.map((t) => t.id));
+    provider.injectNewMail({ from: 'sender@example.com', subject: 'Offline test' });
+
+    const cache = new AccountCache(path.join(dir, 'a.db'));
+    const ctx: AccountContext & { provider: GmailProvider } = {
+      email,
+      demo: true,
+      provider,
+      calendarProvider: null,
+      calendarReady: false,
+      cache,
+      needsReauth: false,
+      unreadCount: baselineCount,
+      lastKnownUnreadIds: baselineIds,
+    };
+
+    setOnline(false);
+
+    let contexts: AccountContext[] = [];
+    startSnoozeDaemon(() => contexts, () => null, () => {});
+    contexts = [ctx];
+
+    await runDaemonTickNow();
+
+    // give any (incorrectly) fire-and-forget prefetch a moment to have shown up if it were called
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(prefetch).not.toHaveBeenCalled();
+    // pruning is local disk cleanup, not network — it must still run even while offline.
+    expect(pruneCache).toHaveBeenCalledWith(cache, imageCacheDir(email), 200 * 1024 * 1024);
+  });
+
+  it('prunes the cache every tick even when no new unread thread is detected', async () => {
+    const email = 'demo4@zenmail.app';
+    const provider = new MockGmailProvider(email);
+    const cache = new AccountCache(path.join(dir, 'a.db'));
+    const ctx: AccountContext & { provider: GmailProvider } = {
+      email,
+      demo: true,
+      provider,
+      calendarProvider: null,
+      calendarReady: false,
+      cache,
+      needsReauth: false,
+      unreadCount: await provider.inboxUnreadCount(), // no rise
+      lastKnownUnreadIds: new Set(),
+    };
+
+    let contexts: AccountContext[] = [];
+    startSnoozeDaemon(() => contexts, () => null, () => {});
+    contexts = [ctx];
+
+    await runDaemonTickNow();
+
+    expect(prefetch).not.toHaveBeenCalled();
+    expect(pruneCache).toHaveBeenCalledWith(cache, imageCacheDir(email), 200 * 1024 * 1024);
   });
 });
