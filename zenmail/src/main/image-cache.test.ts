@@ -136,6 +136,11 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
       } else if (req.url === '/too-big') {
         res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(6 * 1024 * 1024) });
         res.end(Buffer.alloc(6 * 1024 * 1024));
+      } else if (req.url === '/lies-about-size') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        const chunk = Buffer.alloc(1024 * 1024); // 1MB per write, no Content-Length declared
+        for (let i = 0; i < 7; i++) res.write(chunk); // 7MB total > 5MB cap
+        res.end();
       } else {
         res.writeHead(404);
         res.end();
@@ -206,6 +211,14 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
 
   it('rejects a response over 5MB', async () => {
     const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/too-big`, {
+      fetchLive: true,
+      isAllowed: trustTestServer(baseUrl),
+    });
+    expect('error' in res).toBe(true);
+  });
+
+  it('rejects a response that lies about its size via streaming (no Content-Length, body exceeds cap)', async () => {
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/lies-about-size`, {
       fetchLive: true,
       isAllowed: trustTestServer(baseUrl),
     });

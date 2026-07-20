@@ -138,28 +138,39 @@ async function fetchImageBytes(
     if (await resolvesToPrivateAddress(hostname)) return { error: 'blocked: resolves to a private address' };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    let res: Response;
     try {
-      res = await fetch(current, { redirect: 'manual', signal: controller.signal });
+      const res = await fetch(current, { redirect: 'manual', signal: controller.signal });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (!location) return { error: 'redirect without location' };
+        current = new URL(location, current).toString();
+        continue;
+      }
+      if (!res.ok) return { error: `http ${res.status}` };
+      const mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
+      if (!mimeType.startsWith('image/')) return { error: `non-image content-type: ${mimeType}` };
+      const contentLength = res.headers.get('content-length');
+      if (contentLength && Number(contentLength) > MAX_BYTES) return { error: 'response too large' };
+      if (!res.body) return { error: 'empty response body' };
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_BYTES) {
+          await reader.cancel().catch(() => {});
+          return { error: 'response too large' };
+        }
+        chunks.push(value);
+      }
+      return { buf: Buffer.concat(chunks), mimeType };
     } catch (err) {
       return { error: `fetch failed: ${String(err)}` };
     } finally {
       clearTimeout(timer);
     }
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get('location');
-      if (!location) return { error: 'redirect without location' };
-      current = new URL(location, current).toString();
-      continue;
-    }
-    if (!res.ok) return { error: `http ${res.status}` };
-    const mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
-    if (!mimeType.startsWith('image/')) return { error: `non-image content-type: ${mimeType}` };
-    const contentLength = res.headers.get('content-length');
-    if (contentLength && Number(contentLength) > MAX_BYTES) return { error: 'response too large' };
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > MAX_BYTES) return { error: 'response too large' };
-    return { buf, mimeType };
   }
   return { error: 'too many redirects' };
 }
