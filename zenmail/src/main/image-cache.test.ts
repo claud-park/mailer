@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach , vi } from 'vitest';
-import { isPrefetchableUrl, extractRemoteImageUrls , getCachedOrFetch, prefetch, pruneCache } from './image-cache';
+import { isPrefetchableUrl, isPrefetchableUrlE2E, extractRemoteImageUrls , getCachedOrFetch, prefetch, pruneCache } from './image-cache';
 
 describe('isPrefetchableUrl', () => {
   it('allows a public https URL', () => {
@@ -52,6 +52,33 @@ describe('isPrefetchableUrl', () => {
 
   it('rejects malformed URLs', () => {
     expect(isPrefetchableUrl('not a url')).toBe(false);
+  });
+});
+
+describe('isPrefetchableUrlE2E', () => {
+  const OLD_ENV = process.env.ZENMAIL_DEMO_REMOTE_IMG;
+  afterEach(() => {
+    if (OLD_ENV === undefined) delete process.env.ZENMAIL_DEMO_REMOTE_IMG;
+    else process.env.ZENMAIL_DEMO_REMOTE_IMG = OLD_ENV;
+  });
+
+  it('behaves exactly like isPrefetchableUrl when ZENMAIL_DEMO_REMOTE_IMG is unset (production default)', () => {
+    delete process.env.ZENMAIL_DEMO_REMOTE_IMG;
+    expect(isPrefetchableUrlE2E('https://example.com/logo.png')).toBe(true);
+    expect(isPrefetchableUrlE2E('http://127.0.0.1:9601/hero.png')).toBe(false);
+  });
+
+  it('allows only the exact origin pinned by ZENMAIL_DEMO_REMOTE_IMG, not other private IPs', () => {
+    process.env.ZENMAIL_DEMO_REMOTE_IMG = 'http://127.0.0.1:9601/hero.png';
+    expect(isPrefetchableUrlE2E('http://127.0.0.1:9601/other-path.png')).toBe(true); // same origin
+    expect(isPrefetchableUrlE2E('http://127.0.0.1:9602/hero.png')).toBe(false); // different port = different origin
+    expect(isPrefetchableUrlE2E('http://127.0.0.1:1/probe.png')).toBe(false); // unrelated private-IP fixture still blocked
+    expect(isPrefetchableUrlE2E('http://169.254.169.254/latest/meta-data')).toBe(false);
+  });
+
+  it('still allows any normally-public URL regardless of the pinned origin', () => {
+    process.env.ZENMAIL_DEMO_REMOTE_IMG = 'http://127.0.0.1:9601/hero.png';
+    expect(isPrefetchableUrlE2E('https://example.com/logo.png')).toBe(true);
   });
 });
 

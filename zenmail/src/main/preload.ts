@@ -139,7 +139,8 @@ if (process.argv.includes('--zenmail-e2e')) {
   api.__debugSetCalendarReady = (v: boolean) => ipcRenderer.invoke('calendar:debug-set-ready', v);
   api.__debugFailNextAttachment = () => ipcRenderer.invoke('mail:debug-fail-next-attachment');
   api.__debugSetDownloadDir = (dir: string) => ipcRenderer.invoke('mail:debug-set-download-dir', dir);
-  api.__debugInjectNewMail = (accountId: string, opts?: { from?: string; subject?: string }) =>
+  api.__debugSetImageCacheDir = (dir: string) => ipcRenderer.invoke('mail:debug-set-image-cache-dir', dir);
+  api.__debugInjectNewMail = (accountId: string, opts?: { from?: string; subject?: string; bodyHtml?: string }) =>
     ipcRenderer.invoke('mail:debug-inject-new-mail', accountId, opts);
   api.__debugSetWindowFocused = (v: boolean) => ipcRenderer.invoke('mail:debug-set-window-focused', v);
   api.__debugNotificationLog = () => ipcRenderer.invoke('mail:debug-notification-log');

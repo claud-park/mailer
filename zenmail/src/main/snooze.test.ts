@@ -107,7 +107,10 @@ describe('snooze daemon — remote image prefetch on new-unread detection', () =
       },
       { timeout: 3000 }
     );
-    expect(prefetch).toHaveBeenCalledWith(cache, imageCacheDir(email), ['https://example.com/logo.png']);
+    // 4th arg (isAllowed) is undefined here — ZENMAIL_E2E_PORT is unset in this test process, so
+    // prefetchNewThreadImages doesn't pass the E2E-only local-image-server allowlist override
+    // (image-cache.ts isPrefetchableUrlE2E) and prefetch() falls back to its default strict guard.
+    expect(prefetch).toHaveBeenCalledWith(cache, imageCacheDir(email), ['https://example.com/logo.png'], undefined);
   });
 
   it('does not prefetch when no new unread thread is detected', async () => {

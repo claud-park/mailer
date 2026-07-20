@@ -40,7 +40,7 @@
 - **FR10**: 프리페치는 계정별 try/catch로 격리한다 — 한 계정의 실패가 다른 계정 처리나 데몬 틱 자체를 막지 않는다(기존 배지 로직과 동일 원칙).
 
 ### IPC 4-파일 계약
-- **FR11**: `mail:get-remote-image(accountId, url)` 핸들러 — `image-cache.getCachedOrFetch(accountId, url, { fetchLive: autoLoadRemoteImages 전역 설정 })` 호출 후 `{ dataUri, mimeType } | { error }` 반환.
+- **FR11**: `mail:get-remote-image(accountId, url)` 핸들러 — `image-cache.getCachedOrFetch(accountId, url, { fetchLive: true })` 호출 후 `{ dataUri, mimeType } | { error }` 반환. **Task 10 정정**: 최초 문구는 `fetchLive`를 `autoLoadRemoteImages` 전역 설정값으로 그대로 넘기라고 했으나, 이는 FR16과 상충한다 — 전역 설정이 false일 때(=게이트 버튼이 보이는 바로 그 상황) 버튼을 클릭해도 `fetchLive`가 false가 되어 캐시 miss 시 항상 `{ error }`만 반환하고 절대 로드되지 않는다. 이 IPC 호출 자체가 렌더러(자동 mount 효과 또는 게이트 버튼 클릭)가 "지금 로드하겠다"고 이미 결정한 뒤에만 발생하므로, 여기서 전역 설정을 다시 검사할 필요가 없다 — 항상 `fetchLive: true`. (E2E로 처음 발견 — TC-IMG-A3/B6.)
 - **FR12**: `types.ts`(`ZenmailApi.getRemoteImage`) · `ipc.ts`(핸들러) · `preload.ts`(메서드 노출)의 3-파일 계약으로 배선한다(accountId 첫 인자 관례 준수. `gmail.ts` provider 변경은 불필요 — Gmail API가 아닌 임의 URL을 다루므로).
 - **FR13**: 전역 설정 `autoLoadRemoteImages: boolean`(기본 `true`)을 `getGlobalSetting`/`setGlobalSetting`(theme과 동일 패턴)으로 persist한다.
 

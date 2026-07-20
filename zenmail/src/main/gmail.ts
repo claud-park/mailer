@@ -1112,8 +1112,10 @@ export class MockGmailProvider implements GmailProvider {
    * 주입한다(실제 도착 시뮬레이션). from/subject 미지정 시 데모 기본값 사용. 이 주입만으로는 배지·
    * 알림 파이프라인이 반응하지 않는다 — 다음 daemon tick(mail:debug-tick → runDaemonTickNow)이 있어야
    * 새 unread 증가를 관측한다(mock 전용, real provider엔 없음).
+   * remote-image-prefetch (TC-IMG-B*): bodyHtml을 지정하면 기본 demoBody 대신 그대로 사용 —
+   * 원격 이미지/사설 IP fixture를 담은 스레드를 "새로 도착한 unread 메일"로 주입하는 데 쓴다.
    */
-  injectNewMail(opts?: { from?: string; subject?: string }): void {
+  injectNewMail(opts?: { from?: string; subject?: string; bodyHtml?: string }): void {
     const now = Date.now();
     const id = `demo_new_${now}_${Math.random().toString(36).slice(2, 8)}`;
     const fromAddress = opts?.from ?? 'new-mail@example.com';
@@ -1129,7 +1131,7 @@ export class MockGmailProvider implements GmailProvider {
       cc: [] as Contact[],
       date: now,
       snippet,
-      bodyHtml: demoBody([snippet]),
+      bodyHtml: opts?.bodyHtml ?? demoBody([snippet]),
       bodyText: snippet,
       labelIds,
     };

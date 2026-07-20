@@ -30,7 +30,7 @@ import {
   RealGmailProvider,
   type GmailProvider,
 } from './gmail';
-import { getCachedOrFetch } from './image-cache';
+import { getCachedOrFetch, isPrefetchableUrlE2E } from './image-cache';
 import { debugNotificationLog, setDebugFocusOverride, updateDockBadge } from './notify';
 import { computeRevalidateDiff } from './revalidate';
 import { runDaemonTickNow } from './snooze';
@@ -795,10 +795,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     'mail:get-remote-image',
     async (_e, accountId: string, url: string): Promise<{ dataUri: string; mimeType: string } | { error: string }> => {
       try {
-        const fetchLive = (accounts.getGlobalSetting('autoLoadRemoteImages') ?? 'true') !== 'false';
         const ctx = requireContext(accountId);
+        // Task 10 정정(FR11/FR16 상충): 이 IPC를 호출할지 말지(자동 mount 시점 vs 게이트 버튼 클릭
+        // 시점)는 이미 렌더러(ThreadView.tsx MessageCard)가 autoLoadRemoteImages 전역 설정을 보고
+        // 결정한 뒤다 — 호출이 들어온 이상 항상 실제 로드 의도(자동이든 수동 동의든)이므로 여기서
+        // 전역 설정을 다시 검사해 fetchLive를 결정하면 안 된다. 원래 FR11 그대로 구현했더니 토글
+        // off일 때(=게이트 버튼이 보이는 바로 그 상황) 클릭해도 fetchLive=false가 되어 캐시 miss
+        // 시 항상 { error: 'not cached' }만 반환 — FR16이 약속한 "회귀 없는 완전한 게이트 폴백"이
+        // 깨져 있었다(E2E로 처음 발견, TC-IMG-A3/B6). prefetch()도 항상 fetchLive:true를 쓴다 —
+        // 이 IPC의 유일한 실제 호출부도 동일해야 일관적이다.
+        const fetchLive = true;
+        // E2E 전용: 하네스 로컬 이미지 서버(FR18) origin만 예외 허용 — 그 외 SSRF 가드는 그대로.
+        const isAllowed = process.env.ZENMAIL_E2E_PORT ? isPrefetchableUrlE2E : undefined;
         return await getCachedOrFetch(ctx.cache, imageCacheDirOverride ?? accounts.imageCacheDir(accountId), url, {
           fetchLive,
+          isAllowed,
         });
       } catch (err) {
         console.error('[image-cache] get-remote-image failed', err);
@@ -886,7 +897,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // 기존 mail:debug-tick(runDaemonTickNow)을 뒤이어 호출해야 daemon이 증가를 관측한다.
     ipcMain.handle(
       'mail:debug-inject-new-mail',
-      async (_e, accountId: string, opts?: { from?: string; subject?: string }) => {
+      async (_e, accountId: string, opts?: { from?: string; subject?: string; bodyHtml?: string }) => {
         const ctx = contexts.get(accountId);
         if (ctx?.provider instanceof MockGmailProvider) ctx.provider.injectNewMail(opts);
       }

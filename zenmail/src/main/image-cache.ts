@@ -59,6 +59,26 @@ export function isPrefetchableUrl(url: string): boolean {
   return true; // DNS hostname — resolved + re-checked at fetch time (Task 4)
 }
 
+/**
+ * E2E 전용: run-tc.mjs가 `ZENMAIL_DEMO_REMOTE_IMG`로 지정한 하네스 로컬 이미지 서버 origin만
+ * 예외적으로 허용한다(FR18 — demo_img_1이 그 서버를 실제 프리페치 대상으로 재사용한다는 전제).
+ * `ZENMAIL_E2E_PORT`가 설정된 프로세스(E2E 하네스가 구동한 Electron)에서만 활성화되며, 패키징된
+ * 앱은 이 env가 절대 설정되지 않으므로 프로덕션에서는 `isPrefetchableUrl`과 동작이 동일하다.
+ * 이 origin 하나만 예외이고, 다른 모든 사설/루프백 URL(SSRF 차단 검증용 fixture 포함)은 여전히
+ * 차단된다 — 호출부(ipc.ts/snooze.ts)에서 `ZENMAIL_E2E_PORT`가 설정된 경우에만 이 함수를
+ * `isAllowed`로 넘긴다.
+ */
+export function isPrefetchableUrlE2E(url: string): boolean {
+  if (isPrefetchableUrl(url)) return true;
+  const allowedOrigin = process.env.ZENMAIL_DEMO_REMOTE_IMG;
+  if (!allowedOrigin) return false;
+  try {
+    return new URL(url).origin === new URL(allowedOrigin).origin;
+  } catch {
+    return false;
+  }
+}
+
 const IMG_SRC_RE = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
 
 /** bodyHtml에서 원격(https?:) img src만 추출, 순서 보존 + 중복 제거. main엔 DOMParser가 없어 정규식 사용. */

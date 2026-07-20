@@ -324,9 +324,13 @@ export interface ZenmailApi {
   __debugFailNextAttachment?(): Promise<void>;
   /** E2E-only: 다운로드 저장 디렉터리 오버라이드(실제 Downloads 오염 방지 + 저장 경로/리네임 검증). */
   __debugSetDownloadDir?(dir: string): Promise<void>;
+  /** E2E-only (remote-image-prefetch FR19): 이미지 캐시 디렉터리 오버라이드(실 userData/image-cache
+   *  오염 방지 + 캐시 히트/미스 검증). */
+  __debugSetImageCacheDir?(dir: string): Promise<void>;
   /** E2E-only (new-mail-alerts TC-ALT-*): 지정 계정의 데모 데이터셋에 새 unread INBOX 스레드 1건을
-   *  주입한다(mock 전용). 이 훅만으로는 배지/알림이 반응하지 않는다 — 뒤이어 __debugTick이 필요하다. */
-  __debugInjectNewMail?(accountId: string, opts?: { from?: string; subject?: string }): Promise<void>;
+   *  주입한다(mock 전용). 이 훅만으로는 배지/알림이 반응하지 않는다 — 뒤이어 __debugTick이 필요하다.
+   *  bodyHtml을 지정하면(remote-image-prefetch) 기본 demoBody 대신 그대로 사용된다. */
+  __debugInjectNewMail?(accountId: string, opts?: { from?: string; subject?: string; bodyHtml?: string }): Promise<void>;
   /** E2E-only (TC-ALT-D1/D2): real OS window focus를 대신하는 결정론적 오버라이드 — D5 포커스 억제
    *  게이트가 실제 isFocused() 대신 이 값을 읽는다. */
   __debugSetWindowFocused?(v: boolean): Promise<void>;

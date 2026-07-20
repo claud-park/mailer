@@ -5,7 +5,7 @@ import { diffNewUnread, fireNewMailNotification, updateDockBadge } from './notif
 import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
 import { emitSyncState, isOnline, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
-import { extractRemoteImageUrls, prefetch, pruneCache } from './image-cache';
+import { extractRemoteImageUrls, isPrefetchableUrlE2E, prefetch, pruneCache } from './image-cache';
 import { imageCacheDir } from './accounts';
 
 const TICK_MS = 60_000;
@@ -274,7 +274,9 @@ async function prefetchNewThreadImages(
     }
   }
   // pruneCache는 호출부(tick 루프)가 계정당 매 틱 무조건 돌린다 — 여기서 다시 부르지 않는다.
-  if (urls.length) await prefetch(ctx.cache, imageCacheDir(ctx.email), urls);
+  // E2E 전용: 하네스 로컬 이미지 서버(FR18) origin만 예외 허용 — 그 외 SSRF 가드는 그대로.
+  const isAllowed = process.env.ZENMAIL_E2E_PORT ? isPrefetchableUrlE2E : undefined;
+  if (urls.length) await prefetch(ctx.cache, imageCacheDir(ctx.email), urls, isAllowed);
 }
 
 export function stopSnoozeDaemon(): void {

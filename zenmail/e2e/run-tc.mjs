@@ -27,19 +27,50 @@ const USERDATA = mkdtempSync(path.join(tmpdir(), 'zenmail-e2e-'));
 // remote-image (TC-IMG): 로컬 1x1 PNG 서버. 앱 오리진과 다른 포트라 CSP 'self'에 안 걸리는
 // "원격" 이미지 역할 — ZENMAIL_DEMO_REMOTE_IMG로 데모 시드(demo_img_1)에 주입되고, imgHits로
 // 게이트 동의 전 네트워크 요청이 아예 없었음을 검증한다(프라이버시 불변식).
+//
+// remote-image-prefetch (TC-IMG-B*, DECISIONS D9-3): 이 서버의 origin이 ZENMAIL_DEMO_REMOTE_IMG를
+// 통해 image-cache.ts의 isPrefetchableUrlE2E 허용목록에 등록되므로(E2E 전용, ZENMAIL_E2E_PORT
+// 게이트), 같은 origin 아래 서로 다른 경로(IMG_URL_B1/B2/B9/B7)를 새 캐시 키로 자유롭게 쓸 수
+// 있다 — urlHash = sha256(url)이므로 경로가 다르면 완전히 독립된 캐시 엔트리가 된다.
 const IMG_PORT = 9600 + Math.floor(Math.random() * 100);
 const IMG_URL = `http://127.0.0.1:${IMG_PORT}/hero.png`;
+const IMG_URL_B1 = `http://127.0.0.1:${IMG_PORT}/b1-daemon-prefetched.png`;
+const IMG_URL_B2 = `http://127.0.0.1:${IMG_PORT}/b2-on-demand.png`;
+const IMG_URL_B9 = `http://127.0.0.1:${IMG_PORT}/b9-offline.png`;
 const PNG_1PX = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64'
 );
+// TC-IMG-B7: >5MB fixture — image-cache.ts의 fetchImageBytes는 Content-Length를 스트리밍 전에
+// 먼저 읽어 5MB 캡을 넘으면 즉시 abort하므로, 이 응답이 실제로 전송 완료될 필요는 없다.
+const BIG_IMAGE_BYTES = Buffer.alloc(6 * 1024 * 1024, 0);
+const IMG_URL_B7 = `http://127.0.0.1:${IMG_PORT}/b7-oversized.png`;
 let imgHits = 0;
-const imgServer = http.createServer((_req, res) => {
+const imgServer = http.createServer((req, res) => {
   imgHits++;
+  if (req.url && req.url.includes('b7-oversized')) {
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(BIG_IMAGE_BYTES.length) });
+    res.end(BIG_IMAGE_BYTES);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'image/png' });
   res.end(PNG_1PX);
 });
 imgServer.listen(IMG_PORT, '127.0.0.1');
+
+// TC-IMG-B3/B4 SSRF-block fixture: a SEPARATE local server on a different origin than IMG_URL, so
+// it's never covered by the ZENMAIL_DEMO_REMOTE_IMG allowlist — isPrefetchableUrl's loopback rule
+// must block it exactly like any real private-IP target. A genuinely live, reachable local server
+// (rather than an unroutable address) proves the block fires at the guard itself, not a timeout.
+const PROBE_PORT = 9700 + Math.floor(Math.random() * 100);
+let probeHits = 0;
+const probeServer = http.createServer((_req, res) => {
+  probeHits++;
+  res.writeHead(200, { 'Content-Type': 'image/png' });
+  res.end(PNG_1PX);
+});
+probeServer.listen(PROBE_PORT, '127.0.0.1');
+const PROBE_URL = `http://127.0.0.1:${PROBE_PORT}/probe.png`;
 
 const results = [];
 function record(id, status, note = '') {
@@ -583,11 +614,45 @@ async function tryAttScenario(page, name, fn) {
   }
 }
 
-// --- remote-image: TC-IMG-A1~A3 — 본문 원격 이미지 게이트·로드 ------------------------------
+/** drives toggleAutoLoadRemoteImages() via the kbar action — same command-palette pattern as
+ *  toggleThemeViaKbar. Used to force the click-gate fallback path (FR16) for TC-IMG-A1~A3/B5/B6. */
+async function toggleAutoLoadImagesViaKbar(page) {
+  await focusBody(page);
+  await page.keyboard.press('Meta+k');
+  await sleep(200);
+  await page.keyboard.type('Toggle automatic remote image');
+  await sleep(200);
+  await page.keyboard.press('Enter');
+  await sleep(200);
+}
+
+/** bodyHtml fixture text lives inside the sandboxed srcDoc iframe (ThreadView's MessageCard), not
+ *  the outer page's own document.body — bodyText() can never see it. Read the iframe body instead. */
+async function iframeIncludes(page, text) {
+  return page.evaluate(
+    (t) => {
+      const f = document.querySelector('iframe[title^="message-"]');
+      const body = f?.contentDocument?.body;
+      return !!body && body.textContent.includes(t);
+    },
+    text
+  );
+}
+
+// --- remote-image: TC-IMG-A1~A3 (click-gate fallback) + B5/B6 (explicit toggle-off) -----------
 // 회귀 배경: srcdoc iframe은 부모(index.html) CSP를 상속하므로 부모 img-src에 https:/http:가
 // 빠지면 iframe 자체 CSP가 허용해도 원격 이미지가 절대 로드되지 않는다(게이트를 눌러도 무반응).
 // A2가 프라이버시 절반(동의 전 요청 0건), A3가 로드 절반(동의 후 실제 로드)을 고정한다.
+//
+// remote-image-prefetch (D5/FR16): autoLoadRemoteImages 기본값이 true로 바뀌면서 이 게이트
+// 버튼은 토글이 OFF일 때만 나타난다(ThreadView.tsx: hasRemoteImages && !autoLoadRemoteImages &&
+// ...) — 그래서 A1~A3를 그대로 재현하려면 먼저 명시적으로 토글을 꺼야 한다. 이 토글-off 전제
+// 자체가 TC-IMG-B5(게이트 노출 + 동의 전 0건)/B6(동의 후 로드)이 검증하려는 것과 정확히 같은
+// 시나리오이므로, 같은 증거를 재사용해 함께 기록한다(끝에서 토글을 다시 켜 세션 나머지에는
+// 기본값 상태를 남긴다).
 async function scenario_img(page) {
+  await toggleAutoLoadImagesViaKbar(page); // off — click-gate fallback(FR16)의 전제 조건
+
   await focusBody(page);
   await page.keyboard.press('g');
   await page.keyboard.press('i');
@@ -598,7 +663,7 @@ async function scenario_img(page) {
   });
 
   // A1: 원격 이미지 메일에 게이트 버튼 노출
-  await waitFor(
+  const gateVisible = await waitFor(
     () =>
       page.evaluate(() =>
         Array.from(document.querySelectorAll('button')).some(
@@ -615,11 +680,17 @@ async function scenario_img(page) {
     const img = f?.contentDocument?.querySelector('img');
     return img ? { naturalWidth: img.naturalWidth } : null;
   });
-  if (before && before.naturalWidth === 0 && imgHits === 0) {
+  const a2ok = !!before && before.naturalWidth === 0 && imgHits === 0;
+  if (a2ok) {
     record('TC-IMG-A2', 'PASS', 'remote img blocked before consent (0 network hits)');
   } else {
     record('TC-IMG-A2', 'FAIL', `naturalWidth=${before?.naturalWidth} imgHits=${imgHits}`);
   }
+  record(
+    'TC-IMG-B5',
+    gateVisible && a2ok ? 'PASS' : 'FAIL',
+    `toggle off -> gate shown=${gateVisible} + 0 network hits before consent=${a2ok} (same evidence as TC-IMG-A1/A2 above)`
+  );
 
   // A3: 게이트 클릭 → 실제 로드
   await page.evaluate(() => {
@@ -627,7 +698,7 @@ async function scenario_img(page) {
       .find((b) => b.textContent.trim() === 'Load remote images')
       ?.click();
   });
-  await waitFor(
+  const loadedAfterConsent = await waitFor(
     () =>
       page.evaluate(() => {
         const f = document.querySelector('iframe[title^="message-"]');
@@ -637,6 +708,13 @@ async function scenario_img(page) {
     { timeout: 8000, desc: 'remote img loaded after consent' }
   );
   record('TC-IMG-A3', 'PASS', `remote img loads after consent (server hits=${imgHits})`);
+  record(
+    'TC-IMG-B6',
+    loadedAfterConsent ? 'PASS' : 'FAIL',
+    `gate-click still loads with auto-load toggle off (same evidence as TC-IMG-A3 above, server hits=${imgHits})`
+  );
+
+  await toggleAutoLoadImagesViaKbar(page); // restore default (on) for the rest of this shared session
 }
 
 async function tryImgScenario(page, name, fn) {
@@ -1167,6 +1245,202 @@ async function runAltSession(page) {
 }
 
 // ---------------------------------------------------------------------------
+// remote-image-prefetch: TC-IMG-B1~B9 (docs/features/remote-image-prefetch/TC.md) — dedicated
+// final session on its OWN fresh user-data dir (mirrors TC-MA/TC-ALT above), so notify.ts's
+// per-account lastKnownUnreadIds cold-start guard starts genuinely undefined here too (the warm-up
+// step below deliberately absorbs that first-ever rise-tick, mirroring TC-ALT-C1's precedent —
+// diffNewUnread returns newThreads=[] on an account's very first rise, which also silently starves
+// prefetchNewThreadImages since it shares the same newThreads gate).
+// ---------------------------------------------------------------------------
+
+async function openInboxImg(page) {
+  await focusBody(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('i');
+  await sleep(300);
+}
+
+async function runImgBSession(page) {
+  const DEMO_EMAIL = 'demo@zenmail.app';
+  await focusBody(page);
+  await page.keyboard.press('Escape');
+
+  await debugInjectNewMail(page, DEMO_EMAIL, { from: 'warmup@example.com', subject: 'Warm-up (cold-start absorb)' });
+  await debugTick(page);
+  await sleep(300);
+
+  // --- TC-IMG-B1: autoLoadRemoteImages=true(default) + daemon prefetches a newly-detected unread
+  // thread -> opening it shows img[src^="data:"] immediately, no gate button, no extra network hit ---
+  try {
+    const hitsBefore = imgHits;
+    await debugInjectNewMail(page, DEMO_EMAIL, {
+      from: 'press-b1@pixelpost.example',
+      subject: 'B1 daemon-prefetched hero',
+      bodyHtml: `<div><p>B1 fixture body.</p><p><img src="${IMG_URL_B1}" alt="hero"></p></div>`,
+    });
+    await debugTick(page);
+    await waitFor(async () => imgHits > hitsBefore, { timeout: 5000, desc: 'daemon prefetch hit img server' });
+    const hitsAfterPrefetch = imgHits;
+    await reloadApp(page); // injectNewMail alone doesn't push a threads-changed diff — pick it up on reload
+    await openInboxImg(page);
+    await clickRowContaining(page, 'B1 daemon-prefetched hero');
+    await waitFor(() => iframeIncludes(page, 'B1 fixture body'), { desc: 'B1 thread open' });
+    const noGate = await page.evaluate(
+      () => !Array.from(document.querySelectorAll('button')).some((b) => b.textContent.trim() === 'Load remote images')
+    );
+    const loaded = await waitFor(
+      () =>
+        page.evaluate(() => {
+          const f = document.querySelector('iframe[title^="message-"]');
+          const img = f?.contentDocument?.querySelector('img');
+          return !!img && (img.getAttribute('src') || '').startsWith('data:');
+        }),
+      { timeout: 5000, desc: 'B1 img already data: on open' }
+    );
+    await sleep(300);
+    const noExtraHit = imgHits === hitsAfterPrefetch; // opening must be a pure cache hit
+    const ok = noGate && loaded && noExtraHit;
+    record('TC-IMG-B1', ok ? 'PASS' : 'FAIL', `noGate=${noGate} loaded=${loaded} noExtraHit=${noExtraHit} (imgHits prefetch=${hitsAfterPrefetch} open=${imgHits})`);
+  } catch (err) {
+    record('TC-IMG-B1', 'FAIL', String(err).slice(0, 300));
+  }
+
+  // --- TC-IMG-B2: a thread never touched by the daemon -> opening it triggers the on-demand mount
+  // fetch (cache miss) -> eventually img[src^="data:"], and the cache warms so a second open is
+  // an immediate, no-extra-request cache hit ---
+  try {
+    const hitsBefore = imgHits;
+    await debugInjectNewMail(page, DEMO_EMAIL, {
+      from: 'press-b2@pixelpost.example',
+      subject: 'B2 on-demand hero',
+      bodyHtml: `<div><p>B2 fixture body.</p><p><img src="${IMG_URL_B2}" alt="hero"></p></div>`,
+    });
+    // deliberately NO debugTick — exercises the click-open (cache-miss) on-demand fetch path, not B1's daemon path.
+    await reloadApp(page);
+    await openInboxImg(page);
+    await clickRowContaining(page, 'B2 on-demand hero');
+    await waitFor(() => iframeIncludes(page, 'B2 fixture body'), { desc: 'B2 thread open' });
+    const loadedFirst = await waitFor(
+      () =>
+        page.evaluate(() => {
+          const f = document.querySelector('iframe[title^="message-"]');
+          const img = f?.contentDocument?.querySelector('img');
+          return !!img && (img.getAttribute('src') || '').startsWith('data:');
+        }),
+      { timeout: 8000, desc: 'B2 img eventually data: after on-demand fetch' }
+    );
+    const hitsAfterFirstOpen = imgHits;
+    const liveHitHappened = hitsAfterFirstOpen > hitsBefore;
+    await reloadApp(page); // second open (fresh reload) must be an immediate cache hit
+    await openInboxImg(page);
+    await clickRowContaining(page, 'B2 on-demand hero');
+    await waitFor(() => iframeIncludes(page, 'B2 fixture body'), { desc: 'B2 thread reopen' });
+    const loadedSecond = await waitFor(
+      () =>
+        page.evaluate(() => {
+          const f = document.querySelector('iframe[title^="message-"]');
+          const img = f?.contentDocument?.querySelector('img');
+          return !!img && (img.getAttribute('src') || '').startsWith('data:');
+        }),
+      { timeout: 5000, desc: 'B2 img immediately data: on reopen (cached)' }
+    );
+    await sleep(300);
+    const noExtraHitOnReopen = imgHits === hitsAfterFirstOpen;
+    const ok = loadedFirst && liveHitHappened && loadedSecond && noExtraHitOnReopen;
+    record(
+      'TC-IMG-B2',
+      ok ? 'PASS' : 'FAIL',
+      `loadedFirst=${loadedFirst} liveHit=${liveHitHappened} loadedSecond=${loadedSecond} noExtraHitOnReopen=${noExtraHitOnReopen}`
+    );
+  } catch (err) {
+    record('TC-IMG-B2', 'FAIL', String(err).slice(0, 300));
+  }
+
+  // --- TC-IMG-B3 (daemon prefetch attempt on a private-IP fixture -> 0 requests to it) /
+  // TC-IMG-B4 (opening it also triggers the on-demand path -> still 0 requests, no gate, broken img) ---
+  try {
+    const probeBefore = probeHits;
+    await debugInjectNewMail(page, DEMO_EMAIL, {
+      from: 'ssrf-fixture@example.com',
+      subject: 'B3B4 private IP fixture',
+      bodyHtml: `<div><p>SSRF fixture body.</p><p><img src="${PROBE_URL}" alt="probe"></p></div>`,
+    });
+    await debugTick(page);
+    await sleep(500); // give a (incorrectly) fire-and-forget prefetch attempt a moment to have shown up
+    const probeAfterTick = probeHits;
+    const b3ok = probeAfterTick === probeBefore;
+    record('TC-IMG-B3', b3ok ? 'PASS' : 'FAIL', `probeHits ${probeBefore}->${probeAfterTick} after daemon prefetch attempt (isPrefetchableUrl blocks 127.0.0.1)`);
+
+    await reloadApp(page);
+    await openInboxImg(page);
+    await clickRowContaining(page, 'B3B4 private IP fixture');
+    await waitFor(() => iframeIncludes(page, 'SSRF fixture body'), { desc: 'B3/B4 thread open' });
+    await sleep(600); // on-demand mount-effect fetch attempt (autoLoadRemoteImages=true) -> guard blocks again
+    const probeAfterOpen = probeHits;
+    const noGate = await page.evaluate(
+      () => !Array.from(document.querySelectorAll('button')).some((b) => b.textContent.trim() === 'Load remote images')
+    );
+    const imgBroken = await page.evaluate(() => {
+      const f = document.querySelector('iframe[title^="message-"]');
+      const img = f?.contentDocument?.querySelector('img');
+      return !!img && !(img.getAttribute('src') || '').startsWith('data:') && img.naturalWidth === 0;
+    });
+    const b4ok = probeAfterOpen === probeBefore && noGate && imgBroken;
+    record('TC-IMG-B4', b4ok ? 'PASS' : 'FAIL', `probeHits ${probeBefore}->${probeAfterOpen} noGate=${noGate} imgBroken=${imgBroken}`);
+  } catch (err) {
+    record('TC-IMG-B3', 'FAIL', String(err).slice(0, 300));
+    record('TC-IMG-B4', 'FAIL', String(err).slice(0, 300));
+  }
+
+  // --- TC-IMG-B7: a >5MB single response is aborted (Content-Length cap) and never rendered, even
+  // though the request itself reaches the (allowlisted) server — proves this is the size guard, not
+  // the SSRF guard (that's already covered by B3/B4 above) ---
+  try {
+    const hitsBefore = imgHits;
+    await debugInjectNewMail(page, DEMO_EMAIL, {
+      from: 'press-b7@pixelpost.example',
+      subject: 'B7 oversized image',
+      bodyHtml: `<div><p>B7 fixture body.</p><p><img src="${IMG_URL_B7}" alt="big"></p></div>`,
+    });
+    await reloadApp(page);
+    await openInboxImg(page);
+    await clickRowContaining(page, 'B7 oversized image');
+    await waitFor(() => iframeIncludes(page, 'B7 fixture body'), { desc: 'B7 thread open' });
+    await sleep(1500); // let the on-demand fetch attempt + Content-Length abort resolve
+    const hitReachedServer = imgHits > hitsBefore;
+    const stillBroken = await page.evaluate(() => {
+      const f = document.querySelector('iframe[title^="message-"]');
+      const img = f?.contentDocument?.querySelector('img');
+      return !!img && !(img.getAttribute('src') || '').startsWith('data:');
+    });
+    const ok = hitReachedServer && stillBroken;
+    record('TC-IMG-B7', ok ? 'PASS' : 'FAIL', `hitReachedServer=${hitReachedServer} stillBroken=${stillBroken}`);
+  } catch (err) {
+    record('TC-IMG-B7', 'FAIL', String(err).slice(0, 300));
+  }
+
+  // --- TC-IMG-B9: account offline during a daemon tick -> prefetch skipped for the new unread mail
+  // (0 network requests); pruneCache still runs (disk-only) but that's covered by vitest TC-IMG-F4 ---
+  try {
+    const hitsBefore = imgHits;
+    await syncSetOnline(page, false);
+    await debugInjectNewMail(page, DEMO_EMAIL, {
+      from: 'press-b9@pixelpost.example',
+      subject: 'B9 offline fixture',
+      bodyHtml: `<div><p>B9 fixture body.</p><p><img src="${IMG_URL_B9}" alt="hero"></p></div>`,
+    });
+    await debugTick(page);
+    await sleep(500);
+    const noHit = imgHits === hitsBefore;
+    record('TC-IMG-B9', noHit ? 'PASS' : 'FAIL', `imgHits ${hitsBefore}->${imgHits} while offline (isOnline() gate in snooze.ts)`);
+  } catch (err) {
+    record('TC-IMG-B9', 'FAIL', String(err).slice(0, 300));
+  } finally {
+    await syncSetOnline(page, true); // restore online regardless of pass/fail above
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test scenarios
 // ---------------------------------------------------------------------------
 
@@ -1435,6 +1709,25 @@ async function run() {
   try { execSync(`pkill -f -- "--user-data-dir=${ALT_USERDATA}"`); } catch { /* none left — fine */ }
   rmDirBestEffort(ALT_USERDATA);
 
+  // --- remote-image-prefetch: TC-IMG-B1~B9 — dedicated final session on its OWN fresh user-data
+  // dir (mirrors TC-MA/TC-ALT above), for the same reason as TC-ALT: the daemon's cold-start
+  // rise-tick (notify.ts diffNewUnread, lastKnownUnreadIds undefined) must genuinely be this
+  // account's first-ever rise here, which runImgBSession's own warm-up step deliberately absorbs.
+  const IMG_USERDATA = mkdtempSync(path.join(tmpdir(), 'zenmail-e2e-img-'));
+  launchApp(PORT, IMG_USERDATA);
+  try {
+    ({ browser, page } = await connectPage(PORT));
+    await demoLogin(page);
+    await runImgBSession(page);
+  } catch (err) {
+    console.error('[harness] scenario error (remote-image-prefetch TC-IMG-B*):', err);
+    if (!results.some((r) => r.id.startsWith('TC-IMG-B'))) record('TC-IMG-B1', 'FAIL', `session fatal: ${String(err).slice(0, 160)}`);
+  }
+  await browser?.close().catch(() => {});
+  await killApp();
+  try { execSync(`pkill -f -- "--user-data-dir=${IMG_USERDATA}"`); } catch { /* none left — fine */ }
+  rmDirBestEffort(IMG_USERDATA);
+
   // --- TC-KM-G1/G2/G3: regression gates ------------------------------------
   const nonKmFails = results.filter((r) => !r.id.startsWith('TC-KM') && !r.id.startsWith('TC-SP') && r.status === 'FAIL');
   if (nonKmFails.length === 0) {
@@ -1629,6 +1922,23 @@ async function run() {
   } else {
     record('TC-ALT-G3', 'FAIL', `${anyFailSoFar.length} assertions failed: ${anyFailSoFar.map((r) => r.id).join(', ')}`);
   }
+
+  // --- TC-IMG-G1/G2: remote-image-prefetch regression gates -----------------
+  // G1 maps onto TC.md's own wording ("기존 TC-IMG-A1~A3 전부 무회귀") — derived directly from the
+  // A1/A2/A3 records above (scenario_img), not re-run here.
+  const imgA = results.filter((r) => r.id === 'TC-IMG-A1' || r.id === 'TC-IMG-A2' || r.id === 'TC-IMG-A3');
+  const imgAOk = imgA.length === 3 && imgA.every((r) => r.status === 'PASS');
+  record('TC-IMG-G1', imgAOk ? 'PASS' : 'FAIL', `TC-IMG-A1/A2/A3: ${imgA.map((r) => `${r.id}=${r.status}`).join(', ')}`);
+  // G2 ("전체 E2E 스위트 무회귀") is the same whole-harness property TC-ALT-G3 above already checks —
+  // reuse the same 0-FAIL tally (computed after every session, including this one, has recorded).
+  const anyFailAfterImg = results.filter((r) => r.status === 'FAIL');
+  record(
+    'TC-IMG-G2',
+    anyFailAfterImg.length === 0 ? 'PASS' : 'FAIL',
+    anyFailAfterImg.length === 0
+      ? `0 FAIL across all ${results.length} assertions this run`
+      : `${anyFailAfterImg.length} assertions failed: ${anyFailAfterImg.map((r) => r.id).join(', ')}`
+  );
 
   console.log('\n=== TC Results ===');
   for (const r of results) {
