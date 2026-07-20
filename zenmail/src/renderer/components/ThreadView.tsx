@@ -5,13 +5,23 @@ import { labelChipFallback } from '../lib/theme';
 import { textToFragment } from '../lib/snippets';
 import { SnippetPicker } from './SnippetPicker';
 
-const REMOTE_IMG_RE = /<img[^>]+src=["']?https?:/i;
+/** 본문에서 원격(https?:) img src만 추출 — main의 extractRemoteImageUrls(정규식)와 별도 구현,
+ * renderer는 이미 DOMParser로 doc을 갖고 있으므로 DOM 기반이 더 정확하다. */
+function extractRemoteImageUrls(doc: Document): string[] {
+  const seen = new Set<string>();
+  doc.querySelectorAll('img[src^="http:"], img[src^="https:"]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (src) seen.add(src);
+  });
+  return [...seen];
+}
 
 /** Sanitize + prepare message HTML for the sandboxed frame. */
 function prepareHtml(
   message: MessageDetail,
-  opts: { showQuoted: boolean; allowImages: boolean; theme: 'light' | 'dark' },
-  inlineImages: Map<string, string>
+  opts: { showQuoted: boolean; theme: 'light' | 'dark' },
+  inlineImages: Map<string, string>,
+  remoteImages: Map<string, string>
 ): { srcDoc: string; hasQuoted: boolean } {
   const raw = message.bodyHtml || `<pre style="white-space:pre-wrap">${message.bodyText}</pre>`;
   const doc = new DOMParser().parseFromString(raw, 'text/html');
@@ -32,12 +42,19 @@ function prepareHtml(
     if (dataUri) img.setAttribute('src', dataUri);
   });
 
+  // remote-image-prefetch: https(s): 이미지는 캐시에 있으면 data URI로 치환. 캐시에 없으면 원본
+  // src를 그대로 두되, CSP img-src가 data:만 허용하므로 실제로는 그냥 안 보인다(네트워크 시도 없음).
+  doc.querySelectorAll('img[src^="http:"], img[src^="https:"]').forEach((img) => {
+    const src = img.getAttribute('src') ?? '';
+    const dataUri = remoteImages.get(src);
+    if (dataUri) img.setAttribute('src', dataUri);
+  });
+
   const quoted = doc.querySelectorAll('.gmail_quote, blockquote');
   const hasQuoted = quoted.length > 0;
   if (!opts.showQuoted) quoted.forEach((el) => el.remove());
 
-  const imgSrc = opts.allowImages ? "data: https: http:" : 'data:';
-  const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;`;
+  const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:;`;
   const srcDoc = `<!doctype html><html><head>
     <meta http-equiv="Content-Security-Policy" content="${csp}">
     <base target="_blank">
@@ -161,13 +178,15 @@ function AttachmentStrip({ message }: { message: MessageDetail }) {
 
 function MessageCard({ message, isLast }: { message: MessageDetail; isLast: boolean }) {
   const [showQuoted, setShowQuoted] = useState(false);
-  const [allowImages, setAllowImages] = useState(false);
   const [height, setHeight] = useState(120);
   const [inlineImages, setInlineImages] = useState<Map<string, string>>(new Map());
+  const [remoteImages, setRemoteImages] = useState<Map<string, string>>(new Map());
   const frameRef = useRef<HTMLIFrameElement>(null);
 
   const theme = useMailStore((s) => s.theme);
   const fetchAttachmentImage = useMailStore((s) => s.fetchAttachmentImage);
+  const autoLoadRemoteImages = useMailStore((s) => s.autoLoadRemoteImages);
+  const fetchRemoteImage = useMailStore((s) => s.fetchRemoteImage);
 
   // 인라인 이미지 mimetype 첨부만 mount 시 병렬 fetch(D6). 도착하는 대로 contentId→dataUri 갱신 →
   // srcDoc 재계산(useMemo deps에 inlineImages). 실패는 조용히 스킵(cid는 alt로 남음).
@@ -206,15 +225,42 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
   // message.attachments는 deps에서 의도적으로 제외 — SWR revalidate로 참조가 매번 바뀌어도 message.id가 같으면 첨부 내용은 불변
   }, [message.id, fetchAttachmentImage]);
 
+  // remote-image-prefetch: autoLoadRemoteImages가 true면 mount 시 본문의 원격 이미지를 병렬 요청
+  // (거의 항상 캐시 hit — snooze.ts 데몬이 이미 프리페치해둠). false면 아무것도 하지 않고
+  // 아래 "Load remote images" 버튼이 사용자가 눌렀을 때만 동일 로직을 1회 수행한다.
+  const loadRemoteImages = useCallback(() => {
+    const raw = message.bodyHtml || '';
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    const urls = extractRemoteImageUrls(doc);
+    if (urls.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      urls.map(async (url) => {
+        const res = await fetchRemoteImage(url);
+        if (!cancelled && 'dataUri' in res) {
+          setRemoteImages((prev) => new Map(prev).set(url, res.dataUri));
+        }
+      })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [message.bodyHtml, fetchRemoteImage]);
+
+  useEffect(() => {
+    if (!autoLoadRemoteImages) return;
+    return loadRemoteImages();
+  }, [message.id, autoLoadRemoteImages, loadRemoteImages]);
+
   const { srcDoc, hasQuoted } = useMemo(
-    () => prepareHtml(message, { showQuoted, allowImages, theme }, inlineImages),
-    [message, showQuoted, allowImages, theme, inlineImages]
+    () => prepareHtml(message, { showQuoted, theme }, inlineImages, remoteImages),
+    [message, showQuoted, theme, inlineImages, remoteImages]
   );
 
-  const hasRemoteImages = useMemo(
-    () => REMOTE_IMG_RE.test(message.bodyHtml),
-    [message.bodyHtml]
-  );
+  const hasRemoteImages = useMemo(() => {
+    const doc = new DOMParser().parseFromString(message.bodyHtml || '', 'text/html');
+    return extractRemoteImageUrls(doc).length > 0;
+  }, [message.bodyHtml]);
 
   return (
     <article className="border-b border-bg-border/60 px-6 py-4">
@@ -232,9 +278,9 @@ function MessageCard({ message, isLast }: { message: MessageDetail; isLast: bool
         </time>
       </header>
 
-      {hasRemoteImages && !allowImages && (
+      {hasRemoteImages && !autoLoadRemoteImages && remoteImages.size === 0 && (
         <button
-          onClick={() => setAllowImages(true)}
+          onClick={loadRemoteImages}
           className="mb-2 rounded border border-bg-border px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary"
         >
           Load remote images
