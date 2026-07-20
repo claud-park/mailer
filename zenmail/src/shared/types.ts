@@ -261,6 +261,9 @@ export interface ZenmailApi {
     filename: string
   ): Promise<{ savedPath: string } | { error: string }>;
 
+  /** 원격 이미지를 캐시 확인 후 필요 시 fetch해서 data URI로 반환(remote-image-prefetch). */
+  getRemoteImage(accountId: string, url: string): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
+
   /** D9 accelerator: tells main the renderer regained connectivity, forcing an immediate drain. */
   notifyOnline(): Promise<void>;
 

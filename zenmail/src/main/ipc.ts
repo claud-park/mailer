@@ -30,6 +30,7 @@ import {
   RealGmailProvider,
   type GmailProvider,
 } from './gmail';
+import { getCachedOrFetch } from './image-cache';
 import { debugNotificationLog, setDebugFocusOverride, updateDockBadge } from './notify';
 import { computeRevalidateDiff } from './revalidate';
 import { runDaemonTickNow } from './snooze';
@@ -77,6 +78,9 @@ let downloadDirOverride: string | null = null;
 function downloadsDir(): string {
   return downloadDirOverride ?? app.getPath('downloads');
 }
+
+/** E2E-only: 원격 이미지 캐시 디렉터리 오버라이드(null이면 accounts.imageCacheDir(email) 사용). */
+let imageCacheDirOverride: string | null = null;
 
 export function getContexts(): AccountContext[] {
   return [...contexts.values()];
@@ -785,6 +789,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   );
 
+  // --- remote image prefetch cache ---
+
+  ipcMain.handle(
+    'mail:get-remote-image',
+    async (_e, accountId: string, url: string): Promise<{ dataUri: string; mimeType: string } | { error: string }> => {
+      try {
+        const fetchLive = (accounts.getGlobalSetting('autoLoadRemoteImages') ?? 'true') !== 'false';
+        const ctx = requireContext(accountId);
+        return await getCachedOrFetch(ctx.cache, imageCacheDirOverride ?? accounts.imageCacheDir(accountId), url, {
+          fetchLive,
+        });
+      } catch (err) {
+        console.error('[image-cache] get-remote-image failed', err);
+        return { error: String(err) };
+      }
+    }
+  );
+
   // E2E-only debug IPC — never registered unless ZENMAIL_E2E_PORT is set (see e2e/).
   // 시그니처 무변경(내부적으로 main의 activeEmail 컨텍스트 대상, D6).
   if (process.env.ZENMAIL_E2E_PORT) {
@@ -925,6 +947,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // E2E 다운로드 dir 오버라이드 — 실제 사용자 Downloads 오염 방지 + 저장 경로/충돌 리네임 검증.
     ipcMain.handle('mail:debug-set-download-dir', async (_e, dir: string) => {
       downloadDirOverride = dir;
+    });
+
+    // E2E 이미지 캐시 dir 오버라이드 — 실제 userData/image-cache 오염 방지 + 캐시 히트/미스 검증.
+    ipcMain.handle('mail:debug-set-image-cache-dir', async (_e, dir: string) => {
+      imageCacheDirOverride = dir;
     });
   }
 }

@@ -66,6 +66,8 @@ const api: ZenmailApi = {
   downloadAttachment: (accountId: string, messageId: string, attachmentId: string, filename: string) =>
     ipcRenderer.invoke('mail:download-attachment', accountId, messageId, attachmentId, filename),
 
+  getRemoteImage: (accountId: string, url: string) => ipcRenderer.invoke('mail:get-remote-image', accountId, url),
+
   notifyOnline: () => ipcRenderer.invoke('mail:renderer-online'),
 
   onThreadsChanged: (
