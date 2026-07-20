@@ -443,6 +443,25 @@ git commit -m "feat(remote-image-prefetch): SSRF guard + remote img URL extracti
 
 ### Task 4: `image-cache.ts` — live fetch + disk cache + `getCachedOrFetch`/`prefetch`/`pruneCache`
 
+> **Amended after Task 3's review** (controller edit, before dispatch — not a mid-task revision):
+> two problems were found in this task's original text and are fixed in what follows.
+> 1. **Self-contradiction**: the original "happy path" test called the SSRF-guarded
+>    `getCachedOrFetch` against a `127.0.0.1` test server, but the real guard rejects loopback
+>    unconditionally — that test could never pass against a correct implementation. Fixed by
+>    threading an optional `isAllowed` guard override through `fetchImageBytes`/`getCachedOrFetch`/
+>    `prefetch` (defaults to the real `isPrefetchableUrl` in production; tests override it to
+>    trust only the specific local test-server origin, so the *redirect-target* re-validation is
+>    still exercised for real).
+> 2. **DECISIONS.md D9 gap**: `isPrefetchableUrl` (Task 3) only rejects IP-literal hostnames in
+>    private ranges — a domain name that *resolves* to a private IP sailed through unchecked,
+>    contradicting D9's stated guarantee. Fixed by adding a `dns.promises.lookup`-based check for
+>    non-literal hostnames before the request is made. **Documented residual limitation**: this
+>    closes the "attacker registers a domain pointing at a private IP" case, but does not fully
+>    close DNS-rebinding-between-check-and-connect (the actual `fetch()` call re-resolves
+>    independently at TCP-connect time) — doing that would require a custom low-level connect
+>    hook, out of scope for v1. Note this residual limitation in a code comment; do not overclaim
+>    full rebinding immunity.
+
 **Files:**
 - Modify: `zenmail/src/main/image-cache.ts`
 - Modify: `zenmail/src/main/image-cache.test.ts`
@@ -451,19 +470,30 @@ git commit -m "feat(remote-image-prefetch): SSRF guard + remote img URL extracti
 - Consumes: `AccountCache` (Task 1: `getImageCache`/`setImageCache`/`listImageCacheByAge`/`deleteImageCache`/`imageCacheTotalBytes`), `imageCacheDir` (Task 2), `isPrefetchableUrl`/`extractRemoteImageUrls` (Task 3).
 - Produces (used by Task 5 IPC handler and Task 6 snooze.ts hook):
   ```ts
+  type UrlGuard = (url: string) => boolean;
+
   export async function getCachedOrFetch(
     cache: AccountCache,
     cacheDir: string,
     url: string,
-    opts: { fetchLive: boolean }
+    opts: { fetchLive: boolean; isAllowed?: UrlGuard }
   ): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
 
-  export async function prefetch(cache: AccountCache, cacheDir: string, urls: string[]): Promise<void>;
+  export async function prefetch(
+    cache: AccountCache,
+    cacheDir: string,
+    urls: string[],
+    isAllowed?: UrlGuard
+  ): Promise<void>;
 
   export function pruneCache(cache: AccountCache, cacheDir: string, maxBytes: number): void;
   ```
+  `isAllowed` is production-optional (defaults to the real `isPrefetchableUrl`) — Task 5/6 call
+  sites never pass it, they get the real guard. It exists so tests can compose "trust this one
+  local test-server origin, but still run the real guard on everything else" without weakening
+  default behavior.
 
-This task uses real `fetch()` against a local test HTTP server (`node:http`) spun up in the test file — no mocking of `fetch` itself, so the SSRF guard and redirect-revalidation are exercised for real.
+This task uses real `fetch()` against a local test HTTP server (`node:http`) spun up in the test file — no mocking of `fetch` itself, so the redirect-revalidation is exercised for real. `node:dns` IS mocked (`vi.mock`) for the one test that needs a hostname-resolution result, since real DNS in a test would be slow/flaky/network-dependent.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -474,8 +504,13 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { vi } from 'vitest';
 import { AccountCache } from './cache';
-import { getCachedOrFetch, prefetch, pruneCache } from './image-cache';
+import { getCachedOrFetch, prefetch, pruneCache, isPrefetchableUrl } from './image-cache';
+
+vi.mock('node:dns', () => ({ promises: { lookup: vi.fn() } }));
+import dns from 'node:dns';
 
 describe('getCachedOrFetch / prefetch / pruneCache', () => {
   let dir: string;
@@ -484,6 +519,13 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
   let server: http.Server;
   let baseUrl: string;
   let requestCount = 0;
+  // Real isPrefetchableUrl rejects loopback (correctly — Task 3). The test HTTP server can only
+  // ever bind to loopback/a private interface, so a guard that trusts *only this test server's
+  // exact origin* (and defers to the real guard for every other URL, including redirect targets)
+  // lets these tests exercise real fetch/redirect/cache-write mechanics without weakening the
+  // guard the tests are supposed to be validating.
+  const trustTestServer: (base: string) => (url: string) => boolean = (base) => (url) =>
+    url.startsWith(base) || isPrefetchableUrl(url);
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zm-imgfetch-'));
@@ -520,24 +562,22 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
   });
 
   it('cache miss + fetchLive:true fetches live, writes disk file + sqlite row, returns data URI', async () => {
-    // NOTE: baseUrl is 127.0.0.1 (loopback) — isPrefetchableUrl would normally reject this.
-    // This test targets getCachedOrFetch directly to exercise the fetch/cache-write path in
-    // isolation; SSRF rejection of loopback is already covered by Task 3's isPrefetchableUrl
-    // tests and by the /redirect-to-private case below (which must be blocked even though the
-    // *initial* request in that case is not to loopback).
-    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, { fetchLive: true });
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, {
+      fetchLive: true,
+      isAllowed: trustTestServer(baseUrl),
+    });
     expect('dataUri' in res).toBe(true);
     if ('dataUri' in res) {
       expect(res.mimeType).toBe('image/png');
       expect(res.dataUri.startsWith('data:image/png;base64,')).toBe(true);
     }
-    const urlHash = require('node:crypto').createHash('sha256').update(`${baseUrl}/ok.png`).digest('hex');
+    const urlHash = crypto.createHash('sha256').update(`${baseUrl}/ok.png`).digest('hex');
     expect(cache.getImageCache(urlHash)).not.toBeNull();
     expect(fs.existsSync(path.join(cacheDir, urlHash))).toBe(true);
   });
 
   it('cache hit reads from disk without a second network request', async () => {
-    await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, { fetchLive: true });
+    await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, { fetchLive: true, isAllowed: trustTestServer(baseUrl) });
     const countAfterFirst = requestCount;
     const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, { fetchLive: false });
     expect('dataUri' in res).toBe(true);
@@ -550,24 +590,53 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
     expect(requestCount).toBe(0);
   });
 
-  it('rejects a redirect that points to a private IP, even mid-chain', async () => {
-    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/redirect-to-private`, { fetchLive: true });
+  it('the real (default) guard blocks a loopback URL by default, without any override', async () => {
+    // No isAllowed override — proves fetchImageBytes/getCachedOrFetch actually wire in the real
+    // isPrefetchableUrl by default, not just when a test happens to pass one.
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/ok.png`, { fetchLive: true });
+    expect('error' in res).toBe(true);
+    expect(requestCount).toBe(0); // blocked before any request was made
+  });
+
+  it('rejects a redirect that points to a private IP, even mid-chain, despite the origin being trusted', async () => {
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/redirect-to-private`, {
+      fetchLive: true,
+      isAllowed: trustTestServer(baseUrl), // trusts baseUrl's origin only — NOT :1, the redirect target's port
+    });
     expect('error' in res).toBe(true);
   });
 
   it('rejects a non-image content-type', async () => {
-    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/not-an-image`, { fetchLive: true });
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/not-an-image`, {
+      fetchLive: true,
+      isAllowed: trustTestServer(baseUrl),
+    });
     expect('error' in res).toBe(true);
   });
 
   it('rejects a response over 5MB', async () => {
-    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/too-big`, { fetchLive: true });
+    const res = await getCachedOrFetch(cache, cacheDir, `${baseUrl}/too-big`, {
+      fetchLive: true,
+      isAllowed: trustTestServer(baseUrl),
+    });
+    expect('error' in res).toBe(true);
+  });
+
+  it('rejects a hostname that resolves to a private IP address (DNS-level SSRF)', async () => {
+    (dns.promises.lookup as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
+    // isAllowed override trusts this literal hostname string (it's not an IP literal, so Task 3's
+    // isPrefetchableUrl alone would let it through) — the DNS-resolution check inside
+    // fetchImageBytes is what must catch it.
+    const res = await getCachedOrFetch(cache, cacheDir, 'http://private.example.test/x.png', {
+      fetchLive: true,
+      isAllowed: () => true,
+    });
     expect('error' in res).toBe(true);
   });
 
   it('prefetch fetches multiple urls in parallel and swallows individual failures', async () => {
-    await prefetch(cache, cacheDir, [`${baseUrl}/ok.png`, `${baseUrl}/does-not-exist`]);
-    const urlHash = require('node:crypto').createHash('sha256').update(`${baseUrl}/ok.png`).digest('hex');
+    await prefetch(cache, cacheDir, [`${baseUrl}/ok.png`, `${baseUrl}/does-not-exist`], trustTestServer(baseUrl));
+    const urlHash = crypto.createHash('sha256').update(`${baseUrl}/ok.png`).digest('hex');
     expect(cache.getImageCache(urlHash)).not.toBeNull();
     // no throw for the 404 — swallowed
   });
@@ -599,17 +668,20 @@ describe('getCachedOrFetch / prefetch / pruneCache', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd zenmail && npx vitest run src/main/image-cache.test.ts`
-Expected: FAIL — `getCachedOrFetch`/`prefetch`/`pruneCache` not exported.
+Expected: FAIL — `getCachedOrFetch`/`prefetch`/`pruneCache` not exported (the `vi.mock('node:dns', ...)` itself should not error even before the implementation exists — it's just a module mock registration).
 
-- [ ] **Step 3: Implement fetch + cache + prune**
+- [ ] **Step 3: Implement fetch + cache + prune + DNS-hostname SSRF check**
 
 Append to `zenmail/src/main/image-cache.ts`:
 
 ```ts
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AccountCache } from './cache';
+
+type UrlGuard = (url: string) => boolean;
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const TIMEOUT_MS = 8000;
@@ -633,13 +705,35 @@ function writeCachedFile(cacheDir: string, urlHash: string, data: Buffer): void 
 }
 
 /**
- * 리다이렉트를 수동으로 따라가며 매 hop마다 isPrefetchableUrl을 재적용한다(D9) — fetch의
- * redirect:'follow'는 최종 URL만 알 수 있어 중간 hop의 사설망 우회를 막을 수 없다.
+ * hostname이 IP 리터럴이면 isPrefetchableUrl이 이미 검증했으므로 스킵. 도메인 이름이면 실제로
+ * 어떤 IP로 풀리는지 조회해 사설/루프백/링크-로컬이면 차단한다(D9 — "도메인이 사설 IP로 풀리는"
+ * 케이스는 IP 리터럴 필터만으로는 못 막음). 조회 실패는 fail-closed(차단).
+ * ⚠️ 잔여 한계(문서화): 여기서 조회한 결과와 fetch()가 실제 연결 시 다시 수행하는 DNS 조회가
+ * 다를 수 있다(DNS rebinding) — 커스텀 저수준 connect 훅 없이는 완전히 막을 수 없어 v1 범위 밖.
  */
-async function fetchImageBytes(url: string): Promise<{ buf: Buffer; mimeType: string } | { error: string }> {
+async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
+  if (IPV4_RE.test(hostname) || hostname.includes(':')) return false; // literal, already checked
+  try {
+    const addrs = await dns.promises.lookup(hostname, { all: true });
+    return addrs.some((a) => (a.family === 4 ? isPrivateIPv4(a.address) : isPrivateIPv6(a.address)));
+  } catch {
+    return true; // lookup failure — fail closed
+  }
+}
+
+/**
+ * 리다이렉트를 수동으로 따라가며 매 hop마다 guard(기본 isPrefetchableUrl)를 재적용한다(D9) —
+ * fetch의 redirect:'follow'는 최종 URL만 알 수 있어 중간 hop의 사설망 우회를 막을 수 없다.
+ */
+async function fetchImageBytes(
+  url: string,
+  isAllowed: UrlGuard = isPrefetchableUrl
+): Promise<{ buf: Buffer; mimeType: string } | { error: string }> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    if (!isPrefetchableUrl(current)) return { error: 'blocked: not a prefetchable url' };
+    if (!isAllowed(current)) return { error: 'blocked: not a prefetchable url' };
+    const hostname = new URL(current).hostname;
+    if (await resolvesToPrivateAddress(hostname)) return { error: 'blocked: resolves to a private address' };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     let res: Response;
@@ -672,7 +766,7 @@ export async function getCachedOrFetch(
   cache: AccountCache,
   cacheDir: string,
   url: string,
-  opts: { fetchLive: boolean }
+  opts: { fetchLive: boolean; isAllowed?: UrlGuard }
 ): Promise<{ dataUri: string; mimeType: string } | { error: string }> {
   const urlHash = urlHashOf(url);
   const meta = cache.getImageCache(urlHash);
@@ -683,7 +777,7 @@ export async function getCachedOrFetch(
   }
   if (!opts.fetchLive) return { error: 'not cached' };
 
-  const result = await fetchImageBytes(url);
+  const result = await fetchImageBytes(url, opts.isAllowed);
   if ('error' in result) return result;
   writeCachedFile(cacheDir, urlHash, result.buf);
   cache.setImageCache({ urlHash, mimeType: result.mimeType, byteSize: result.buf.byteLength, fetchedAt: Date.now() });
@@ -691,11 +785,16 @@ export async function getCachedOrFetch(
 }
 
 /** 여러 URL을 병렬 프리페치. 개별 실패는 조용히 스킵(throw 없음) — 콘솔 로그만. */
-export async function prefetch(cache: AccountCache, cacheDir: string, urls: string[]): Promise<void> {
+export async function prefetch(
+  cache: AccountCache,
+  cacheDir: string,
+  urls: string[],
+  isAllowed?: UrlGuard
+): Promise<void> {
   await Promise.all(
     urls.map(async (url) => {
       try {
-        const res = await getCachedOrFetch(cache, cacheDir, url, { fetchLive: true });
+        const res = await getCachedOrFetch(cache, cacheDir, url, { fetchLive: true, isAllowed });
         if ('error' in res) console.warn('[image-cache] prefetch skipped', url, res.error);
       } catch (err) {
         console.warn('[image-cache] prefetch failed', url, err);
@@ -721,19 +820,19 @@ export function pruneCache(cache: AccountCache, cacheDir: string, maxBytes: numb
 }
 ```
 
-Add `AccountCache` to the existing type-only import at the top of `image-cache.ts` if not already present from Step 3 of Task 3 (it wasn't needed there — add the `import type { AccountCache } from './cache';` line shown above alongside the `crypto`/`fs`/`path` imports).
+`IPV4_RE`, `isPrivateIPv4`, `isPrivateIPv6` are the module-scope helpers Task 3 already defined earlier in this same file — reuse them as-is, do not redeclare. Add `AccountCache` to the existing type-only import at the top of `image-cache.ts` if not already present from Step 3 of Task 3 (it wasn't needed there — add the `import type { AccountCache } from './cache';` line shown above alongside the `crypto`/`dns`/`fs`/`path` imports).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd zenmail && npx vitest run src/main/image-cache.test.ts`
-Expected: PASS, all cases including redirect-to-private rejection, size/type limits, and LRU prune.
+Expected: PASS, all cases including the default-guard-blocks-loopback test, redirect-to-private rejection, DNS-hostname-resolves-to-private rejection, size/type limits, and LRU prune.
 
 - [ ] **Step 5: Typecheck and commit**
 
 ```bash
 cd /Users/claud_01/Documents/flo/AX/mailer
 git add zenmail/src/main/image-cache.ts zenmail/src/main/image-cache.test.ts
-git commit -m "feat(remote-image-prefetch): live fetch + disk cache + LRU prune (CP1d)"
+git commit -m "feat(remote-image-prefetch): live fetch + disk cache + LRU prune + DNS-hostname SSRF check (CP1d)"
 ```
 
 This completes CP1 (TODO.md). Update `docs/features/remote-image-prefetch/TODO.md` CP1 checkboxes to `[x]` as part of this commit (`git add` the TODO file too).
