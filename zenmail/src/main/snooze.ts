@@ -5,6 +5,8 @@ import { diffNewUnread, fireNewMailNotification, updateDockBadge } from './notif
 import type { ThreadSummary } from '../shared/types';
 import { classifyError, isExhausted } from '../shared/sync';
 import { emitSyncState, notifyThreadsChanged, onReconnect, setOnline } from './sync-state';
+import { extractRemoteImageUrls, prefetch } from './image-cache';
+import { imageCacheDir } from './accounts';
 
 const TICK_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -62,7 +64,12 @@ export function startSnoozeDaemon(
                 const { threads: current } = await ctx.provider.listThreads({ q: NEW_MAIL_QUERY });
                 const { newThreads, nextIds } = diffNewUnread(current, ctx.lastKnownUnreadIds);
                 ctx.lastKnownUnreadIds = nextIds;
-                if (newThreads.length) perAccountNew.push({ accountId: ctx.email, threads: newThreads });
+                if (newThreads.length) {
+                  perAccountNew.push({ accountId: ctx.email, threads: newThreads });
+                  void prefetchNewThreadImages(ctx as AccountContext & { provider: GmailProvider }, newThreads).catch(
+                    (err) => console.error('[daemon] image prefetch failed', ctx.email, err)
+                  );
+                }
               } catch (err) {
                 // ctx.lastKnownUnreadIds is NOT updated on failure (still whatever it was), so this
                 // batch isn't silently lost forever — a later tick where the count rises past this
@@ -235,6 +242,29 @@ async function tickAccount(
   // the cache summaries — so ship a single needsRefetch (≤1/min) rather than a diff. This keeps
   // pure diff-push (0 refetch) for the hot mutation path while the daemon stays refetch-based.
   if (changed) notifyThreadsChanged(getWindow, { accountId: ctx.email, upserts: [], removals: [], needsRefetch: true });
+}
+
+/**
+ * remote-image-prefetch: newly-detected unread threads (new-mail-alerts' diffNewUnread output)
+ * are prefetched into the account's image cache so their remote <img> content is already local by
+ * the time the user opens them. listThreads(ThreadSummary[]) has no bodyHtml, so each new thread
+ * needs its own getThread call to obtain it. getThread failures are isolated per-thread — one
+ * thread's fetch failure never blocks prefetching the rest.
+ */
+async function prefetchNewThreadImages(
+  ctx: AccountContext & { provider: GmailProvider },
+  newThreads: ThreadSummary[]
+): Promise<void> {
+  const urls: string[] = [];
+  for (const t of newThreads) {
+    try {
+      const detail = await ctx.provider.getThread(t.id);
+      for (const msg of detail.messages) urls.push(...extractRemoteImageUrls(msg.bodyHtml));
+    } catch (err) {
+      console.error('[daemon] getThread for image prefetch failed', t.id, err);
+    }
+  }
+  if (urls.length) await prefetch(ctx.cache, imageCacheDir(ctx.email), urls);
 }
 
 export function stopSnoozeDaemon(): void {

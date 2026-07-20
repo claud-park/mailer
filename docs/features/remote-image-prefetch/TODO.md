@@ -21,7 +21,7 @@
 - [x] tsc + npm test
 
 ## CP2. 동기화 연동 + IPC 3-파일 계약
-- [ ] `snooze.ts`: unread count 순증 훅(new-mail-alerts D8 지점, `diffNewUnread` 직후)에서 신규 스레드마다 `provider.getThread(threadId)`를 추가 호출해 `bodyHtml` 확보(D6 정정 — 기존 `listThreads`엔 bodyHtml 없음) → 정규식으로 원격 img URL 추출 → `prefetch()` 호출(FR7/FR8)
+- [x] `snooze.ts`: unread count 순증 훅(new-mail-alerts D8 지점, `diffNewUnread` 직후)에서 신규 스레드마다 `provider.getThread(threadId)`를 추가 호출해 `bodyHtml` 확보(D6 정정 — 기존 `listThreads`엔 bodyHtml 없음) → 정규식으로 원격 img URL 추출 → `prefetch()` 호출(FR7/FR8)
 - [ ] 오프라인 계정 틱은 프리페치 스킵(FR9), 계정별 try/catch 격리(FR10)
 - [ ] `types.ts`: `ZenmailApi.getRemoteImage(accountId, url)` + `autoLoadRemoteImages` 전역 설정 타입(FR12/FR13)
 - [ ] `ipc.ts`: `mail:get-remote-image` 핸들러(FR11) + `settings:get-global`/`set-global` 기존 채널 재사용 확인(신규 채널 불요, theme과 동일)
