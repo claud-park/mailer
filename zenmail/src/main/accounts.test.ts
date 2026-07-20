@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { sqliteNativeOptions } from './sqlite-native';
 import {
   __setUserDataDirForTests, accountDbPath, addStoredAccount, emailSlug,
-  getGlobalSetting, migrateLegacyLayout, readAccounts, removeStoredAccount,
+  getGlobalSetting, imageCacheDir, migrateLegacyLayout, readAccounts, removeStoredAccount,
   setActiveEmail, setGlobalSetting,
 } from './accounts';
 
@@ -52,6 +52,16 @@ describe('global settings (settings.json)', () => {
     expect(getGlobalSetting('theme')).toBeNull();
     setGlobalSetting('theme', 'dark');
     expect(getGlobalSetting('theme')).toBe('dark');
+  });
+});
+
+describe('imageCacheDir', () => {
+  it('returns userData/image-cache/<emailSlug>', () => {
+    expect(imageCacheDir('a@b.com')).toBe(path.join(dir, 'image-cache', emailSlug('a@b.com')));
+  });
+
+  it('slugifies unsafe characters the same way emailSlug does', () => {
+    expect(imageCacheDir('a+tag@b.com')).toBe(path.join(dir, 'image-cache', 'a_tag@b.com'));
   });
 });
 

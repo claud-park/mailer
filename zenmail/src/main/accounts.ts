@@ -32,6 +32,10 @@ export function accountDbPath(email: string): string {
   return path.join(userDataDir(), `zenmail-${emailSlug(email)}.db`);
 }
 
+export function imageCacheDir(email: string): string {
+  return path.join(userDataDir(), 'image-cache', emailSlug(email));
+}
+
 export function readAccounts(): AccountsFile {
   try {
     const raw = JSON.parse(fs.readFileSync(ACCOUNTS_FILE(), 'utf8')) as AccountsFile;
