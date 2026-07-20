@@ -175,6 +175,12 @@ export function CommandPalette({ children }: { children: React.ReactNode }) {
         perform: () => useMailStore.getState().toggleTheme(),
       },
       {
+        id: 'toggleAutoLoadRemoteImages',
+        name: 'Toggle automatic remote image loading',
+        section: 'View',
+        perform: () => useMailStore.getState().toggleAutoLoadRemoteImages(),
+      },
+      {
         id: 'cheatsheet',
         name: 'Keyboard shortcuts',
         shortcut: ['?'],
