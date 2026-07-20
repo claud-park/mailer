@@ -194,6 +194,10 @@ interface MailState {
   setTheme(theme: 'light' | 'dark', opts?: { persist?: boolean }): void;
   toggleTheme(): void;
 
+  autoLoadRemoteImages: boolean;
+  toggleAutoLoadRemoteImages(): void;
+  fetchRemoteImage(url: string): Promise<{ dataUri: string; mimeType: string } | { error: string }>;
+
   openCompose(init?: Partial<ComposeInit>): void;
   openReply(all?: boolean): void;
   openForward(): void;
@@ -400,6 +404,7 @@ export const useMailStore = create<MailState>((set, get) => {
     sync: { online: true, pending: 0 },
     bulkSelectedIds: new Set(),
     theme: 'light',
+    autoLoadRemoteImages: true,
     rsvpStatus: new Map(),
     agendaOpen: false,
     agendaEvents: [],
@@ -414,6 +419,12 @@ export const useMailStore = create<MailState>((set, get) => {
         if ((await api().getGlobalSetting('theme')) === 'dark') get().setTheme('dark', { persist: false });
       } catch {
         /* default light */
+      }
+      try {
+        const v = await api().getGlobalSetting('autoLoadRemoteImages');
+        if (v === 'false') set({ autoLoadRemoteImages: false });
+      } catch {
+        /* default true */
       }
       api().onFollowupFired((p) => {
         if (p.accountId !== get().activeAccountId) return; // 비활성 계정 발화는 배지(accounts-changed)로만
@@ -1621,6 +1632,23 @@ export const useMailStore = create<MailState>((set, get) => {
 
     toggleTheme() {
       get().setTheme(get().theme === 'dark' ? 'light' : 'dark');
+    },
+
+    toggleAutoLoadRemoteImages() {
+      const next = !get().autoLoadRemoteImages;
+      set({ autoLoadRemoteImages: next });
+      void api().setGlobalSetting('autoLoadRemoteImages', String(next));
+    },
+
+    async fetchRemoteImage(url) {
+      const a = aid(get());
+      if (!a) return { error: 'no account' };
+      try {
+        return await api().getRemoteImage(a, url);
+      } catch (err) {
+        console.error('getRemoteImage failed', err);
+        return { error: String(err) };
+      }
     },
   };
 });
