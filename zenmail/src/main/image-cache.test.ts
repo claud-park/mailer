@@ -44,6 +44,12 @@ describe('isPrefetchableUrl', () => {
     expect(isPrefetchableUrl('http://[fe80::1]/x.png')).toBe(false);
   });
 
+  it('rejects IPv4-mapped IPv6 loopback/private/link-local addresses', () => {
+    expect(isPrefetchableUrl('http://[::ffff:127.0.0.1]/x.png')).toBe(false);
+    expect(isPrefetchableUrl('http://[::ffff:169.254.169.254]/x.png')).toBe(false);
+    expect(isPrefetchableUrl('http://[::ffff:10.0.0.1]/x.png')).toBe(false);
+  });
+
   it('rejects malformed URLs', () => {
     expect(isPrefetchableUrl('not a url')).toBe(false);
   });

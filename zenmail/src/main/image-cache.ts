@@ -17,11 +17,28 @@ function isPrivateIPv4(host: string): boolean {
   return false;
 }
 
+// RFC 4291 §2.5.5.2 IPv4-mapped IPv6 (::ffff:a.b.c.d) 언랩. Node의 new URL()은 이를
+// 16진 그룹 형태(::ffff:7f00:1)로 정규화하므로 두 표기 모두 처리한다.
+function ipv4FromMappedIPv6(host: string): string | null {
+  const dotted = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const hex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    if (Number.isNaN(hi) || Number.isNaN(lo)) return null;
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+  return null;
+}
+
 function isPrivateIPv6(host: string): boolean {
   const h = host.toLowerCase();
   if (h === '::1') return true; // loopback
   if (h.startsWith('fc') || h.startsWith('fd')) return true; // fc00::/7 unique-local
   if (h.startsWith('fe80')) return true; // fe80::/10 link-local
+  const mapped = ipv4FromMappedIPv6(h);
+  if (mapped) return isPrivateIPv4(mapped);
   return false;
 }
 
