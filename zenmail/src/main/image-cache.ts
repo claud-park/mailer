@@ -76,3 +76,147 @@ export function extractRemoteImageUrls(html: string): string[] {
   }
   return out;
 }
+
+import crypto from 'node:crypto';
+import dns from 'node:dns';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { AccountCache } from './cache';
+
+type UrlGuard = (url: string) => boolean;
+
+const MAX_BYTES = 5 * 1024 * 1024;
+const TIMEOUT_MS = 8000;
+const MAX_REDIRECTS = 3;
+
+function urlHashOf(url: string): string {
+  return crypto.createHash('sha256').update(url).digest('hex');
+}
+
+function readCachedFile(cacheDir: string, urlHash: string): Buffer | null {
+  try {
+    return fs.readFileSync(path.join(cacheDir, urlHash));
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedFile(cacheDir: string, urlHash: string, data: Buffer): void {
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(path.join(cacheDir, urlHash), data);
+}
+
+/**
+ * hostname이 IP 리터럴이면 isPrefetchableUrl이 이미 검증했으므로 스킵. 도메인 이름이면 실제로
+ * 어떤 IP로 풀리는지 조회해 사설/루프백/링크-로컬이면 차단한다(D9 — "도메인이 사설 IP로 풀리는"
+ * 케이스는 IP 리터럴 필터만으로는 못 막음). 조회 실패는 fail-closed(차단).
+ * ⚠️ 잔여 한계(문서화): 여기서 조회한 결과와 fetch()가 실제 연결 시 다시 수행하는 DNS 조회가
+ * 다를 수 있다(DNS rebinding) — 커스텀 저수준 connect 훅 없이는 완전히 막을 수 없어 v1 범위 밖.
+ */
+async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
+  if (IPV4_RE.test(hostname) || hostname.includes(':')) return false; // literal, already checked
+  try {
+    const addrs = await dns.promises.lookup(hostname, { all: true });
+    return addrs.some((a) => (a.family === 4 ? isPrivateIPv4(a.address) : isPrivateIPv6(a.address)));
+  } catch {
+    return true; // lookup failure — fail closed
+  }
+}
+
+/**
+ * 리다이렉트를 수동으로 따라가며 매 hop마다 guard(기본 isPrefetchableUrl)를 재적용한다(D9) —
+ * fetch의 redirect:'follow'는 최종 URL만 알 수 있어 중간 hop의 사설망 우회를 막을 수 없다.
+ */
+async function fetchImageBytes(
+  url: string,
+  isAllowed: UrlGuard = isPrefetchableUrl
+): Promise<{ buf: Buffer; mimeType: string } | { error: string }> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (!isAllowed(current)) return { error: 'blocked: not a prefetchable url' };
+    const hostname = new URL(current).hostname;
+    if (await resolvesToPrivateAddress(hostname)) return { error: 'blocked: resolves to a private address' };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(current, { redirect: 'manual', signal: controller.signal });
+    } catch (err) {
+      return { error: `fetch failed: ${String(err)}` };
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) return { error: 'redirect without location' };
+      current = new URL(location, current).toString();
+      continue;
+    }
+    if (!res.ok) return { error: `http ${res.status}` };
+    const mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
+    if (!mimeType.startsWith('image/')) return { error: `non-image content-type: ${mimeType}` };
+    const contentLength = res.headers.get('content-length');
+    if (contentLength && Number(contentLength) > MAX_BYTES) return { error: 'response too large' };
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > MAX_BYTES) return { error: 'response too large' };
+    return { buf, mimeType };
+  }
+  return { error: 'too many redirects' };
+}
+
+export async function getCachedOrFetch(
+  cache: AccountCache,
+  cacheDir: string,
+  url: string,
+  opts: { fetchLive: boolean; isAllowed?: UrlGuard }
+): Promise<{ dataUri: string; mimeType: string } | { error: string }> {
+  const urlHash = urlHashOf(url);
+  const meta = cache.getImageCache(urlHash);
+  if (meta) {
+    const buf = readCachedFile(cacheDir, urlHash);
+    if (buf) return { dataUri: `data:${meta.mimeType};base64,${buf.toString('base64')}`, mimeType: meta.mimeType };
+    cache.deleteImageCache(urlHash); // metadata orphaned (file missing) — fall through to re-fetch
+  }
+  if (!opts.fetchLive) return { error: 'not cached' };
+
+  const result = await fetchImageBytes(url, opts.isAllowed);
+  if ('error' in result) return result;
+  writeCachedFile(cacheDir, urlHash, result.buf);
+  cache.setImageCache({ urlHash, mimeType: result.mimeType, byteSize: result.buf.byteLength, fetchedAt: Date.now() });
+  return { dataUri: `data:${result.mimeType};base64,${result.buf.toString('base64')}`, mimeType: result.mimeType };
+}
+
+/** 여러 URL을 병렬 프리페치. 개별 실패는 조용히 스킵(throw 없음) — 콘솔 로그만. */
+export async function prefetch(
+  cache: AccountCache,
+  cacheDir: string,
+  urls: string[],
+  isAllowed?: UrlGuard
+): Promise<void> {
+  await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const res = await getCachedOrFetch(cache, cacheDir, url, { fetchLive: true, isAllowed });
+        if ('error' in res) console.warn('[image-cache] prefetch skipped', url, res.error);
+      } catch (err) {
+        console.warn('[image-cache] prefetch failed', url, err);
+      }
+    })
+  );
+}
+
+/** 총 용량이 maxBytes를 넘으면 fetched_at 오름차순(가장 오래된 것부터)으로 삭제한다. */
+export function pruneCache(cache: AccountCache, cacheDir: string, maxBytes: number): void {
+  let total = cache.imageCacheTotalBytes();
+  if (total <= maxBytes) return;
+  for (const row of cache.listImageCacheByAge()) {
+    if (total <= maxBytes) break;
+    cache.deleteImageCache(row.urlHash);
+    try {
+      fs.unlinkSync(path.join(cacheDir, row.urlHash));
+    } catch {
+      /* file already gone — metadata cleanup still counts */
+    }
+    total -= row.byteSize;
+  }
+}

@@ -11,14 +11,14 @@
 - [~] TODO/TC/DECISIONS 작성 (이 문서 + 후속 2건)
 
 ## CP1. main 레이어 — image-cache.ts (SSRF 가드 + 디스크 캐시 + sqlite 메타데이터)
-- [ ] `image-cache.ts` 신설: `isPrefetchableUrl(url)` — 스킴 필터 + 사설/루프백/링크-로컬 IP 차단(FR1)
-- [ ] `getCachedOrFetch(accountId, url, {fetchLive})` — 캐시 조회 → (옵션) 라이브 fetch → 캐시 기록(FR2)
-- [ ] 라이브 fetch 가드: `Content-Type: image/*` 아니면 abort, 5MB 초과 시 abort, redirect ≤3회 매 hop 재검증, 8초 타임아웃(FR3)
-- [ ] `prefetch(accountId, urls)` — 병렬 호출, 개별 실패 조용히 스킵(FR4)
-- [ ] `pruneCache(accountId, maxBytes=200MB)` — LRU(`fetched_at` 오름차순) 삭제(FR5)
-- [ ] `cache.ts` `AccountCache`에 `image_cache` 테이블 추가(`url_hash` PK/`mime_type`/`byte_size`/`fetched_at`) + get/set/prune 메서드(FR6)
-- [ ] vitest: SSRF 가드(사설 IP 케이스별), 5MB/타입 초과 abort, LRU 정렬, 리다이렉트 재검증 — 순수 로직 우선(TDD)
-- [ ] tsc + npm test
+- [x] `image-cache.ts` 신설: `isPrefetchableUrl(url)` — 스킴 필터 + 사설/루프백/링크-로컬 IP 차단(FR1)
+- [x] `getCachedOrFetch(accountId, url, {fetchLive})` — 캐시 조회 → (옵션) 라이브 fetch → 캐시 기록(FR2)
+- [x] 라이브 fetch 가드: `Content-Type: image/*` 아니면 abort, 5MB 초과 시 abort, redirect ≤3회 매 hop 재검증, 8초 타임아웃(FR3)
+- [x] `prefetch(accountId, urls)` — 병렬 호출, 개별 실패 조용히 스킵(FR4)
+- [x] `pruneCache(accountId, maxBytes=200MB)` — LRU(`fetched_at` 오름차순) 삭제(FR5)
+- [x] `cache.ts` `AccountCache`에 `image_cache` 테이블 추가(`url_hash` PK/`mime_type`/`byte_size`/`fetched_at`) + get/set/prune 메서드(FR6)
+- [x] vitest: SSRF 가드(사설 IP 케이스별), 5MB/타입 초과 abort, LRU 정렬, 리다이렉트 재검증 — 순수 로직 우선(TDD)
+- [x] tsc + npm test
 
 ## CP2. 동기화 연동 + IPC 3-파일 계약
 - [ ] `snooze.ts`: unread count 순증 훅(new-mail-alerts D8 지점, `diffNewUnread` 직후)에서 신규 스레드마다 `provider.getThread(threadId)`를 추가 호출해 `bodyHtml` 확보(D6 정정 — 기존 `listThreads`엔 bodyHtml 없음) → 정규식으로 원격 img URL 추출 → `prefetch()` 호출(FR7/FR8)
