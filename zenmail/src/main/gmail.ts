@@ -648,8 +648,8 @@ function buildDemoData(email: string): { threads: MockThread[]; labels: Label[];
   // F5 CP4 (Instant Intro, DECISIONS D8): a short double opt-in intro — one message, from a third
   // party, cc'ing another third party, subject reads as an intro. Deliberately from a sender that
   // matches none of the default split rules (not ana@linearly.dev, not the @zenmail.app domain, not
-  // a newsletter-pattern address) so it lands in the Other tab and doesn't disturb VIP/Team/Newsletter
-  // counts or ordering relied on elsewhere in the demo data / E2E suite.
+  // a newsletter-pattern address) so it lands in the Inbox catch-all and doesn't disturb
+  // VIP/Team/Newsletter counts or ordering relied on elsewhere in the demo data / E2E suite.
   const introFrom: Contact = { name: 'Jamie Wu', email: 'jamie@indiehatch.dev' };
   const introOther: Contact = { name: 'Yuna Cho', email: 'yuna.cho@partnerco.dev' };
   const introSubject = 'Intro: Yuna <> ZenMail team';

@@ -72,3 +72,13 @@
 - **상황**: DEV_WORKFLOW Goal 6이 지정한 /impeccable 스킬이 현재 환경에 설치되어 있지 않음.
 - **결정**: Web Interface Guidelines 감사(web-design-guidelines 스킬)로 대체 수행. 지적사항(탭 role/aria-selected, 아이콘 버튼 aria-label, spellcheck, tabular-nums) 수정 완료(`11858c1`). react-best-practices 리뷰에서는 StrictMode 이중 호출 no-op 버그와 ChipInput 다중 커밋 유실을 수정(`5b1e5fc`).
 - **후속**: /impeccable이 설치되면 F2부터 원래 게이트로 복귀.
+
+### D15. D11 철회 — Inbox를 필터 없는 뷰에서 미매칭 catch-all로 재정의, Other 탭 제거 (2026-07-23 사용자 확인)
+- **상황**: 사용자 리포트 — "split inbox 에 들어오는 이메일은 main inbox 에 보이면 안 돼." D11의 "Inbox = 전체 로드분(매칭 무관)" 설계가 정확히 이 불만의 원인으로 확인됨(근본 원인 조사 결과, 버그가 아니라 D11의 의도된 동작이었음).
+- **결정**: `computeSplits`에서 미매칭 스레드의 기본 배정을 `OTHER_TAB`이 아닌 `INBOX_TAB`으로 변경. `order = ['inbox', ...splits]`(Other 탭 제거). `selectVisibleThreads`는 이제 activeTab 무관하게 항상 매칭 결과로 필터링 — Inbox도 예외 없이 필터링 대상(Gmail Primary 탭과 동일한 모델로 전환).
+- **⌘⇧I(탭바 on/off) 동작 변경**: 탭바를 꺼도 D11 이전처럼 "필터 없는 전체 로드분"으로 복귀하지 않음 — 탭바 유무와 무관하게 Inbox는 항상 미매칭 catch-all만 보여준다(사용자 확정). 탭바는 이제 순수하게 "스플릿 탭 UI 표시 여부"만 토글하고, 뷰의 매칭 결과에는 영향을 주지 않는다.
+- **Other 탭 제거 이유**: Inbox가 미매칭 catch-all이 되는 순간 Other 탭과 내용이 100% 겹침(둘 다 "어떤 split에도 안 걸린 메일"). 중복 탭을 유지하는 대신 Other를 Inbox로 흡수(사용자 확정) — 탭 구성이 `[Inbox | VIP | Team | Newsletter]`로 축소.
+- **영향 범위**: `lib/splits.ts`(OTHER_TAB 상수 제거, computeSplits/selectVisibleThreads), `SplitTabBar.tsx`(Other 라벨 분기 제거), `SplitSettings.tsx`("Unmatched mail goes to Other." → "Unmatched mail stays in Inbox."), `splits.test.ts`, `e2e/run-tc.mjs`(TC-A1/A3/A5/A6/E1/E2/E5). TC-A6/A5는 검증 방향이 반대로 뒤집힘(과거: Inbox가 전체를 보여주는지 확인 / 현재: split 매칭 스레드가 Inbox에 안 새는지 확인) — 상세는 TC.md 참고.
+- **기각 대안**: Inbox/Other 탭을 둘 다 유지하고 중복 허용 — UX적으로 같은 목록이 두 탭에 뜨는 것은 혼란만 가중(사용자가 명시적으로 기각).
+- **회귀 버그 발견 및 수정 (구현 중)**: `INBOX_TAB`을 항상 필터링 대상으로 바꾸면서, `ThreadList.tsx`(2곳)/`store/mail.ts`/`FollowupPicker.tsx`가 "스플릿 뷰가 아닐 때"의 fallback으로 `INBOX_TAB`을 재사용하던 기존 관행이 새 버그가 됨 — D11 이전엔 `INBOX_TAB`이 항상 무필터였기 때문에 Sent/Trash/Drafts/커스텀 라벨 뷰나 검색 결과에서도 안전한 sentinel이었지만, D15 이후 그 fallback이 그대로 있으면 **INBOX 라벨이 아닌 뷰까지 split 매칭으로 걸러지는** 의도치 않은 누수가 발생(예: 검색 결과에서 VIP 발신자 메일이 사라짐). 네 지점 모두 `activeLabelId !== 'INBOX' || searchQuery`일 때 `selectVisibleThreads` 호출 자체를 건너뛰고 원본 `threads`를 그대로 반환하도록 가드를 추가해 수정.
+- **파급 검증**: `e2e/run-tc.mjs`(전체 287개 TC) 재검증 완료 — split-inbox-plus 자체 테스트 외에 VIP/Team/Newsletter 기본 시드가 다른 기능의 데모 스레드 하드코딩 가정(예: "Q3 roadmap review"가 항상 Inbox 최상단이라는 가정)을 깨뜨린 사례가 follow-up-reminders/keyboard-mastery/speed-instrumentation/detail-density/undo-toast/multi-account 총 6개 기능에서 발견되어 해당 E2E 하네스만 D15에 맞게 갱신(각 기능 자체의 PRD/TC/DECISIONS는 변경하지 않음). 최종: 287 total · 280 PASS · 0 FAIL · 7 SKIP, NO-REGRESSION: CLEAN.

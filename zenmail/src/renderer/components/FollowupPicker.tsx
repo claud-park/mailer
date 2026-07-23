@@ -14,14 +14,14 @@ export function FollowupPicker() {
   const targetId = useMailStore((s) => {
     if (s.activeThreadId) return s.activeThreadId;
     const inInbox = s.activeLabelId === 'INBOX' && !s.searchQuery;
-    const useSplit = s.splitInbox && inInbox;
-    const pinned = inInbox
-      ? new Set([...s.followups.values()].filter((f) => f.status === 'fired').map((f) => f.threadId))
-      : undefined;
+    // split matching is INBOX-only (D1/TC-B3) — bypass it entirely elsewhere, don't fall through to
+    // the INBOX_TAB filter (which now excludes split-matched threads, D15).
+    if (!inInbox) return s.threads[s.selectedIndex]?.id ?? null;
+    const pinned = new Set([...s.followups.values()].filter((f) => f.status === 'fired').map((f) => f.threadId));
     const visible = selectVisibleThreads(
       s.threads,
       s.splitDefs,
-      useSplit ? s.activeSplitTab : INBOX_TAB,
+      s.splitInbox ? s.activeSplitTab : INBOX_TAB,
       pinned
     );
     return visible[s.selectedIndex]?.id ?? null;

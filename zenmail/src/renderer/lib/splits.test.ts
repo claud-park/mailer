@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SplitDefinition, ThreadSummary } from '../../shared/types';
-import { computeSplits, INBOX_TAB, OTHER_TAB, selectVisibleThreads } from './splits';
+import { computeSplits, INBOX_TAB, selectVisibleThreads } from './splits';
 
 function thread(overrides: Partial<ThreadSummary> & Pick<ThreadSummary, 'id'>): ThreadSummary {
   return {
@@ -48,9 +48,9 @@ const custom: SplitDefinition = {
 };
 
 describe('computeSplits', () => {
-  it('orders tabs as [inbox, ...enabled defs by position, other]', () => {
+  it('orders tabs as [inbox, ...enabled defs by position]', () => {
     const { order } = computeSplits([], [team, vip]); // defs passed out of position order
-    expect(order).toEqual([INBOX_TAB, 'vip', 'team', OTHER_TAB]);
+    expect(order).toEqual([INBOX_TAB, 'vip', 'team']);
   });
 
   it('first-match: a thread matching multiple rules is assigned only to the earliest position', () => {
@@ -64,38 +64,36 @@ describe('computeSplits', () => {
     const disabledVip: SplitDefinition = { ...vip, enabled: false };
     const t = thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' } });
     const { order, assignment } = computeSplits([t], [disabledVip, team]);
-    expect(order).toEqual([INBOX_TAB, 'team', OTHER_TAB]);
+    expect(order).toEqual([INBOX_TAB, 'team']);
     // falls through to the next matching rule (Team, same domain) since VIP is disabled
     expect(assignment.get('t1')).toBe('team');
   });
 
-  it('assigns unmatched threads to the Other catch-all', () => {
+  it('assigns unmatched threads to the Inbox catch-all', () => {
     const t = thread({ id: 't1', from: { name: 'Nobody', email: 'nobody@nowhere.com' } });
     const { assignment } = computeSplits([t], [vip, team]);
-    expect(assignment.get('t1')).toBe(OTHER_TAB);
+    expect(assignment.get('t1')).toBe(INBOX_TAB);
   });
 
-  it('INBOX_TAB is unfiltered (selectVisibleThreads returns all threads regardless of match)', () => {
+  it('INBOX_TAB excludes threads matched to an enabled split (see D15)', () => {
     const threads = [
-      thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' } }),
-      thread({ id: 't2', from: { name: 'Nobody', email: 'nobody@nowhere.com' } }),
+      thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' } }), // -> vip
+      thread({ id: 't2', from: { name: 'Nobody', email: 'nobody@nowhere.com' } }), // unmatched
     ];
     const visible = selectVisibleThreads(threads, [vip, team], INBOX_TAB);
-    expect(visible).toEqual(threads);
+    expect(visible.map((t) => t.id)).toEqual(['t2']);
   });
 
-  it('counts: sum of all non-inbox tab totals equals the full thread count (no loss/duplication)', () => {
+  it('counts: sum of all tab totals equals the full thread count (no loss/duplication)', () => {
     const threads = [
       thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' } }),
       thread({ id: 't2', from: { name: 'Teammate', email: 'dev@acme.com' } }),
       thread({ id: 't3', from: { name: 'Nobody', email: 'nobody@nowhere.com' } }),
     ];
     const { order, counts } = computeSplits(threads, [vip, team]);
-    const sum = order
-      .filter((id) => id !== INBOX_TAB)
-      .reduce((acc, id) => acc + counts.get(id)!.total, 0);
+    const sum = order.reduce((acc, id) => acc + counts.get(id)!.total, 0);
     expect(sum).toBe(threads.length);
-    expect(counts.get(INBOX_TAB)!.total).toBe(threads.length);
+    expect(counts.get(INBOX_TAB)!.total).toBe(1); // only t3 (unmatched)
   });
 
   it('counts unread threads per tab', () => {
@@ -200,20 +198,20 @@ describe('computeSplits', () => {
 
   // --- inbox-zero-starred (docs/features/inbox-zero-starred) ---
 
-  it('a STARRED-only (archived) thread present in the input list is included in INBOX_TAB and counted in its matching split tab — membership itself is upstream (store/view.ts), this documents the invariant', () => {
+  it('a STARRED-only (archived) thread present in the input list is included in its matching split tab (not Inbox) — membership itself is upstream (store/view.ts), this documents the invariant', () => {
     const threads = [
       thread({ id: 't1', from: { name: 'Boss', email: 'boss@acme.com' }, labelIds: ['STARRED'] }),
       thread({ id: 't2', from: { name: 'Nobody', email: 'nobody@nowhere.com' } }),
     ];
-    const visibleInbox = selectVisibleThreads(threads, [vip, team], INBOX_TAB);
-    expect(visibleInbox.map((t) => t.id)).toEqual(['t1', 't2']);
-
     const { assignment, counts } = computeSplits(threads, [vip, team]);
     expect(assignment.get('t1')).toBe('vip');
     expect(counts.get('vip')!.total).toBe(1);
 
     const visibleVip = selectVisibleThreads(threads, [vip, team], 'vip');
     expect(visibleVip.map((t) => t.id)).toEqual(['t1']);
+
+    const visibleInbox = selectVisibleThreads(threads, [vip, team], INBOX_TAB);
+    expect(visibleInbox.map((t) => t.id)).toEqual(['t2']);
   });
 
   it('omitting pinnedIds (or passing an empty set) leaves ordering unchanged', () => {

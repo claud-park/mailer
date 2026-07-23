@@ -11,7 +11,7 @@
 
 ### In
 - **스플릿 탭 바**: ThreadList 상단, 활성 스플릿 하나만 표시, 탭별 unread 카운트
-- **기본 스플릿 3종**: VIP(수동 발신자 목록) · Team(도메인 매칭) · Newsletter(카테고리+발신자 휴리스틱) + 항상 존재하는 Other(catch-all)
+- **기본 스플릿 3종**: VIP(수동 발신자 목록) · Team(도메인 매칭) · Newsletter(카테고리+발신자 휴리스틱) + 미매칭 catch-all을 겸하는 Inbox(D15, 별도 Other 탭 없음)
 - **커스텀 스플릿**: 추가/편집/삭제/순서변경 가능한 경량 설정 모달
 - **키보드**: Tab/⇧Tab 탭 순환, ⌘1~9 직접 점프, ⌘⇧I 탭바 on/off(통합 리스트 토글), kbar 액션
 - **영속화**: 스플릿 정의 + 뷰 상태(탭바 on/off, 마지막 활성 탭)를 SQLite에 저장
@@ -27,13 +27,13 @@
 
 ### 3-1. 탭 바
 - 위치: Toolbar 아래, 스레드 리스트 위. `activeLabelId === 'INBOX' && !searchQuery && splitInbox` 일 때만 표시.
-- 구성: `[Inbox 44] [VIP 3] [Team 5] [Newsletter 24] [Other 12]` — **Inbox 탭이 맨 앞**(필터 없는 전체 로드분, 매칭 우선순위 비참여), 이어서 enabled 스플릿 position 순, 마지막에 Other 고정. 우측에 설정(gear) 버튼.
+- 구성: `[Inbox 12] [VIP 3] [Team 5] [Newsletter 24]` — **Inbox 탭이 맨 앞**이자 미매칭 스레드의 catch-all(어떤 스플릿에도 안 걸린 메일만 표시), 이어서 enabled 스플릿 position 순. 별도 Other 탭 없음(D15 — Inbox가 그 역할을 흡수). 우측에 설정(gear) 버튼.
 - 카운트: 로드된 스레드 기준 unread 수. `nextPageToken`이 남아 있으면 `N+` 표기(하한값 정직 표기).
 - 활성 탭 강조, 클릭으로 전환. 탭 전환 시 리스트 최상단 선택(selectedIndex=0).
-- 탭바 off(⌘⇧I) 시: 통합 단일 리스트(전체 INBOX). 기존 Toolbar "Split" 버튼도 동일 토글.
+- 탭바 off(⌘⇧I) 시: 탭바 UI만 숨겨지고 목록은 여전히 Inbox 필터(미매칭 스레드만)가 적용된 상태로 유지된다 — 더 이상 "전체 로드분 통합 뷰"로 복귀하지 않는다(D15, 2026-07-23). 기존 Toolbar "Split" 버튼도 동일 토글.
 
 ### 3-2. 스플릿 매칭 semantics
-- **position 오름차순 first-match 배타 할당**: 한 스레드는 정확히 하나의 스플릿에만 속한다. 어떤 규칙에도 안 걸리면 Other.
+- **position 오름차순 first-match 배타 할당**: 한 스레드는 정확히 하나의 탭(Inbox 또는 스플릿)에만 속한다. 어떤 규칙에도 안 걸리면 Inbox(catch-all, D15).
 - 근거: 탭 카운트 합 = 전체와 일치해야 "메일이 어디 갔지"가 없다. Superhuman 동일 모델.
 - 규칙 타입 4종:
   - `senders`: 이메일 정확 매칭(소문자 정규화) — VIP 기본
@@ -45,7 +45,7 @@
 ### 3-3. 설정 모달 (SplitSettings)
 - 진입: 탭바 gear 버튼, kbar "Configure splits…". 전용 단축키 없음(저빈도).
 - 스플릿 행: 이름 · 규칙 타입 선택 · 값 입력(senders/domains=chip 입력, labels=라벨 선택, newsletter=값 없음) · enabled 토글 · 위/아래 정렬 버튼 · 삭제. 하단 "+ Add split".
-- Inbox/Other는 스플릿이 아니므로 편집 목록에 없음 — 하단에 "Unmatched mail goes to Other" 안내 텍스트만 표시.
+- Inbox는 스플릿이 아니므로 편집 목록에 없음 — 하단에 "Unmatched mail stays in Inbox" 안내 텍스트만 표시(D15).
 - 로컬 편집 후 저장 시 replace-all 1회 커밋. Esc 닫기, keydown stopPropagation(기존 모달 패턴).
 
 ### 3-4. 키보드

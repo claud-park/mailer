@@ -295,7 +295,7 @@ export function SplitSettings() {
               + Add split
             </button>
 
-            <div className="text-[11px] text-text-muted">Unmatched mail goes to Other.</div>
+            <div className="text-[11px] text-text-muted">Unmatched mail stays in Inbox.</div>
           </div>
         </div>
 

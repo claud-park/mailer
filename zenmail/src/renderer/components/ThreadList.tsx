@@ -87,13 +87,13 @@ function ThreadRow({
   // index within the currently visible (tab-filtered) list — matches selectedIndex's meaning
   const findIndexOf = (id: string) => {
     const st = useMailStore.getState();
-    const pinned =
-      st.activeLabelId === 'INBOX' && !st.searchQuery ? firedFollowupIds(st.followups) : undefined;
+    const inInbox = st.activeLabelId === 'INBOX' && !st.searchQuery;
+    if (!inInbox) return st.threads.findIndex((t) => t.id === id);
     const visible = selectVisibleThreads(
       st.threads,
       st.splitDefs,
-      st.splitInbox && st.activeLabelId === 'INBOX' && !st.searchQuery ? st.activeSplitTab : INBOX_TAB,
-      pinned
+      st.splitInbox ? st.activeSplitTab : INBOX_TAB,
+      firedFollowupIds(st.followups)
     );
     return visible.findIndex((t) => t.id === id);
   };
@@ -251,7 +251,10 @@ export function ThreadList() {
   const labelsById = useMemo(() => new Map(labels.map((l) => [l.id, l])), [labels]);
 
   const visibleThreads = useMemo(() => {
-    const pinned = activeLabelId === 'INBOX' && !searchQuery ? firedFollowupIds(followups) : undefined;
+    // split matching is INBOX-only (D1/TC-B3) — bypass it entirely elsewhere, don't fall through to
+    // the INBOX_TAB filter (which now excludes split-matched threads, D15).
+    if (activeLabelId !== 'INBOX' || searchQuery) return threads;
+    const pinned = firedFollowupIds(followups);
     return selectVisibleThreads(threads, splitDefs, useSplit ? activeSplitTab : INBOX_TAB, pinned);
   }, [threads, splitDefs, useSplit, activeSplitTab, activeLabelId, searchQuery, followups]);
 

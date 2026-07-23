@@ -731,14 +731,17 @@ async function tryImgScenario(page, name, fn) {
 // ---------------------------------------------------------------------------
 //
 // Runs as a dedicated final session on its own fresh user-data dir (see run()), so both demo
-// accounts boot pristine. Demo (`demo@zenmail.app`, active) unique subject = "Q3 roadmap review";
-// work (`work@zenmail.app`) unique subject = "W: Acme renewal contract". Ordering is deliberate:
-// D1 runs before B1 because D1's __debugSimulateReply('work_3') needs work_3 ("W: Kickoff notes")
-// still in the work inbox, which B1 then archives.
+// accounts boot pristine. Demo (`demo@zenmail.app`, active) unique subject = "Re: keyboard shortcut
+// audit" (demo_2); work (`work@zenmail.app`) unique subject = "W: Acme renewal contract". Ordering
+// is deliberate: D1 runs before B1 because D1's __debugSimulateReply('work_3') needs work_3
+// ("W: Kickoff notes") still in the work inbox, which B1 then archives.
+// NOTE (D15, split-inbox-plus): on a fresh install, VIP/Team/Newsletter seed as enabled defaults and
+// the Inbox tab excludes anything they match. "Q3 roadmap review" (demo_1) matches VIP by default, so
+// it's no longer the freshest thread visible in Inbox — demo_2 is the freshest UNMATCHED one instead.
 async function runMaSession(page) {
   const DEMO_EMAIL = 'demo@zenmail.app';
   const WORK_EMAIL = 'work@zenmail.app';
-  const DEMO_UNIQUE = 'Q3 roadmap review';
+  const DEMO_UNIQUE = 'Re: keyboard shortcut audit';
   const WORK_UNIQUE = 'W: Acme renewal contract';
 
   await focusBody(page);
@@ -2372,17 +2375,17 @@ async function scenario_login_and_F3(page) {
   if (ok) record('TC-F3', 'PASS', `seeded defaults: ${names.join(', ')}`);
   else record('TC-F3', 'FAIL', `unexpected seed: ${JSON.stringify(rows)}`);
 
-  // TC-E1 (PRD §3-3 / DECISIONS D13): Inbox/Other는 스플릿이 아니므로 편집 목록에 행으로 나오면 안 되고,
-  // 하단에 "Unmatched mail goes to Other." 안내 텍스트만 있어야 한다.
-  const hasOtherRow = rows.some((r) => r.name === 'Other');
+  // TC-E1 (PRD §3-3 / DECISIONS D13, D15): Inbox는 스플릿이 아니므로 편집 목록에 행으로 나오면 안 되고,
+  // 하단에 "Unmatched mail stays in Inbox." 안내 텍스트만 있어야 한다. (D15: Other 탭 제거로 문구 갱신)
+  const hasInboxRow = rows.some((r) => r.name === 'Other' || r.name === 'Inbox');
   const hasHint = await page
-    .locator('text=Unmatched mail goes to Other.')
+    .locator('text=Unmatched mail stays in Inbox.')
     .count()
     .then((n) => n > 0);
-  if (!hasOtherRow && hasHint) {
-    record('TC-E1', 'PASS', 'defaults listed in position order; Other shown as hint text, not an editable row');
+  if (!hasInboxRow && hasHint) {
+    record('TC-E1', 'PASS', 'defaults listed in position order; Inbox shown as hint text, not an editable row');
   } else {
-    record('TC-E1', 'FAIL', `hasOtherRow=${hasOtherRow} hasHint=${hasHint} — PRD §3-3 위반`);
+    record('TC-E1', 'FAIL', `hasInboxRow=${hasInboxRow} hasHint=${hasHint} — PRD §3-3 위반`);
   }
   await cancelSplitSettings(page);
 }
@@ -2392,48 +2395,57 @@ async function scenario_login_and_F3(page) {
 async function scenario_A(page) {
   const tabs = await tabsInfo(page);
   const labels = tabs.map((t) => t.label);
-  if (labels[0] === 'Inbox' && labels.includes('VIP') && labels.includes('Team') && labels.includes('Newsletter') && labels[labels.length - 1] === 'Other') {
+  // D15: Other tab removed — Inbox is now the unmatched catch-all, so the tab bar ends at Newsletter.
+  if (labels[0] === 'Inbox' && labels.includes('VIP') && labels.includes('Team') && labels.includes('Newsletter') && !labels.includes('Other')) {
     record('TC-A1', 'PASS', `order: ${labels.join(' | ')}`);
   } else {
     record('TC-A1', 'FAIL', `unexpected tab order: ${labels.join(' | ')}`);
   }
 
-  // TC-A6: Inbox tab shows the full unfiltered load
-  await clickTab(page, labels[0]);
-  const inboxRows = await rowsInfo(page);
-  const inboxTotal = inboxRows.length;
-  if (inboxTotal > 0) record('TC-A6', 'PASS', `Inbox shows ${inboxTotal} unfiltered threads`);
-  else record('TC-A6', 'FAIL', 'Inbox tab shows 0 threads');
-
-  // TC-A5 / TC-G1: check each split + Other has content, sum matches Inbox total (TC-A3)
+  // TC-A5 / TC-G1 / TC-A3: gather every tab's rows (including Inbox), verify no thread appears in
+  // two tabs (mutual exclusivity), and that Inbox (unmatched catch-all) has content in demo data.
+  const perTabRows = {};
   let sum = 0;
-  const perTabCounts = {};
-  for (const label of labels.slice(1)) {
+  for (const label of labels) {
     await clickTab(page, label);
     const rows = await rowsInfo(page);
-    perTabCounts[label] = rows.length;
+    perTabRows[label] = rows.map((r) => r.text);
     sum += rows.length;
   }
-  const vip = perTabCounts['VIP'] ?? 0;
-  const team = perTabCounts['Team'] ?? 0;
-  const newsletter = perTabCounts['Newsletter'] ?? 0;
-  const other = perTabCounts['Other'] ?? 0;
+  const inboxRows = perTabRows['Inbox'] ?? [];
+  const inboxTotal = inboxRows.length;
+  const vip = (perTabRows['VIP'] ?? []).length;
+  const team = (perTabRows['Team'] ?? []).length;
+  const newsletter = (perTabRows['Newsletter'] ?? []).length;
+
+  // TC-A6 (D15): a thread matched to an enabled split never also appears under Inbox.
+  const matchedRows = [...(perTabRows['VIP'] ?? []), ...(perTabRows['Team'] ?? []), ...(perTabRows['Newsletter'] ?? [])];
+  const leaked = matchedRows.filter((t) => inboxRows.includes(t));
+  if (leaked.length === 0) {
+    record('TC-A6', 'PASS', `${matchedRows.length} split-matched thread(s) absent from Inbox`);
+  } else {
+    record('TC-A6', 'FAIL', `${leaked.length} split-matched thread(s) leaked into Inbox: ${leaked.slice(0, 3).join(', ')}`);
+  }
+
   if (vip >= 1 && team >= 1 && newsletter >= 1) {
     record('TC-G1', 'PASS', `VIP=${vip} Team=${team} Newsletter=${newsletter}`);
   } else {
     record('TC-G1', 'FAIL', `expected >=1 each, got VIP=${vip} Team=${team} Newsletter=${newsletter}`);
   }
-  if (other >= 1) record('TC-A5', 'PASS', `Other has ${other} unmatched thread(s)`);
-  else record('TC-A5', 'FAIL', 'Other tab is empty in demo data');
+  if (inboxTotal >= 1) record('TC-A5', 'PASS', `Inbox has ${inboxTotal} unmatched thread(s)`);
+  else record('TC-A5', 'FAIL', 'Inbox tab is empty in demo data (expected an unmatched thread)');
 
-  if (sum === inboxTotal) {
-    record('TC-A3', 'PASS', `sum(VIP+Team+Newsletter+Other)=${sum} === Inbox total=${inboxTotal}`);
+  // TC-A3: every tab is mutually exclusive by construction (D4/D15) — no thread should appear twice.
+  const allTexts = labels.flatMap((l) => perTabRows[l] ?? []);
+  const dupes = allTexts.length - new Set(allTexts).size;
+  if (dupes === 0) {
+    record('TC-A3', 'PASS', `sum(Inbox+VIP+Team+Newsletter)=${sum}, no duplicates across tabs`);
   } else {
-    record('TC-A3', 'FAIL', `sum=${sum} !== Inbox total=${inboxTotal} (VIP=${vip} Team=${team} News=${newsletter} Other=${other})`);
+    record('TC-A3', 'FAIL', `${dupes} thread(s) appear in more than one tab (Inbox=${inboxTotal} VIP=${vip} Team=${team} News=${newsletter})`);
   }
 
   // TC-A2: first-match exclusivity — deferred to scenario_E (needs an overlapping rule to prove);
-  // for now just confirm ana@linearly.dev's threads are in VIP, not duplicated in Other/Newsletter.
+  // for now just confirm ana@linearly.dev's threads are in VIP, not duplicated in Inbox/Newsletter.
   await clickTab(page, 'VIP');
   const vipRows = (await rowsInfo(page)).map((r) => r.text);
   const vipHasRoadmap = vipRows.some((t) => t.includes('Q3 roadmap review'));
@@ -2837,7 +2849,7 @@ async function scenario_E_and_B4_and_A2(page) {
     record('TC-A2', 'FAIL', `teamHasMina=${teamHasMina} vipHasMina=${vipHasMina}`);
   }
 
-  // TC-E2: add a brand-new split that matches existing Other-tab threads, verify immediate move
+  // TC-E2: add a brand-new split that matches existing Inbox-catch-all threads, verify immediate move
   await openSplitSettings(page);
   await page.click('text=+ Add split');
   await page.locator('input[aria-label="Split name"]').last().fill('Dreamus');
@@ -2853,7 +2865,7 @@ async function scenario_E_and_B4_and_A2(page) {
   const dreamusRows = (await rowsInfo(page)).map((r) => r.text);
   const movedIn = dreamusRows.some((t) => t.includes('keyboard shortcut audit') || t.includes('Standup notes'));
   if (tabsAfterAdd.includes('Dreamus') && movedIn) {
-    record('TC-E2', 'PASS', 'new split tab appears immediately and matching Other-tab threads move into it without IPC reload');
+    record('TC-E2', 'PASS', 'new split tab appears immediately and matching Inbox-catch-all threads move into it without IPC reload');
   } else {
     record('TC-E2', 'FAIL', `tabsAfterAdd=${tabsAfterAdd.join(',')} dreamusRows=${JSON.stringify(dreamusRows)}`);
   }
@@ -2879,7 +2891,7 @@ async function scenario_E_and_B4_and_A2(page) {
     record('TC-E3', 'FAIL', `orderAfterE3=${orderAfterE3.join(',')} cmd2Target=${cmd2Target}`);
   }
 
-  // TC-E5: disable Dreamus, verify tab disappears and its threads fall back to Other/next match
+  // TC-E5: disable Dreamus, verify tab disappears and its threads fall back to Inbox/next match
   await openSplitSettings(page);
   const dreamusRow = await rowHandleByName(page, 'Dreamus');
   const dreamusCheckbox = await dreamusRow.$('input[type="checkbox"]');
@@ -2887,13 +2899,13 @@ async function scenario_E_and_B4_and_A2(page) {
   await saveSplitSettings(page);
   await sleep(300);
   const tabsAfterDisable = (await tabsInfo(page)).map((t) => t.label);
-  await clickTab(page, 'Other');
-  const otherRowsAfterDisable = (await rowsInfo(page)).map((r) => r.text);
-  const backInOther = otherRowsAfterDisable.some((t) => t.includes('keyboard shortcut audit') || t.includes('Standup notes'));
-  if (!tabsAfterDisable.includes('Dreamus') && backInOther) {
-    record('TC-E5', 'PASS', 'disabling Dreamus removes its tab; matched threads fall back to Other');
+  await clickTab(page, 'Inbox');
+  const inboxRowsAfterDisable = (await rowsInfo(page)).map((r) => r.text);
+  const backInInbox = inboxRowsAfterDisable.some((t) => t.includes('keyboard shortcut audit') || t.includes('Standup notes'));
+  if (!tabsAfterDisable.includes('Dreamus') && backInInbox) {
+    record('TC-E5', 'PASS', 'disabling Dreamus removes its tab; matched threads fall back to Inbox');
   } else {
-    record('TC-E5', 'FAIL', `tabsAfterDisable=${tabsAfterDisable.join(',')} backInOther=${backInOther}`);
+    record('TC-E5', 'FAIL', `tabsAfterDisable=${tabsAfterDisable.join(',')} backInInbox=${backInInbox}`);
   }
 
   // TC-E4: delete the active split, verify fallback + no crash
@@ -3063,7 +3075,9 @@ async function tryFollowupScenario(page, label, fn) {
 // --- E2: sign-out clears followups (run first — also resets demo data to pristine) -------
 
 async function scenario_followup_E2(page) {
-  await clickTab(page, 'Inbox');
+  // D15: "Q3 roadmap review" (ana@linearly.dev) matches the default-enabled VIP split, so it now
+  // lives under the VIP tab rather than the (unmatched-only) Inbox tab.
+  await clickTab(page, 'VIP');
   await clickRowContaining(page, 'Q3 roadmap review');
   await sleep(300);
   const tmpThreadId = await threadIdOfRowContaining(page, 'Q3 roadmap review');
@@ -3348,6 +3362,9 @@ async function scenario_followup_C(page) {
   }
 
   // TC-FUP-C2: opportunistic clear on open, before due
+  // D15: "Your receipt from Stripe" and "E-ticket: ICN" both carry CATEGORY_UPDATES, which the
+  // default-enabled Newsletter split matches — they live under the Newsletter tab, not Inbox.
+  await clickTab(page, 'Newsletter');
   await clickRowContaining(page, 'Your receipt from Stripe');
   await sleep(300);
   const c2ThreadId = await threadIdOfRowContaining(page, 'Your receipt from Stripe');
@@ -3466,6 +3483,9 @@ async function scenario_followup_D(page) {
   }
 
   // TC-FUP-D6: Dismiss on the fired ThreadView banner clears the chip + pin
+  // D15: "Re: offsite agenda" (ana@linearly.dev) matches the default VIP split, so it lives under
+  // the VIP tab rather than Inbox.
+  await clickTab(page, 'VIP');
   const d6ThreadId = await threadIdOfRowContaining(page, 'Re: offsite agenda');
   await debugAddFollowupDueNow(page, d6ThreadId);
   await debugTick(page);
@@ -3705,7 +3725,10 @@ async function scenario_km_intro(page) {
   // TC-KM-B4 / TC-KM-C6 / TC-KM-D1 / TC-KM-D3: this is the very first archive of the whole
   // suite (runs before any F1 scenario ever presses 'e'), so firsts.archive is still virgin —
   // the only point in the run where the one-time "first archive" milestone can be observed.
-  await clickTab(page, 'Inbox');
+  // Both targets below carry a CATEGORY_* label (SOCIAL / PROMOTIONS) that the default-enabled
+  // Newsletter split matches, so under D15 (split-inbox-plus) they live in the Newsletter tab,
+  // not Inbox — this scenario runs before any tab/split has been touched, so defaults apply.
+  await clickTab(page, 'Newsletter');
   const before1 = await coachState(page);
   await swipeArchiveRowUntilCounted(page, 'You appeared in 12 searches this week', before1?.counters?.archive ?? 0);
   const bt1 = await bodyText(page);
@@ -3833,7 +3856,10 @@ async function scenario_km_cheatsheet(page) {
 // --- B: instrumentation (B4/C6 already covered in scenario_km_intro) -----
 
 async function scenario_km_instrumentation(page) {
-  await clickTab(page, 'Inbox');
+  // D15: both TC-KM-B1 targets carry a CATEGORY_* label that the default-enabled Newsletter split
+  // matches (demo data was reset to pristine by CAL's sign-out/relogin just before this runs), so
+  // they live under the Newsletter tab rather than Inbox.
+  await clickTab(page, 'Newsletter');
   await focusBody(page);
 
   // TC-KM-B1: two keyboard archives bump the Stats "Archived" row by exactly 2. Targets two
@@ -3994,7 +4020,9 @@ async function scenario_km_hints(page) {
 // --- D2: first snooze milestone ------------------------------------------
 
 async function scenario_km_milestone_snooze(page) {
-  await clickTab(page, 'Inbox');
+  // D15: "Re: interview loop for the design role" (priya@zenmail.app) matches the default Team
+  // split (same domain as the account), so it lives under the Team tab rather than Inbox.
+  await clickTab(page, 'Team');
   await focusBody(page);
   const before = await coachState(page);
   // targets a thread never referenced by name elsewhere in this suite, so snoozing it away
@@ -4363,7 +4391,8 @@ async function scenario_sp_rollback(page) {
 // --- D: followup optimism (TC-SP-D1~D3) -------------------------------------
 
 async function scenario_sp_followup(page) {
-  await clickTab(page, 'Inbox');
+  // D15: "Q3 roadmap review" (ana@linearly.dev) matches the default VIP split.
+  await clickTab(page, 'VIP');
   await focusBody(page);
 
   // TC-SP-D1: `h` -> preset -> immediate (no extra IPC wait) banner + followup:add sample
@@ -4409,6 +4438,8 @@ async function scenario_sp_followup(page) {
   // as TC-SP-C1 — this best-effort-observes the transient banner (logged, non-blocking) and asserts
   // PASS on the two reliably-observable outcomes: the banner is gone in the settled state, and the
   // rollback aggregate actually incremented.
+  // D15: "Postmortem: snooze daemon" (jordan@zenmail.app) matches the default Team split.
+  await clickTab(page, 'Team');
   await clickRowContaining(page, 'Postmortem: snooze daemon');
   await sleep(400);
   const beforeD2 = await latencyState(page);
@@ -4898,6 +4929,10 @@ async function scenario_dd_intro(page) {
   const noBannerD4 = !(await bodyText(page)).includes('Introduced by');
   record('TC-DD-D4', noBannerD4 ? 'PASS' : 'FAIL', `noBannerD4=${noBannerD4}`);
   await closeComposeViaButton(page);
+  // D15: "Postmortem: snooze daemon" now matches the default Team split, so openThreadRobust's
+  // Inbox-tab check misses and falls back to search — clear it per the helper's documented
+  // caller contract, otherwise the search view (no tab bar) breaks D5's own openThreadRobust call.
+  await clearSearchIfActive(page);
 
   // TC-DD-D5 (voice): a solo-received thread (0 third parties, no Cc) -> no banner. Also reserved
   // from the TC-SP-B2 trash fill-in.
@@ -5668,6 +5703,21 @@ function pickNonReservedRow(rows, excludeTexts = []) {
   );
 }
 
+/** D15 (split-inbox-plus): the Inbox tab now only holds threads unmatched by any enabled split, so
+ *  by this late in the run its non-reserved pool can be thinner than before. These tests don't care
+ *  which split (if any) a thread belongs to — only that it's live and non-reserved — so fall through
+ *  to VIP/Team/Newsletter when Inbox alone comes up empty. Returns `{target, tab}` (the row's text and
+ *  the tab it was found on — callers must click back to `tab`, not hardcode 'Inbox', for the rest of
+ *  the scenario) or `null` if every tab is exhausted. */
+async function pickNonReservedRowAnyTab(page, excludeTexts = []) {
+  for (const tab of ['Inbox', 'VIP', 'Team', 'Newsletter']) {
+    await clickTab(page, tab).catch(() => {});
+    const target = pickNonReservedRow(await rowsInfo(page), excludeTexts)?.text;
+    if (target) return { target, tab };
+  }
+  return null;
+}
+
 /** clicks a row by its stable data-thread-id rather than a text substring — used by
  *  scenario_undo_single to repeatedly re-select the SAME single target thread across A1-A5 (each
  *  step fully self-restores via Undo except the final A5, so the whole test only ever needs to find
@@ -5734,12 +5784,10 @@ async function tryUndoScenario(page, label, fn) {
  *  left — this was observed to exhaust a 3-non-reserved-row budget with A1-A5 needing 5 distinct
  *  rows). Only A5 permanently changes the thread's state (no undo, by design), so it runs last. */
 async function scenario_undo_single(page) {
-  await clickTab(page, 'Inbox');
+  const picked = await pickNonReservedRowAnyTab(page);
+  if (!picked) throw new Error('TC-UNDO single: no eligible row found');
+  const { target, tab } = picked;
   await focusBody(page);
-
-  const rows = await rowsInfo(page);
-  const target = pickNonReservedRow(rows)?.text;
-  if (!target) throw new Error('TC-UNDO single: no eligible row found');
   const id = await threadIdOfRowContaining(page, target);
 
   // TC-UNDO-A1: archive -> Undo within 5s -> row reappears (INBOX restored), survives a renderer
@@ -5758,7 +5806,7 @@ async function scenario_undo_single(page) {
   await page.locator('button:has-text("Undo")').first().click();
   await waitFor(async () => rowExistsById(page, id), { timeout: 5000, desc: 'A1 row restored' });
   await reloadApp(page);
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   const survivedA1 = await rowExistsById(page, id);
   record(
     'TC-UNDO-A1',
@@ -5767,7 +5815,7 @@ async function scenario_undo_single(page) {
   );
 
   // TC-UNDO-A2: trash -> Undo -> row reappears in Inbox (TRASH removed, INBOX re-added), survives reload.
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   await clickRowById(page, id);
   await sleep(200);
   await focusBody(page);
@@ -5779,7 +5827,7 @@ async function scenario_undo_single(page) {
   await page.locator('button:has-text("Undo")').first().click();
   await waitFor(async () => rowExistsById(page, id), { timeout: 5000, desc: 'A2 row restored' });
   await reloadApp(page);
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   const survivedA2 = await rowExistsById(page, id);
   record(
     'TC-UNDO-A2',
@@ -5794,7 +5842,7 @@ async function scenario_undo_single(page) {
   // Verifies via ground-truth fetchThread labelIds, not row-chip DOM text — ThreadList renders in
   // "compact" mode (no chips at all) whenever a thread is open (`compact = !!activeThreadId` in
   // ThreadList.tsx), which this flow requires (the label picker targets the open/selected thread).
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   // deliberately does NOT contain "undo" (case-insensitive) — Playwright's `:has-text("Undo")`
   // (used below to find the toast's own Undo button) is a case-insensitive substring match, and the
   // Sidebar renders every user label as a `<button>{name}</button>` too, so a label literally named
@@ -5806,7 +5854,7 @@ async function scenario_undo_single(page) {
     return window.zenmail.createLabel(activeEmail, name);
   }, A3_LABEL);
   await reloadApp(page);
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   await clickRowById(page, id);
   // opening an unread thread fires its own fire-and-forget markRead()->modifyLabels() call (D5/D1-D2
   // of the openThread flow) which would otherwise show up as a spurious labelIds diff unrelated to
@@ -5843,7 +5891,7 @@ async function scenario_undo_single(page) {
     return window.zenmail.deleteLabel(activeEmail, labelId);
   }, createdA3.id);
   await reloadApp(page);
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
 
   // TC-UNDO-A4: snooze -> Undo -> thread reappears in Inbox IMMEDIATELY (no waiting for the daemon
   // tick — cancelSnooze restores INBOX synchronously per D5), survives reload.
@@ -5863,7 +5911,7 @@ async function scenario_undo_single(page) {
     desc: 'A4 row restored immediately (no daemon tick)',
   }).then(() => true, () => false);
   await reloadApp(page);
-  await clickTab(page, 'Inbox');
+  await clickTab(page, tab);
   const survivedA4 = await rowExistsById(page, id);
   record(
     'TC-UNDO-A4',
@@ -5952,11 +6000,10 @@ async function scenario_undo_bulk(page) {
  *  unaffected by the new undo feature — no Undo button on a toast for an action that never actually
  *  succeeded (mirrors scenario_sp_rollback's armFailNextModify pattern, TC-SP-C1/C4). */
 async function scenario_undo_regression(page) {
-  await clickTab(page, 'Inbox');
+  const picked = await pickNonReservedRowAnyTab(page);
+  if (!picked) throw new Error('TC-UNDO-C1: no eligible row found');
+  const { target } = picked;
   await focusBody(page);
-  const rows = await rowsInfo(page);
-  const target = pickNonReservedRow(rows)?.text;
-  if (!target) throw new Error('TC-UNDO-C1: no eligible row found');
   const idC1 = await threadIdOfRowContaining(page, target);
   await clickRowContaining(page, target);
   await sleep(400);

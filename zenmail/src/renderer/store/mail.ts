@@ -257,6 +257,9 @@ function pinnedFollowupIds(s: MailState): Set<string> | undefined {
 
 /** the thread list actually on screen right now — selectedIndex is always an index into this */
 function visibleThreads(s: MailState): ThreadSummary[] {
+  // split matching is INBOX-only (D1/TC-B3) — every other label/search view bypasses it entirely,
+  // it must NOT fall through to the INBOX_TAB filter (which now excludes split-matched threads, D15).
+  if (s.activeLabelId !== 'INBOX' || s.searchQuery) return s.threads;
   return selectVisibleThreads(
     s.threads,
     s.splitDefs,

@@ -4,7 +4,6 @@
 import { CATEGORY_LABELS, type SplitDefinition, type ThreadSummary } from '../../shared/types';
 
 export const INBOX_TAB = 'inbox';
-export const OTHER_TAB = 'other';
 
 /** e.g. `noreply@`, `no-reply@`, `newsletter@`, `digest@`, `updates@`, plus dot/dash/underscore-prefixed variants */
 const NEWSLETTER_SENDER_RE = /(?:^|[.\-_])(?:no-?reply|newsletter|digest|updates)@/i;
@@ -44,18 +43,18 @@ function compileDefs(defs: SplitDefinition[]): CompiledRule[] {
 }
 
 export interface ComputedSplits {
-  /** [INBOX_TAB, ...enabled defs by position, OTHER_TAB] */
+  /** [INBOX_TAB, ...enabled defs by position] */
   order: string[];
-  /** threadId -> splitId | OTHER_TAB (INBOX_TAB never appears as a value) */
+  /** threadId -> splitId | INBOX_TAB (INBOX_TAB is the catch-all for unmatched threads) */
   assignment: Map<string, string>;
-  /** per-tab counts over the loaded threads; INBOX_TAB reflects the full loaded set */
+  /** per-tab counts over the loaded threads; mutually exclusive — sum equals threads.length */
   counts: Map<string, { total: number; unread: number }>;
 }
 
 export function computeSplits(threads: ThreadSummary[], defs: SplitDefinition[]): ComputedSplits {
   const enabledDefs = defs.filter((d) => d.enabled).sort((a, b) => a.position - b.position);
   const rules = compileDefs(defs);
-  const order = [INBOX_TAB, ...enabledDefs.map((d) => d.id), OTHER_TAB];
+  const order = [INBOX_TAB, ...enabledDefs.map((d) => d.id)];
 
   const assignment = new Map<string, string>();
   const counts = new Map<string, { total: number; unread: number }>();
@@ -71,7 +70,7 @@ export function computeSplits(threads: ThreadSummary[], defs: SplitDefinition[])
     const email = t.from.email.toLowerCase();
     const domain = email.split('@')[1] ?? '';
 
-    let matched: string = OTHER_TAB;
+    let matched: string = INBOX_TAB;
     for (const rule of rules) {
       if (rule.match(email, domain, t)) {
         matched = rule.id;
@@ -81,15 +80,15 @@ export function computeSplits(threads: ThreadSummary[], defs: SplitDefinition[])
 
     assignment.set(t.id, matched);
     bump(matched, t.unread);
-    // Inbox is the unfiltered view — every loaded thread counts toward it too.
-    bump(INBOX_TAB, t.unread);
   }
 
   return { order, assignment, counts };
 }
 
 /**
- * INBOX_TAB returns threads unfiltered; otherwise filters while preserving original order.
+ * Filters threads to `activeTab` while preserving original order. INBOX_TAB is the catch-all for
+ * threads that don't match any enabled split rule — see docs/features/split-inbox-plus/DECISIONS.md
+ * D15 (a thread matched to a split tab no longer also appears in Inbox).
  *
  * `pinnedIds` (fired follow-up thread ids — see docs/features/follow-up-reminders/DECISIONS.md D8)
  * moves matching threads from the *filtered* result to the front, preserving each group's own
@@ -105,13 +104,8 @@ export function selectVisibleThreads(
   activeTab: string,
   pinnedIds?: ReadonlySet<string>
 ): ThreadSummary[] {
-  const filtered =
-    activeTab === INBOX_TAB
-      ? threads
-      : (() => {
-          const { assignment } = computeSplits(threads, defs);
-          return threads.filter((t) => assignment.get(t.id) === activeTab);
-        })();
+  const { assignment } = computeSplits(threads, defs);
+  const filtered = threads.filter((t) => assignment.get(t.id) === activeTab);
 
   if (!pinnedIds || pinnedIds.size === 0) return filtered;
 

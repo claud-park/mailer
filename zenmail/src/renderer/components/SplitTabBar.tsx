@@ -1,12 +1,11 @@
 import { useMemo } from 'react';
 import { useMailStore } from '../store/mail';
 import { useCoachStore } from '../store/coach';
-import { computeSplits, INBOX_TAB, OTHER_TAB } from '../lib/splits';
+import { computeSplits, INBOX_TAB } from '../lib/splits';
 import type { SplitDefinition } from '../../shared/types';
 
 function tabLabel(id: string, splitDefs: SplitDefinition[]): string {
   if (id === INBOX_TAB) return 'Inbox';
-  if (id === OTHER_TAB) return 'Other';
   return splitDefs.find((d) => d.id === id)?.name ?? id;
 }
 
